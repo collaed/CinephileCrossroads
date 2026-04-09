@@ -133,6 +133,21 @@ def list_users():
     if os.path.exists(d): return [u for u in os.listdir(d) if os.path.isdir(f"{d}/{u}")]
     return []
 
+def _render_media_servers(user):
+    config = load_user_media_config(user)
+    html = ""
+    for stype, sinfo in MEDIA_SERVERS.items():
+        sc = config.get(stype, {})
+        status = '<span style="color:#2d7">connected</span>' if sc.get("enabled") else ""
+        fields = ""
+        for fname in sinfo["fields"]:
+            val = sc.get(fname, "")
+            placeholder = "http://192.168.1.x:" + {"plex":"32400","jellyfin":"8096","emby":"8096","kodi":"8080","radarr":"7878","sonarr":"8989"}.get(stype,"8080") if fname == "url" else "API token"
+            fields += '<input name="' + fname + '" value="' + val + '" placeholder="' + placeholder + '" style="width:45%;display:inline-block;margin-right:4px">'
+        html += '<div style="margin:8px 0"><b>' + sinfo["name"] + '</b> ' + status + '<form method="POST" action="' + BASE + '/media/' + user + '" style="display:inline"><input type="hidden" name="type" value="' + stype + '">' + fields + '<button type="submit" style="padding:4px 10px;background:#4fc3f7;border:none;border-radius:4px;cursor:pointer;font-size:.85em">Save</button></form></div>'
+    sync_btn = '<a href="' + BASE + '/media/sync/' + user + '" style="display:inline-block;margin-top:8px;padding:6px 16px;background:#16213e;border:1px solid #4fc3f7;border-radius:6px;color:#4fc3f7;text-decoration:none">🔄 Sync all servers</a>' if config else ""
+    return html + sync_btn
+
 def render_user_bar(current, page="u", show_create=True):
     pills = ""
     for u in list_users():
@@ -260,6 +275,191 @@ def tvdb_enrich(imdb_id):
     if not data or not data.get("data"): return {}
     r = data["data"][0] if isinstance(data["data"], list) else data["data"]
     return {"tvdb_id": r.get("id")}
+
+# ── Media Server Integrations ─────────────────────────────────────────
+# Each adapter returns {imdb_id: {path, quality, size}} like TMM
+
+def fetch_plex_library(url, token):
+    """Fetch library from Plex Media Server. URL e.g. http://192.168.1.10:32400"""
+    library = {}
+    sections = api_get(f"{url}/library/sections?X-Plex-Token={token}")
+    if not sections: return library
+    for d in sections.get("MediaContainer", {}).get("Directory", []):
+        if d.get("type") not in ("movie", "show"): continue
+        key = d["key"]
+        items = api_get(f"{url}/library/sections/{key}/all?X-Plex-Token={token}")
+        if not items: continue
+        for item in items.get("MediaContainer", {}).get("Metadata", []):
+            # Extract IMDB ID from guids
+            iid = ""
+            for guid in item.get("Guid", []):
+                if "imdb://" in guid.get("id", ""):
+                    iid = guid["id"].replace("imdb://", "")
+            if not iid: continue
+            media = item.get("Media", [{}])[0]
+            library[iid] = {
+                "path": (media.get("Part", [{}])[0]).get("file", ""),
+                "quality": media.get("videoResolution", ""),
+                "size": str(media.get("Part", [{}])[0].get("size", "")),
+                "source": "plex",
+            }
+    return library
+
+def fetch_jellyfin_library(url, token, user_id=""):
+    """Fetch library from Jellyfin/Emby. URL e.g. http://192.168.1.10:8096"""
+    library = {}
+    # Get user ID if not provided
+    if not user_id:
+        users = api_get(f"{url}/Users?api_key={token}")
+        if users and len(users) > 0:
+            user_id = users[0].get("Id", "")
+    if not user_id: return library
+    # Fetch all items
+    items = api_get(f"{url}/Users/{user_id}/Items?api_key={token}&Recursive=true&IncludeItemTypes=Movie,Series&Fields=ProviderIds,Path,MediaSources")
+    if not items: return library
+    for item in items.get("Items", []):
+        iid = item.get("ProviderIds", {}).get("Imdb", "")
+        if not iid: continue
+        sources = item.get("MediaSources", [{}])
+        path = sources[0].get("Path", "") if sources else ""
+        size = str(sources[0].get("Size", "")) if sources else ""
+        library[iid] = {
+            "path": path,
+            "quality": item.get("Width", ""),
+            "size": size,
+            "source": "jellyfin",
+        }
+    return library
+
+def fetch_emby_library(url, token, user_id=""):
+    """Fetch library from Emby — same API as Jellyfin."""
+    return fetch_jellyfin_library(url, token, user_id)
+
+def fetch_kodi_library(url):
+    """Fetch library from Kodi via JSON-RPC. URL e.g. http://192.168.1.10:8080/jsonrpc"""
+    library = {}
+    # Movies
+    payload = {"jsonrpc": "2.0", "method": "VideoLibrary.GetMovies", "id": 1,
+               "params": {"properties": ["imdbnumber", "file", "streamdetails"]}}
+    data = api_post(url, payload)
+    if data:
+        for m in data.get("result", {}).get("movies", []):
+            iid = m.get("imdbnumber", "")
+            if iid and iid.startswith("tt"):
+                vstreams = m.get("streamdetails", {}).get("video", [{}])
+                library[iid] = {
+                    "path": m.get("file", ""),
+                    "quality": str(vstreams[0].get("height", "")) if vstreams else "",
+                    "source": "kodi",
+                }
+    # TV Shows
+    payload = {"jsonrpc": "2.0", "method": "VideoLibrary.GetTVShows", "id": 2,
+               "params": {"properties": ["imdbnumber"]}}
+    data = api_post(url, payload)
+    if data:
+        for s in data.get("result", {}).get("tvshows", []):
+            iid = s.get("imdbnumber", "")
+            if iid and iid.startswith("tt"):
+                library[iid] = {"path": "", "quality": "", "source": "kodi"}
+    return library
+
+def fetch_radarr_library(url, token):
+    """Fetch library from Radarr. URL e.g. http://192.168.1.10:7878"""
+    library = {}
+    movies = api_get(f"{url}/api/v3/movie?apiKey={token}")
+    if not movies: return library
+    for m in movies:
+        iid = m.get("imdbId", "")
+        if not iid: continue
+        library[iid] = {
+            "path": m.get("movieFile", {}).get("relativePath", m.get("path", "")),
+            "quality": m.get("movieFile", {}).get("quality", {}).get("quality", {}).get("name", ""),
+            "size": str(m.get("movieFile", {}).get("size", "")),
+            "source": "radarr",
+            "monitored": m.get("monitored", False),
+            "downloaded": m.get("hasFile", False),
+        }
+    return library
+
+def fetch_sonarr_library(url, token):
+    """Fetch library from Sonarr. URL e.g. http://192.168.1.10:8989"""
+    library = {}
+    shows = api_get(f"{url}/api/v3/series?apiKey={token}")
+    if not shows: return library
+    for s in shows:
+        iid = s.get("imdbId", "")
+        if not iid: continue
+        library[iid] = {
+            "path": s.get("path", ""),
+            "quality": s.get("qualityProfileId", ""),
+            "source": "sonarr",
+            "monitored": s.get("monitored", False),
+            "downloaded": s.get("statistics", {}).get("percentOfEpisodes", 0) > 0,
+        }
+    return library
+
+def fetch_folder_library(path):
+    """Scan a folder for media files, extract title+year, match to TMDB."""
+    import re
+    library = {}
+    if not os.path.isdir(path): return library
+    for root, dirs, files in os.walk(path):
+        for f in files:
+            if not f.lower().endswith((".mkv", ".mp4", ".avi", ".m4v", ".ts")): continue
+            # Parse "Title (Year)" or "Title.Year.Quality" patterns
+            match = re.match(r"(.+?)[\.\s\-_]*((?:19|20)\d{2})", f)
+            if not match: continue
+            title = re.sub(r"[\.\-_]", " ", match.group(1)).strip()
+            year = match.group(2)
+            # Try TMDB lookup
+            if TMDB_KEY:
+                search = api_get(f"https://api.themoviedb.org/3/search/movie?api_key={TMDB_KEY}&query={urllib.parse.quote(title)}&year={year}")
+                if search and search.get("results"):
+                    tmdb_id = search["results"][0]["id"]
+                    ext = api_get(f"https://api.themoviedb.org/3/movie/{tmdb_id}/external_ids?api_key={TMDB_KEY}")
+                    if ext and ext.get("imdb_id"):
+                        library[ext["imdb_id"]] = {
+                            "path": os.path.join(root, f),
+                            "quality": "",
+                            "source": "folder",
+                        }
+                time.sleep(0.2)
+    return library
+
+MEDIA_SERVERS = {
+    "plex": {"name": "Plex", "fields": ["url", "token"], "fetch": lambda c: fetch_plex_library(c["url"], c["token"])},
+    "jellyfin": {"name": "Jellyfin", "fields": ["url", "token"], "fetch": lambda c: fetch_jellyfin_library(c["url"], c["token"])},
+    "emby": {"name": "Emby", "fields": ["url", "token"], "fetch": lambda c: fetch_emby_library(c["url"], c["token"])},
+    "kodi": {"name": "Kodi", "fields": ["url"], "fetch": lambda c: fetch_kodi_library(c["url"])},
+    "radarr": {"name": "Radarr", "fields": ["url", "token"], "fetch": lambda c: fetch_radarr_library(c["url"], c["token"])},
+    "sonarr": {"name": "Sonarr", "fields": ["url", "token"], "fetch": lambda c: fetch_sonarr_library(c["url"], c["token"])},
+}
+
+def load_user_media_config(user):
+    f = user_dir(user) + "/media_servers.json"
+    if os.path.exists(f): return json.load(open(f))
+    return {}
+
+def save_user_media_config(user, config):
+    json.dump(config, open(user_dir(user) + "/media_servers.json", "w"))
+
+def sync_media_servers(user):
+    """Sync all configured media servers for a user into their local library."""
+    config = load_user_media_config(user)
+    library = load_user_tmm(user)  # Start with existing TMM data
+    for server_type, server_config in config.items():
+        if server_type not in MEDIA_SERVERS: continue
+        if not server_config.get("enabled"): continue
+        try:
+            print(f"  Syncing {server_type}...")
+            items = MEDIA_SERVERS[server_type]["fetch"](server_config)
+            library.update(items)
+            print(f"  {server_type}: {len(items)} titles")
+        except Exception as e:
+            print(f"  {server_type} error: {e}")
+    save_user_tmm(user, library)
+    return library
+
 
 # ── Trakt ─────────────────────────────────────────────────────────────
 def trakt_headers(user):
@@ -566,7 +766,9 @@ def render_ratings(user):
             icons = " ".join(PROVIDER_ICONS.get(p, "▪") for p in mine)
             link = t.get("watch_link", "")
             stream = f'<a href="{link}" target="_blank" title="{", ".join(mine)}">{icons}</a>' if link else f'<span title="{", ".join(mine)}">{icons}</span>'
-        local = '💾' if iid in tmm else ""
+        local_info = tmm.get(iid, {})
+        local_src = local_info.get("source", "tmm") if local_info else ""
+        local = ('💾 ' + local_src) if iid in tmm else ""
         tooltip = f' title="{t.get("overview","")[:200]}"' if t.get("overview") else ""
         rows += f'<tr data-g="{t.get("genres","")}" data-r="{r["rating"]}" data-s="{" ".join(provs)}"><td>{poster}</td><td><a href="https://www.imdb.com/title/{iid}/" target="_blank"{tooltip}>{t.get("title",iid)}</a></td><td>{t.get("year","")}</td><td style="font-weight:bold;color:{c}">{r["rating"]}</td><td>{imdb}</td><td class="x">{" ".join(scores)}</td><td>{stream}</td><td class="x">{t.get("genres","")}</td><td class="x">{r.get("date","")}</td><td>{local}</td></tr>'
     jb = active_job()[1]
@@ -656,7 +858,10 @@ hr{{border-color:#333;margin:20px 0}}</style></head>
 <button type="submit">Save</button></form><hr>
 <h3>Trakt</h3>
 {'<span style="color:#2d7">✓ Connected</span> <a href="'+BASE+'/trakt/auth/'+user+'">(reconnect)</a>' if has_trakt else f'<a href="{BASE}/trakt/auth/{user}"><button>Connect Trakt</button></a>' if TRAKT_ID else ''}<hr>
-<h3>Local Library (TMM)</h3>
+<h3>Media Servers</h3>
+{_render_media_servers(user)}
+<hr>
+<h3>Local Library (TMM / file upload)</h3>
 <form method="POST" action="{BASE}/tmm/{user}" enctype="multipart/form-data">
 <input type="file" name="tmm" accept=".csv,.txt"><button type="submit">Upload</button></form><hr>
 <h3>Streaming</h3>
@@ -730,6 +935,11 @@ class H(BaseHTTPRequestHandler):
             u = parts[-1]
             if not active_job()[1]: start_job("trakt_sync", _bg_trakt_sync, u)
             self._redirect(f"{BASE}/")
+        elif p.startswith("/media/sync/"):
+            u = parts[-1]
+            if not active_job()[1]:
+                start_job("media_sync", lambda jid: sync_media_servers(u))
+            self._redirect(f"{BASE}/u/{u}")
         elif p == "/enrich":
             if not active_job()[1]: start_job("enrich", _bg_enrich)
             self._redirect(f"{BASE}/")
@@ -797,6 +1007,19 @@ button{{padding:10px 20px;background:#4fc3f7;border:none;border-radius:6px;curso
                     save_user_tmm(user, lib)
                     break
             self._redirect(f"{BASE}/u/{user}")
+        elif self.path.startswith("/media/"):
+            user = parts[-1]
+            params = urllib.parse.parse_qs(body.decode())
+            server_type = params.get("type", [""])[0]
+            if server_type and server_type in MEDIA_SERVERS:
+                config = load_user_media_config(user)
+                config[server_type] = {
+                    "enabled": True,
+                    "url": params.get("url", [""])[0].rstrip("/"),
+                    "token": params.get("token", [""])[0],
+                }
+                save_user_media_config(user, config)
+            self._redirect(f"{BASE}/setup/{user}")
         elif self.path.startswith("/keys"):
             params = urllib.parse.parse_qs(body.decode())
             keys = {k: params.get(k, [""])[0] for k in ("tmdb", "omdb", "tvdb")}
