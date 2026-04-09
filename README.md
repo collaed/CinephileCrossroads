@@ -16,7 +16,8 @@ A self-hosted, zero-dependency movie & TV ratings dashboard that aggregates data
 - Enrich with posters, plot summaries, and scores from TMDB, OMDB, and TVDB
 - Searchable, sortable, filterable by genre, rating, and streaming provider
 - Hover titles for plot summaries
-- 💾 indicator for titles in your local library (TMM integration)
+- 💾 indicator for titles in your local library (Plex, Jellyfin, Emby, Kodi, Radarr, Sonarr, TMM)
+- Leaving soon detection — tracks titles disappearing from streaming services
 
 ### 📺 Streaming Availability
 - See which titles are on Netflix, Prime, Disney+, Max, etc. in your country
@@ -44,7 +45,31 @@ A self-hosted, zero-dependency movie & TV ratings dashboard that aggregates data
 | **OMDB** | Rotten Tomatoes 🍅, Metacritic scores | API key |
 | **TVDB** | TV show metadata | API key |
 | **Trakt** | Bidirectional rating sync, watch history | OAuth |
-| **TMM** | Local library indicator (tinyMediaManager) | CSV/file upload |
+| **Plex** | Local library sync | URL + token |
+| **Jellyfin** | Local library sync | URL + API key |
+| **Emby** | Local library sync | URL + API key |
+| **Kodi** | Local library sync | JSON-RPC URL |
+| **Radarr** | Movie library + wanted/downloaded status | URL + API key |
+| **Sonarr** | TV library + wanted/downloaded status | URL + API key |
+| **TMM** | Local library (tinyMediaManager CSV/file upload) | File upload |
+
+### 🖥️ Media Server Sync
+
+Two ways to sync your local media library:
+
+**Browser LAN Scan** — click "Scan LAN" in Setup. Your browser probes common LAN IPs for media servers, prompts for API tokens, and syncs directly. No server-side config needed.
+
+**LAN Agent** (`agent.py`) — a standalone zero-dependency Python script for unattended sync:
+```bash
+# First run creates agent.json config
+python3 agent.py --server https://your-domain.com/imdb --user yourname
+
+# Edit agent.json with your server URLs and tokens, then:
+python3 agent.py --server https://your-domain.com/imdb --user yourname
+
+# Automate with cron (every 30 min):
+*/30 * * * * python3 /path/to/agent.py --server https://your-domain.com/imdb --user yourname
+```
 
 ## Quick Start
 
@@ -91,13 +116,15 @@ Keys can be set via environment variables or pasted in the ⚙ Setup page at run
 /data/
 ├── titles.json              # Shared: metadata for all known titles (~2MB/1000 titles)
 ├── catalog.json             # Streaming catalog for WATCH_COUNTRY
+├── catalog_prev.json        # Previous catalog snapshot (for "leaving soon" detection)
 ├── api_keys.json            # Saved API keys
 ├── tvdb_token.json          # TVDB session token
 └── users/
     ├── alice/
     │   ├── ratings.json     # {imdb_id: {rating, date}} (~20KB)
     │   ├── trakt_token.json # Trakt OAuth token
-    │   └── tmm_library.json # Local library IDs
+    │   ├── tmm_library.json # Local library (TMM + media servers)
+    │   └── media_servers.json # Media server connection config
     └── bob/
         └── ratings.json
 ```
@@ -117,6 +144,16 @@ Recommend ──→ build_taste_profile() from user's high-rated titles
            ├→ score all unrated titles against profile
            ├→ filter by streaming availability
            └→ return top matches
+
+Media Sync ──→ Browser LAN scan OR agent.py
+            ├→ Plex / Jellyfin / Emby / Kodi / Radarr / Sonarr
+            └→ POST /api/library/<user> ──→ users/X/tmm_library.json
+
+Catalog ──→ TMDB discover API (per provider, per country)
+         ├→ catalog.json (current snapshot)
+         ├→ catalog_prev.json (previous, for diff)
+         ├→ "leaving soon" = titles in prev but not in current
+         └→ seeds titles.json with unrated titles for recommendations
 ```
 
 ### Recommendation Algorithm
@@ -163,20 +200,25 @@ Set the `BASE` constant in `app.py` to match your subpath (default: `/imdb`).
 | `/u/<user>` | Specific user's ratings |
 | `/recs/<user>` | Recommendations for user |
 | `/catalog` | Streaming catalog browser |
-| `/setup/<user>` | User setup (import, API keys, Trakt) |
+| `/catalog/fetch` | Trigger catalog refresh (background) |
+| `/setup/<user>` | User setup (import, API keys, Trakt, media servers) |
 | `/setup/new` | Create new user |
 | `/enrich` | Trigger background enrichment |
 | `/trakt/sync/<user>` | Sync ratings with Trakt |
+| `/media/sync/<user>` | Sync all configured media servers |
+| `/api/library/<user>` | POST: receive library data from browser/agent |
 | `/jobs` | Background job status (JSON) |
 | `/api` | Stats endpoint (JSON) |
 
 ## Tech Stack
 
 - **Zero dependencies** — pure Python 3.12 standard library
-- **Single file** — `app.py` (~750 lines)
+- **Single file** — `app.py` (~1100 lines) + optional `agent.py` (~120 lines)
 - **~50MB Docker image** (python:alpine)
 - **Background job queue** with progress tracking
 - **Incremental saves** during enrichment (no data loss on interruption)
+- **Browser-side LAN scanning** for media server discovery
+- **Multi-user** with minimal per-user overhead (~20KB)
 
 ## Roadmap
 
@@ -184,8 +226,10 @@ Set the `BASE` constant in `app.py` to match your subpath (default: `/imdb`).
 - [ ] Episode tracking for TV shows
 - [ ] Watchlist management
 - [ ] Export ratings to CSV
+- [ ] Scheduled enrichment and catalog refresh (cron-style)
 - [ ] Dark/light theme toggle
 - [ ] Mobile-optimized layout
+- [ ] Notification when a wanted title hits your streaming services
 
 ## License
 
