@@ -859,6 +859,89 @@ hr{{border-color:#333;margin:20px 0}}</style></head>
 <h3>Trakt</h3>
 {'<span style="color:#2d7">✓ Connected</span> <a href="'+BASE+'/trakt/auth/'+user+'">(reconnect)</a>' if has_trakt else f'<a href="{BASE}/trakt/auth/{user}"><button>Connect Trakt</button></a>' if TRAKT_ID else ''}<hr>
 <h3>Media Servers</h3>
+
+<div style="margin-top:12px;padding:12px;background:#1a1a2e;border-radius:8px">
+<b>Browser LAN Scan</b>
+<div id="scan-log" style="margin:8px 0;color:#888;max-height:150px;overflow-y:auto;font-size:.85em"></div>
+<button onclick="scanLAN()" id="scan-btn" style="padding:6px 16px;background:#4fc3f7;border:none;border-radius:6px;cursor:pointer">Scan LAN</button>
+<button onclick="syncFromBrowser()" id="sync-btn" style="padding:6px 16px;background:#16213e;border:1px solid #4fc3f7;border-radius:6px;cursor:pointer;color:#4fc3f7;display:none">Sync found servers</button>
+<script>
+var foundServers={{}};
+function log(msg){{document.getElementById("scan-log").innerHTML+=msg+"<br>"}}
+async function probe(ip,port,path,name){{
+  try{{
+    const r=await fetch("http://"+ip+":"+port+path,{{signal:AbortSignal.timeout(1200),mode:"cors"}});
+    if(r.ok){{foundServers[name]=foundServers[name]||[];foundServers[name].push({{ip,port}});return true}}
+  }}catch(e){{}}
+  return false
+}}
+async function scanLAN(){{
+  document.getElementById("scan-log").innerHTML="";
+  foundServers={{}};
+  log("Scanning common LAN ranges...");
+  const tests=[
+    {{name:"Plex",port:32400,path:"/identity"}},
+    {{name:"Jellyfin",port:8096,path:"/System/Info/Public"}},
+    {{name:"Kodi",port:8080,path:"/jsonrpc"}},
+    {{name:"Radarr",port:7878,path:"/ping"}},
+    {{name:"Sonarr",port:8989,path:"/ping"}},
+  ];
+  for(const base of["192.168.1","192.168.0","10.0.0"]){{
+    log("Trying "+base+".x ...");
+    const batch=[];
+    for(let i=1;i<=254;i++){{
+      const ip=base+"."+i;
+      for(const t of tests) batch.push(probe(ip,t.port,t.path,t.name).then(ok=>ok?log("Found <b>"+t.name+"</b> at "+ip+":"+t.port):null));
+    }}
+    await Promise.all(batch);
+    if(Object.keys(foundServers).length>0)break;
+  }}
+  if(Object.keys(foundServers).length===0){{log("No servers found. CORS may be blocking — try the LAN agent.")}}
+  else{{document.getElementById("sync-btn").style.display="inline";log("<b>Click Sync to pull libraries</b>")}}
+}}
+async function syncFromBrowser(){{
+  const user="{user}";
+  for(const[name,hosts]of Object.entries(foundServers)){{
+    const h=hosts[0];
+    const url="http://"+h.ip+":"+h.port;
+    log("Fetching "+name+" library from "+url+"...");
+    let library={{}};
+    try{{
+      if(name==="Plex"){{
+        const tok=prompt("Plex token for "+url+":");
+        if(!tok)continue;
+        const secs=await(await fetch(url+"/library/sections?X-Plex-Token="+tok)).json();
+        for(const d of(secs.MediaContainer?.Directory||[])){{
+          if(!["movie","show"].includes(d.type))continue;
+          const items=await(await fetch(url+"/library/sections/"+d.key+"/all?X-Plex-Token="+tok)).json();
+          for(const it of(items.MediaContainer?.Metadata||[])){{
+            const g=(it.Guid||[]).find(x=>x.id?.startsWith("imdb://"));
+            if(g)library[g.id.replace("imdb://","")]={{source:"plex",quality:it.Media?.[0]?.videoResolution||""}}
+          }}
+        }}
+      }}else if(name==="Jellyfin"){{
+        const tok=prompt("Jellyfin API key for "+url+":");
+        if(!tok)continue;
+        const users=await(await fetch(url+"/Users?api_key="+tok)).json();
+        const uid=users[0]?.Id;
+        const items=await(await fetch(url+"/Users/"+uid+"/Items?api_key="+tok+"&Recursive=true&IncludeItemTypes=Movie,Series&Fields=ProviderIds")).json();
+        for(const it of(items.Items||[])){{const iid=it.ProviderIds?.Imdb;if(iid)library[iid]={{source:"jellyfin"}}}}
+      }}else if(name==="Radarr"||name==="Sonarr"){{
+        const tok=prompt(name+" API key for "+url+":");
+        if(!tok)continue;
+        const ep=name==="Radarr"?"/api/v3/movie":"/api/v3/series";
+        const items=await(await fetch(url+ep+"?apiKey="+tok)).json();
+        for(const m of items){{if(m.imdbId)library[m.imdbId]={{source:name.toLowerCase(),downloaded:m.hasFile||false}}}}
+      }}
+      const resp=await fetch(location.pathname.replace(/\/setup\/.*$/,"/api/library/")+user,{{
+        method:"POST",headers:{{"Content-Type":"application/json"}},body:JSON.stringify({{library}})}});
+      const result=await resp.json();
+      log(name+": synced "+Object.keys(library).length+" titles (total: "+result.count+")");
+    }}catch(e){{log(name+" error: "+e.message)}}
+  }}
+}}
+</script></div>
+
 {_render_media_servers(user)}
 <hr>
 <h3>Local Library (TMM / file upload)</h3>
@@ -1020,6 +1103,14 @@ button{{padding:10px 20px;background:#4fc3f7;border:none;border-radius:6px;curso
                 }
                 save_user_media_config(user, config)
             self._redirect(f"{BASE}/setup/{user}")
+        elif self.path.startswith("/api/library/"):
+            user = parts[-1]
+            data = json.loads(body.decode())
+            library = load_user_tmm(user)
+            library.update(data.get("library", {}))
+            save_user_tmm(user, library)
+            self._json({"status": "ok", "count": len(library)})
+            return
         elif self.path.startswith("/keys"):
             params = urllib.parse.parse_qs(body.decode())
             keys = {k: params.get(k, [""])[0] for k in ("tmdb", "omdb", "tvdb")}
@@ -1032,8 +1123,17 @@ button{{padding:10px 20px;background:#4fc3f7;border:none;border-radius:6px;curso
         self.send_response(200); self.send_header("Content-Type", "text/html"); self.end_headers()
         self.wfile.write(body.encode())
     def _json(self, data):
-        self.send_response(200); self.send_header("Content-Type", "application/json"); self.end_headers()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
         self.wfile.write(json.dumps(data).encode())
+    def do_OPTIONS(self):
+        self.send_response(204)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.end_headers()
     def _redirect(self, url):
         self.send_response(302); self.send_header("Location", url); self.end_headers()
     def log_message(self, *a): pass

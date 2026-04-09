@@ -1,0 +1,135 @@
+#!/usr/bin/env python3
+"""
+CinephileCrossroads LAN Agent — runs on your local network, syncs media servers.
+
+Usage:
+    python3 agent.py --server https://tools.ecb.pm/imdb --user ecb
+
+Configure your media servers in agent.json (created on first run).
+Run via cron for automatic sync: */30 * * * * python3 /path/to/agent.py --server URL --user USER
+"""
+import json, os, sys, urllib.request, urllib.parse, argparse
+
+CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "agent.json")
+
+DEFAULT_CONFIG = {
+    "plex": {"enabled": False, "url": "http://192.168.1.x:32400", "token": ""},
+    "jellyfin": {"enabled": False, "url": "http://192.168.1.x:8096", "token": ""},
+    "emby": {"enabled": False, "url": "http://192.168.1.x:8096", "token": ""},
+    "kodi": {"enabled": False, "url": "http://192.168.1.x:8080/jsonrpc"},
+    "radarr": {"enabled": False, "url": "http://192.168.1.x:7878", "token": ""},
+    "sonarr": {"enabled": False, "url": "http://192.168.1.x:8989", "token": ""},
+}
+
+def api_get(url):
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "CinephileAgent/1.0"}), timeout=10) as r:
+            return json.loads(r.read())
+    except Exception as e:
+        print(f"  Error: {url[:60]} — {e}")
+        return None
+
+def api_post(url, data):
+    req = urllib.request.Request(url, data=json.dumps(data).encode(),
+        headers={"Content-Type": "application/json", "User-Agent": "CinephileAgent/1.0"})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        return json.loads(r.read())
+
+def fetch_plex(cfg):
+    lib = {}
+    sections = api_get(f"{cfg['url']}/library/sections?X-Plex-Token={cfg['token']}")
+    if not sections: return lib
+    for d in sections.get("MediaContainer", {}).get("Directory", []):
+        if d.get("type") not in ("movie", "show"): continue
+        items = api_get(f"{cfg['url']}/library/sections/{d['key']}/all?X-Plex-Token={cfg['token']}")
+        if not items: continue
+        for item in items.get("MediaContainer", {}).get("Metadata", []):
+            for guid in item.get("Guid", []):
+                if "imdb://" in guid.get("id", ""):
+                    iid = guid["id"].replace("imdb://", "")
+                    media = item.get("Media", [{}])[0]
+                    lib[iid] = {"source": "plex", "quality": media.get("videoResolution", ""),
+                                "path": (media.get("Part", [{}])[0]).get("file", "")}
+    return lib
+
+def fetch_jellyfin(cfg):
+    lib = {}
+    users = api_get(f"{cfg['url']}/Users?api_key={cfg['token']}")
+    if not users: return lib
+    uid = users[0].get("Id", "")
+    items = api_get(f"{cfg['url']}/Users/{uid}/Items?api_key={cfg['token']}&Recursive=true&IncludeItemTypes=Movie,Series&Fields=ProviderIds,Path")
+    if not items: return lib
+    for item in items.get("Items", []):
+        iid = item.get("ProviderIds", {}).get("Imdb", "")
+        if iid: lib[iid] = {"source": "jellyfin", "path": item.get("Path", "")}
+    return lib
+
+def fetch_kodi(cfg):
+    lib = {}
+    payload = {"jsonrpc": "2.0", "method": "VideoLibrary.GetMovies", "id": 1,
+               "params": {"properties": ["imdbnumber", "file"]}}
+    req = urllib.request.Request(cfg["url"], data=json.dumps(payload).encode(),
+        headers={"Content-Type": "application/json"})
+    try:
+        data = json.loads(urllib.request.urlopen(req, timeout=10).read())
+        for m in data.get("result", {}).get("movies", []):
+            iid = m.get("imdbnumber", "")
+            if iid and iid.startswith("tt"): lib[iid] = {"source": "kodi", "path": m.get("file", "")}
+    except: pass
+    return lib
+
+def fetch_radarr(cfg):
+    lib = {}
+    movies = api_get(f"{cfg['url']}/api/v3/movie?apiKey={cfg['token']}")
+    if not movies: return lib
+    for m in movies:
+        iid = m.get("imdbId", "")
+        if iid: lib[iid] = {"source": "radarr", "downloaded": m.get("hasFile", False),
+                            "path": m.get("path", "")}
+    return lib
+
+def fetch_sonarr(cfg):
+    lib = {}
+    shows = api_get(f"{cfg['url']}/api/v3/series?apiKey={cfg['token']}")
+    if not shows: return lib
+    for s in shows:
+        iid = s.get("imdbId", "")
+        if iid: lib[iid] = {"source": "sonarr", "downloaded": s.get("statistics", {}).get("percentOfEpisodes", 0) > 0,
+                            "path": s.get("path", "")}
+    return lib
+
+FETCHERS = {"plex": fetch_plex, "jellyfin": fetch_jellyfin, "emby": fetch_jellyfin,
+            "kodi": fetch_kodi, "radarr": fetch_radarr, "sonarr": fetch_sonarr}
+
+def main():
+    parser = argparse.ArgumentParser(description="CinephileCrossroads LAN Agent")
+    parser.add_argument("--server", required=True, help="CinephileCrossroads URL (e.g. https://tools.ecb.pm/imdb)")
+    parser.add_argument("--user", required=True, help="Username to sync to")
+    args = parser.parse_args()
+
+    if not os.path.exists(CONFIG_FILE):
+        json.dump(DEFAULT_CONFIG, open(CONFIG_FILE, "w"), indent=2)
+        print(f"Created {CONFIG_FILE} — edit it with your server details, then run again.")
+        sys.exit(0)
+
+    config = json.load(open(CONFIG_FILE))
+    library = {}
+    for name, cfg in config.items():
+        if not cfg.get("enabled"): continue
+        if name not in FETCHERS: continue
+        print(f"Fetching {name} from {cfg.get('url', '?')}...")
+        items = FETCHERS[name](cfg)
+        library.update(items)
+        print(f"  {name}: {len(items)} titles")
+
+    if not library:
+        print("No titles found. Check agent.json config.")
+        sys.exit(1)
+
+    print(f"Pushing {len(library)} titles to {args.server}...")
+    url = f"{args.server}/api/library/{args.user}"
+    result = api_post(url, {"library": library})
+    print(f"Done — server has {result.get('count', '?')} titles in library")
+
+if __name__ == "__main__":
+    main()
