@@ -98,6 +98,41 @@ def fetch_sonarr(cfg):
                             "path": s.get("path", "")}
     return lib
 
+
+def opensubtitles_hash(filepath):
+    """Compute OpenSubtitles hash: file size + checksum of first and last 64KB."""
+    import struct
+    block_size = 65536
+    file_size = os.path.getsize(filepath)
+    if file_size < block_size * 2:
+        return None
+    hash_val = file_size
+    with open(filepath, "rb") as f:
+        for _ in range(block_size // 8):
+            hash_val += struct.unpack("<Q", f.read(8))[0]
+            hash_val &= 0xFFFFFFFFFFFFFFFF
+        f.seek(-block_size, 2)
+        for _ in range(block_size // 8):
+            hash_val += struct.unpack("<Q", f.read(8))[0]
+            hash_val &= 0xFFFFFFFFFFFFFFFF
+    return format(hash_val, "016x")
+
+def compute_hashes(library):
+    """Add file hashes to library entries that have local paths."""
+    for iid, info in library.items():
+        path = info.get("path", "")
+        if path and os.path.isfile(path):
+            h = opensubtitles_hash(path)
+            if h:
+                info["file_hash"] = h
+                info["file_size"] = os.path.getsize(path)
+    return library
+
+def find_missing_subs(library):
+    """Return IMDB IDs of titles with no subtitle streams detected."""
+    return [iid for iid, info in library.items()
+            if not info.get("subtitles") and info.get("path")]
+
 FETCHERS = {"plex": fetch_plex, "jellyfin": fetch_jellyfin, "emby": fetch_jellyfin,
             "kodi": fetch_kodi, "radarr": fetch_radarr, "sonarr": fetch_sonarr}
 
@@ -125,6 +160,17 @@ def main():
     if not library:
         print("No titles found. Check agent.json config.")
         sys.exit(1)
+
+    # Compute file hashes for subtitle matching
+    print("Computing file hashes...")
+    library = compute_hashes(library)
+    hashed = sum(1 for v in library.values() if v.get("file_hash"))
+    print(f"  {hashed} files hashed")
+
+    # Report titles missing subtitles
+    missing_subs = find_missing_subs(library)
+    if missing_subs:
+        print(f"  {len(missing_subs)} titles have no subtitles")
 
     print(f"Pushing {len(library)} titles to {args.server}...")
     url = f"{args.server}/api/library/{args.user}"

@@ -533,13 +533,13 @@ def sync_media_servers(user):
 # ── OpenSubtitles ─────────────────────────────────────────────────────
 OPENSUBS_API = "https://api.opensubtitles.com/api/v1"
 
-def opensubs_search(imdb_id, languages=None):
-    """Search OpenSubtitles for subtitles matching an IMDB ID.
-    Returns list of {language, release, download_count, rating, file_id, hash_match}."""
+def opensubs_search(imdb_id, languages=None, file_hash=None, file_size=None):
+    """Search OpenSubtitles by IMDB ID and optionally by file hash for sync-accurate results."""
     api_key = _load_key("opensubs")
     if not api_key: return []
     params = f"imdb_id={imdb_id.replace('tt','')}"
     if languages: params += "&languages=" + ",".join(languages)
+    if file_hash: params += f"&moviehash={file_hash}"
     data = api_get(f"{OPENSUBS_API}/subtitles?{params}",
                    {"Api-Key": api_key, "User-Agent": "CinephileCrossroads v1.0"})
     if not data: return []
@@ -810,6 +810,39 @@ def get_leaving_titles():
     return leaving
 
 
+def _bg_auto_subs(jid, user):
+    """Background job: search subtitles for local titles that have no subs."""
+    library = load_user_tmm(user)
+    missing = [(iid, info) for iid, info in library.items()
+               if not info.get("subtitles") and info.get("path")]
+    if not missing:
+        job_progress(jid, 1, 1, "All titles have subtitles")
+        return
+    total = len(missing)
+    found = 0
+    for i, (iid, info) in enumerate(missing):
+        subs = opensubs_search(iid, languages=["en", "fr"],
+                               file_hash=info.get("file_hash"),
+                               file_size=info.get("file_size"))
+        if subs:
+            # Store best match info (don't auto-download, just flag)
+            best = subs[0]
+            info["suggested_sub"] = {
+                "language": best["language"],
+                "release": best["release"],
+                "file_id": best["file_id"],
+                "hash_match": best["hash_match"],
+                "downloads": best["download_count"],
+            }
+            found += 1
+        if (i + 1) % 10 == 0:
+            job_progress(jid, i + 1, total, f"Searched {i+1}/{total}, found {found}")
+            save_user_tmm(user, library)
+        time.sleep(0.3)  # Rate limit
+    save_user_tmm(user, library)
+    job_progress(jid, total, total, f"Done: found subs for {found}/{total}")
+
+
 def _bg_enrich(jid): enrich_titles(jid)
 def _bg_catalog(jid): fetch_streaming_catalog(jid)
 def _bg_trakt_sync(jid, user):
@@ -886,7 +919,8 @@ def render_ratings(user):
         local_info = tmm.get(iid, {})
         local_src = local_info.get("source", "tmm") if local_info else ""
         has_subs = bool(local_info.get("subtitles")) if local_info else False
-        sub_icon = "🗨" if has_subs else ('<a href="' + BASE + '/subs/' + iid + '" title="Find subtitles">🔤</a>' if iid in tmm else "")
+        has_suggested = bool(local_info.get("suggested_sub")) if local_info else False
+        sub_icon = "🗨" if has_subs else ("💬" if has_suggested else ('<a href="' + BASE + '/subs/' + iid + '" title="Find subtitles">🔤</a>' if iid in tmm else ""))
         local = ('💾 ' + local_src + " " + sub_icon) if iid in tmm else ""
         tooltip = f' title="{t.get("overview","")[:200]}"' if t.get("overview") else ""
         rows += f'<tr data-g="{t.get("genres","")}" data-r="{r["rating"]}" data-s="{" ".join(provs)}"><td>{poster}</td><td><a href="https://www.imdb.com/title/{iid}/" target="_blank"{tooltip}>{t.get("title",iid)}</a></td><td>{t.get("year","")}</td><td style="font-weight:bold;color:{c}">{r["rating"]}</td><td>{imdb}</td><td class="x">{" ".join(scores)}</td><td>{stream}</td><td class="x">{t.get("genres","")}</td><td class="x">{r.get("date","")}</td><td>{local}</td></tr>'
@@ -1143,7 +1177,10 @@ class H(BaseHTTPRequestHandler):
         elif p.startswith("/subs/"):
             imdb_id = parts[-1]
             langs = qs.get("lang", ["en"])
-            subs = opensubs_search(imdb_id, langs)
+            user = self._user(parts)
+            lib = load_user_tmm(user)
+            info = lib.get(imdb_id, {})
+            subs = opensubs_search(imdb_id, langs, file_hash=info.get("file_hash"), file_size=info.get("file_size"))
             titles = load_titles()
             t = titles.get(imdb_id, {})
             rows = ""
@@ -1159,6 +1196,12 @@ th,td{{padding:6px 10px;text-align:left;border-bottom:1px solid #333}}th{{backgr
 <table><thead><tr><th>Lang</th><th>Release</th><th>Downloads</th><th>Rating</th><th>Match</th><th></th></tr></thead>
 <tbody>{rows}</tbody></table>
 <p><a href="{BASE}/">← Back</a></p></body></html>""")
+            return
+        elif p.startswith("/subs/auto/"):
+            u = parts[-1]
+            if not active_job()[1]:
+                start_job("auto_subs", _bg_auto_subs, u)
+            self._redirect(f"{BASE}/u/{u}")
             return
         elif p.startswith("/subs/dl/"):
             file_id = int(parts[-1])
