@@ -945,7 +945,7 @@ def render_ratings(user):
         sub_icon = "🗨" if has_subs else ("💬" if has_suggested else ('<a href="' + BASE + '/subs/' + iid + '" title="Find subtitles">🔤</a>' if iid in tmm else ""))
         local = ('💾 ' + local_src + " " + sub_icon) if iid in tmm else ""
         tooltip = f' title="{t.get("overview","")[:200]}"' if t.get("overview") else ""
-        rows += f'<tr data-g="{t.get("genres","")}" data-r="{r["rating"]}" data-s="{" ".join(provs)}"><td>{poster}</td><td><a href="https://www.imdb.com/title/{iid}/" target="_blank"{tooltip}>{t.get("title",iid)}</a>{trailer_link}{similar_link}</td><td>{t.get("year","")}</td><td style="font-weight:bold;color:{c}">{r["rating"]}</td><td>{imdb}</td><td class="x">{" ".join(scores)}</td><td>{stream}</td><td class="x">{t.get("genres","")}</td><td class="x">{r.get("date","")}</td><td>{local}</td></tr>'
+        rows += f'<tr data-g="{t.get("genres","")}" data-r="{r["rating"]}" data-s="{" ".join(provs)}" data-d="{str(t.get("year",""))[:3]}0"><td>{poster}</td><td><a href="https://www.imdb.com/title/{iid}/" target="_blank"{tooltip}>{t.get("title",iid)}</a>{awards_badge}{trailer_link}{similar_link}</td><td>{t.get("year","")}</td><td style="font-weight:bold;color:{c}">{r["rating"]}</td><td>{imdb}</td><td class="x">{" ".join(scores)}</td><td>{stream}</td><td class="x">{t.get("genres","")}</td><td class="x">{r.get("date","")}</td><td>{local}</td></tr>'
     jb = active_job()[1]
     job_banner = f'<div id="jb" style="background:#1a3a1a;padding:8px 15px;border-radius:6px;margin-bottom:10px"><span id="jm">⏳ {jb["name"]}: {jb["message"]}</span> <progress id="jp" max="100" value="{jb["progress"]/max(jb["total"],1)*100 if jb else 0}" style="vertical-align:middle"></progress></div><script>setInterval(()=>fetch("{BASE}/jobs").then(r=>r.json()).then(d=>{{let a=Object.values(d).find(j=>j.status=="running");if(a){{document.getElementById("jb").style.display="block";document.getElementById("jm").textContent="⏳ "+a.name+": "+a.message;document.getElementById("jp").value=a.total?a.progress/a.total*100:0}}else{{document.getElementById("jb").style.display="none"}}}}),3000)</script>' if jb else ""
     return f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>{user}'s Ratings ({len(ratings)})</title>
@@ -958,8 +958,8 @@ th{{background:#16213e;position:sticky;top:0;cursor:pointer;white-space:nowrap}}
 tr:hover{{background:#16213e}}a{{color:#4fc3f7;text-decoration:none}}img{{border-radius:4px}}.x{{font-size:.8em;color:#aaa}}
 .bar{{display:flex;gap:10px;align-items:center;margin-bottom:15px;flex-wrap:wrap}}
 input,select{{padding:6px;border-radius:4px;border:1px solid #444;background:#16213e;color:#eee}}</style>
-<script>function f(){{const q=document.getElementById('s').value.toLowerCase(),g=document.getElementById('g').value,mr=document.getElementById('mr').value,st=document.getElementById('st').value;
-document.querySelectorAll('tbody tr').forEach(r=>r.style.display=(r.textContent.toLowerCase().includes(q)&&(!g||r.dataset.g.includes(g))&&(!mr||parseInt(r.dataset.r)>=parseInt(mr))&&(!st||r.dataset.s.includes(st)))?'':'none')}}
+<script>function f(){{const q=document.getElementById('s').value.toLowerCase(),g=document.getElementById('g').value,mr=document.getElementById('mr').value,st=document.getElementById('st').value,dec=document.getElementById('dec').value;
+document.querySelectorAll('tbody tr').forEach(r=>r.style.display=(r.textContent.toLowerCase().includes(q)&&(!g||r.dataset.g.includes(g))&&(!mr||parseInt(r.dataset.r)>=parseInt(mr))&&(!st||r.dataset.s.includes(st))&&(!dec||r.dataset.d===dec))?'':'none')}}
 function sortTable(n){{const tb=document.querySelector('tbody'),rows=[...tb.rows],dir=tb.dataset.sort==n?-1:1;tb.dataset.sort=dir==1?n:'';
 rows.sort((a,b)=>{{let x=a.cells[n].textContent,y=b.cells[n].textContent;return(!isNaN(x)&&!isNaN(y)?(x-y):x.localeCompare(y))*dir}});rows.forEach(r=>tb.appendChild(r))}}</script><script>if(localStorage.getItem("theme")==="light")document.body.classList.add("light")</script></head><body>
 {job_banner}
@@ -967,8 +967,9 @@ rows.sort((a,b)=>{{let x=a.cells[n].textContent,y=b.cells[n].textContent;return(
 <div class="bar"><input id="s" onkeyup="f()" placeholder="Search..." style="width:220px">
 <select id="g" onchange="f()"><option value="">All genres</option>{genre_opts}</select>
 <select id="mr" onchange="f()"><option value="">Min ★</option>{''.join(f'<option value="{i}">{i}+</option>' for i in range(10,0,-1))}</select>
+<select id="dec" onchange="f()"><option value="">All decades</option><option value="2020">2020s</option><option value="2010">2010s</option><option value="2000">2000s</option><option value="1990">1990s</option><option value="1980">1980s</option><option value="1970">1970s</option><option value="1960">1960s</option><option value="1950">1950s</option></select>
 <select id="st" onchange="f()"><option value="">All streams</option>{"".join('<option value="' + p + '">' + PROVIDER_ICONS.get(p,"▪") + " " + p + '</option>' for p in sorted(user_provs))}</select>
-<a href="{BASE}/tonight/{user}">🎲 Tonight</a> <a href="{BASE}/stats/{user}">📊</a> <a href="{BASE}/export/{user}">⬇</a> <a href="{BASE}/enrich">⚡</a> <a href="{BASE}/recs/{user}">🎯 Recs</a> <a href="{BASE}/catalog">📺 Catalog</a> <a href="{BASE}/setup/{user}">⚙</a>
+<a href="{BASE}/tonight/{user}">🎲 Tonight</a> <a href="{BASE}/stats/{user}">📊</a> <a href="{BASE}/export/{user}">⬇</a> <a href="{BASE}/enrich">⚡</a> <a href="{BASE}/recs/{user}">🎯 Recs</a> <a href="{BASE}/catalog">📺</a> <a href="{BASE}/new">🆕</a> <a href="{BASE}/random/{user}">🎰</a> <a href="{BASE}/compare/">👥</a> <a href="{BASE}/rss/{user}" title="RSS">📡</a> <a href="{BASE}/setup/{user}">⚙</a>
 {f'<a href="{BASE}/trakt/sync/{user}">↕ Trakt</a>' if has_trakt else ""}
 <button onclick="document.body.classList.toggle('light');localStorage.setItem('theme',document.body.classList.contains('light')?'light':'dark')" style="background:none;border:1px solid #444;border-radius:4px;cursor:pointer;padding:2px 8px;color:var(--fg)">🌓</button> <span style="color:#666;font-size:.8em">{" ".join(services)}</span></div>
 <table><thead><tr><th></th><th onclick="sortTable(1)">Title</th><th onclick="sortTable(2)">Year</th><th onclick="sortTable(3)">★</th><th onclick="sortTable(4)">IMDB</th><th>Scores</th><th>Stream</th><th onclick="sortTable(7)">Genres</th><th onclick="sortTable(8)">Rated</th><th>💾</th></tr></thead>
@@ -1001,7 +1002,7 @@ def render_recs(user):
         kws = ", ".join(t.get("keywords", [])[:5])
         tooltip = f' title="{t.get("overview","")[:200]}"' if t.get("overview") else ""
         stars = "".join('<a href="' + BASE + '/rate/' + user + '/' + iid + '/' + str(s) + '" style="text-decoration:none;color:gold" title="' + str(s) + '">' + ("★" if s <= 5 else "☆") + '</a>' for s in range(1, 11))
-        rows += f'<tr><td>{poster}</td><td><a href="https://www.imdb.com/title/{iid}/" target="_blank"{tooltip}>{t.get("title",iid)}</a>{trailer_link}{similar_link}</td><td>{t.get("year","")}</td><td>{imdb}</td><td>{provs}</td><td>{wl_icon}</td><td style="color:#2d7;font-weight:bold">{score}</td><td class="x">{kws}</td><td>{stars}</td></tr>'
+        rows += f'<tr><td>{poster}</td><td><a href="https://www.imdb.com/title/{iid}/" target="_blank"{tooltip}>{t.get("title",iid)}</a>{awards_badge}{trailer_link}{similar_link}</td><td>{t.get("year","")}</td><td>{imdb}</td><td>{provs}</td><td>{wl_icon}</td><td style="color:#2d7;font-weight:bold">{score}</td><td class="x">{kws}</td><td>{stars}</td></tr>'
     return f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>Recommendations for {user}</title>
 <style>body{{font-family:-apple-system,sans-serif;margin:20px;background:var(--bg,#1a1a2e);color:var(--fg,#eee)}}
 :root{{--bg:#1a1a2e;--fg:#eee;--card:#16213e;--border:#333;--accent:#4fc3f7}}
@@ -1138,6 +1139,44 @@ async function syncFromBrowser(){{
 <p>Region: <b>{WATCH_COUNTRY}</b> | <a href="{BASE}/catalog">Browse catalog</a></p>
 </div></body></html>"""
 
+def render_compare(u1, u2):
+    titles = load_titles()
+    r1, r2 = load_user_ratings(u1), load_user_ratings(u2)
+    common = set(r1.keys()) & set(r2.keys())
+    only1 = set(r1.keys()) - set(r2.keys())
+    only2 = set(r2.keys()) - set(r1.keys())
+    # Agreement / disagreement
+    agree, disagree = [], []
+    for iid in common:
+        t = titles.get(iid, {})
+        diff = abs(r1[iid]["rating"] - r2[iid]["rating"])
+        entry = (t.get("title","?"), r1[iid]["rating"], r2[iid]["rating"], diff)
+        if diff <= 1: agree.append(entry)
+        elif diff >= 3: disagree.append(entry)
+    disagree.sort(key=lambda x: x[3], reverse=True)
+    agree_rows = "".join(f"<tr><td>{t}</td><td>{a}</td><td>{b}</td></tr>" for t,a,b,_ in agree[:15])
+    disagree_rows = "".join(f"<tr><td>{t}</td><td>{a}</td><td>{b}</td><td style=\"color:#d72\">{d}</td></tr>" for t,a,b,d in disagree[:15])
+    return f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>{u1} vs {u2}</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>body{{font-family:sans-serif;background:#1a1a2e;color:#eee;margin:20px}}
+.grid{{display:grid;grid-template-columns:1fr 1fr;gap:20px}}
+.card{{background:#16213e;padding:20px;border-radius:12px}}
+table{{border-collapse:collapse;width:100%}}td,th{{padding:4px 8px;border-bottom:1px solid #333;text-align:left}}
+a{{color:#4fc3f7}}</style></head>
+<body><h2>{u1} vs {u2}</h2>
+<div style="display:flex;gap:20px;margin-bottom:20px;flex-wrap:wrap">
+<div class="card" style="text-align:center"><div style="font-size:2em">{len(common)}</div>both rated</div>
+<div class="card" style="text-align:center"><div style="font-size:2em">{len(agree)}</div>agree (±1)</div>
+<div class="card" style="text-align:center"><div style="font-size:2em">{len(disagree)}</div>disagree (3+)</div>
+<div class="card" style="text-align:center"><div style="font-size:2em">{len(only1)}</div>only {u1}</div>
+<div class="card" style="text-align:center"><div style="font-size:2em">{len(only2)}</div>only {u2}</div>
+</div>
+<div class="grid">
+<div class="card"><h3>🤝 You agree on</h3><table><tr><th>Title</th><th>{u1}</th><th>{u2}</th></tr>{agree_rows}</table></div>
+<div class="card"><h3>🥊 You disagree on</h3><table><tr><th>Title</th><th>{u1}</th><th>{u2}</th><th>Gap</th></tr>{disagree_rows}</table></div>
+</div>
+<p style="margin-top:20px"><a href="{BASE}/">← Back</a></p></body></html>"""
+
 def render_stats(user):
     titles = load_titles()
     ratings = load_user_ratings(user)
@@ -1185,6 +1224,30 @@ a{{color:#4fc3f7;text-decoration:none}}h3{{margin-top:0}}</style></head>
 <div class="card"><h3>Top Genres</h3>{genre_bars}</div>
 <div class="card"><h3>Most-Watched Directors</h3><table>{dir_list}</table></div>
 </div></body></html>"""
+
+def render_new_on_streaming():
+    """Show titles that appeared in the catalog since last refresh."""
+    if not os.path.exists(CATALOG_FILE) or not os.path.exists(CATALOG_PREV):
+        return f'<html><body style="background:#1a1a2e;color:#eee;font-family:sans-serif;padding:40px"><h2>Need at least 2 catalog refreshes to detect new titles</h2><a href="{BASE}/catalog/fetch" style="color:#4fc3f7">Refresh catalog</a></body></html>'
+    prev = {c["tmdb_id"]: c for c in json.load(open(CATALOG_PREV)).get("catalog", [])}
+    curr = {c["tmdb_id"]: c for c in json.load(open(CATALOG_FILE)).get("catalog", [])}
+    new_ids = set(curr.keys()) - set(prev.keys())
+    new_titles = [curr[tid] for tid in new_ids]
+    new_titles.sort(key=lambda x: x.get("tmdb_rating", 0), reverse=True)
+    rows = ""
+    for r in new_titles[:50]:
+        poster = '<img src="' + r.get("poster","") + '" height="60" loading="lazy">' if r.get("poster") else ""
+        provs = " ".join(PROVIDER_ICONS.get(p, "") for p in r.get("providers", []))
+        rows += "<tr><td>" + poster + "</td><td>" + r["title"] + "</td><td>" + r.get("year","") + "</td><td>" + str(r.get("tmdb_rating","")) + "</td><td>" + provs + "</td></tr>"
+    return f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>New on Streaming</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>body{{font-family:sans-serif;background:#1a1a2e;color:#eee;margin:20px}}
+table{{border-collapse:collapse;width:100%}}th,td{{padding:6px 10px;text-align:left;border-bottom:1px solid #333}}
+th{{background:#16213e}}img{{border-radius:4px}}a{{color:#4fc3f7}}</style></head>
+<body><h2>🆕 New on Streaming — {len(new_titles)} titles</h2>
+<table><thead><tr><th></th><th>Title</th><th>Year</th><th>TMDB</th><th>On</th></tr></thead>
+<tbody>{rows}</tbody></table>
+<p style="margin-top:15px"><a href="{BASE}/">← Back</a> | <a href="{BASE}/catalog">Full catalog</a></p></body></html>"""
 
 def render_catalog():
     if not os.path.exists(CATALOG_FILE):
@@ -1293,6 +1356,58 @@ th,td{{padding:6px 10px;text-align:left;border-bottom:1px solid #333}}th{{backgr
             else:
                 self._html("<html><body>Download failed</body></html>")
             return
+        elif p.startswith("/rss/"):
+            u = parts[-1]
+            titles = load_titles(); ratings = load_user_ratings(u)
+            items = ""
+            for iid, r in sorted(ratings.items(), key=lambda x: x[1].get("date",""), reverse=True)[:30]:
+                t = titles.get(iid, {})
+                items += f"<item><title>{t.get('title',iid)} — {r['rating']}/10</title><link>https://www.imdb.com/title/{iid}/</link><description>{t.get('overview','')[:200]}</description><pubDate>{r.get('date','')}</pubDate></item>\n"
+            self.send_response(200)
+            self.send_header("Content-Type", "application/rss+xml")
+            self.end_headers()
+            self.wfile.write(f"""<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"><channel>
+<title>{u}'s Ratings</title><description>Recent movie ratings</description>
+{items}</channel></rss>""".encode())
+            return
+        elif p == "/new":
+            self._html(render_new_on_streaming())
+            return
+        elif p.startswith("/random/"):
+            u = parts[-1]
+            import random
+            titles = load_titles(); ratings = load_user_ratings(u)
+            provs = get_user_active_providers(u)
+            unwatched = [(iid, t) for iid, t in titles.items() if iid not in ratings and set(t.get("providers",[])) & provs]
+            if unwatched:
+                iid, t = random.choice(unwatched)
+                poster = f'<img src="{t.get("poster","")}" style="border-radius:8px;max-height:350px">' if t.get("poster") else ""
+                stream = " ".join(PROVIDER_ICONS.get(p,"") for p in t.get("providers",[]) if p in provs)
+                trailer = ""
+                if t.get("trailer"): trailer = f'<a href="{t["trailer"]}" target="_blank" style="font-size:1.5em">▶️ Trailer</a>'
+                self._html(f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>Random Pick</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>body{{font-family:sans-serif;background:#1a1a2e;color:#eee;display:flex;justify-content:center;padding:30px;text-align:center}}
+.card{{background:#16213e;padding:30px;border-radius:16px;max-width:500px}}a{{color:#4fc3f7}}
+button{{padding:10px 24px;background:#4fc3f7;border:none;border-radius:8px;cursor:pointer;font-size:1em;margin:6px}}</style></head>
+<body><div class="card">{poster}<h2>{t.get("title","?")} ({t.get("year","")})</h2>
+<p style="font-size:1.2em">{stream}</p><p style="color:#aaa">{t.get("overview","")[:250]}</p>
+<p>IMDB: {t.get("imdb_rating","-")} | TMDB: {t.get("tmdb_rating","-")}</p>{trailer}
+<div style="margin-top:15px"><a href="{BASE}/random/{u}"><button>🎲 Another</button></a>
+<a href="{BASE}/u/{u}"><button style="background:#16213e;border:1px solid #4fc3f7;color:#4fc3f7">← Back</button></a></div></div></body></html>""")
+            else:
+                self._html(f'<html><body style="background:#1a1a2e;color:#eee;padding:40px;font-family:sans-serif"><h2>No unwatched titles on your services</h2><a href="{BASE}/" style="color:#4fc3f7">Back</a></body></html>')
+            return
+        elif p.startswith("/compare/"):
+            # /compare/user1/user2
+            if len(parts) >= 3:
+                u1, u2 = parts[-2], parts[-1]
+                self._html(render_compare(u1, u2))
+            else:
+                users = list_users()
+                links = "".join(f'<a href="{BASE}/compare/{users[i]}/{users[j]}" style="display:inline-block;margin:5px;padding:8px 16px;background:#16213e;border-radius:6px;color:#4fc3f7;text-decoration:none">{users[i]} vs {users[j]}</a>' for i in range(len(users)) for j in range(i+1, len(users)))
+                self._html(f'<html><head><meta charset="utf-8"><style>body{{font-family:sans-serif;background:#1a1a2e;color:#eee;padding:40px;text-align:center}}</style></head><body><h2>Compare Users</h2>{links or "Need 2+ users"}<br><br><a href="{BASE}/" style="color:#4fc3f7">Back</a></body></html>')
+            return
         elif p.startswith("/stats/"):
             u = parts[-1]
             self._html(render_stats(u))
@@ -1328,6 +1443,9 @@ th,td{{padding:6px 10px;text-align:left;border-bottom:1px solid #333}}th{{backgr
                         if yt: trailer = f'<iframe width="560" height="315" src="https://www.youtube.com/embed/{yt["key"]}" frameborder="0" allowfullscreen style="border-radius:8px;margin-top:15px"></iframe>'
                 poster = f'<img src="{t["poster"]}" style="border-radius:8px;max-height:400px">' if t.get("poster") else ""
                 self._html(f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>Tonight</title>
+<meta property="og:title" content="🎬 Tonight: {t.get('title','?')}">
+<meta property="og:description" content="{t.get('overview','')[:150]}">
+<meta property="og:image" content="{t.get('poster','')}">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style>body{{font-family:-apple-system,sans-serif;background:#1a1a2e;color:#eee;display:flex;justify-content:center;padding:30px;text-align:center}}
 .card{{background:#16213e;padding:30px;border-radius:16px;max-width:600px}}a{{color:#4fc3f7;text-decoration:none}}
@@ -1518,6 +1636,24 @@ button{{padding:10px 20px;background:#4fc3f7;border:none;border-radius:6px;curso
     def log_message(self, *a): pass
 
 # ── Main ──────────────────────────────────────────────────────────────
+def _scheduler():
+    """Background scheduler: enrichment at 3am, catalog refresh weekly."""
+    import datetime
+    last_enrich = last_catalog = None
+    while True:
+        now = datetime.datetime.now()
+        # Daily enrichment at 3am
+        if now.hour == 3 and last_enrich != now.date():
+            print("Scheduled: enrichment")
+            enrich_titles()
+            last_enrich = now.date()
+        # Weekly catalog refresh on Sundays at 4am
+        if now.weekday() == 6 and now.hour == 4 and last_catalog != now.date():
+            print("Scheduled: catalog refresh")
+            fetch_streaming_catalog()
+            last_catalog = now.date()
+        time.sleep(600)  # Check every 10 min
+
 if __name__ == "__main__":
     os.makedirs(DATA_DIR, exist_ok=True)
     if os.path.exists(KEYS_FILE):
@@ -1530,4 +1666,5 @@ if __name__ == "__main__":
     titles = load_titles()
     print(f"CinephileCrossroads — {len(titles)} titles, users: {users}")
     print(f"  TMDB:{'✓' if TMDB_KEY else '✗'} OMDB:{'✓' if OMDB_KEY else '✗'} TVDB:{'✓' if TVDB_KEY else '✗'} Trakt:{'✓' if TRAKT_ID else '✗'} Region:{WATCH_COUNTRY}")
+    threading.Thread(target=_scheduler, daemon=True).start()
     HTTPServer(("0.0.0.0", PORT), H).serve_forever()
