@@ -276,6 +276,11 @@ def tmdb_enrich(imdb_id):
         lu = wp.get("results", {}).get(WATCH_COUNTRY, {})
         result["providers"] = [p["provider_name"] for p in lu.get("flatrate", [])]
         result["watch_link"] = lu.get("link", "")
+    # Trailer
+    vids = api_get(f"https://api.themoviedb.org/3/{kind}/{tmdb_id}/videos?api_key={TMDB_KEY}")
+    if vids:
+        yt = next((v for v in vids.get("results",[]) if v.get("site")=="YouTube" and v.get("type")=="Trailer"), None)
+        if yt: result["trailer"] = f"https://www.youtube.com/watch?v={yt['key']}"
     # Keywords for taste-based recommendations (the "Movie Genome")
     kw = api_get(f"https://api.themoviedb.org/3/{kind}/{tmdb_id}/keywords?api_key={TMDB_KEY}")
     if kw:
@@ -572,6 +577,23 @@ def _load_key(name):
         return json.load(open(KEYS_FILE)).get(name, "")
     return ""
 
+
+# ── Watchlist ─────────────────────────────────────────────────────────
+def load_watchlist(user):
+    f = user_dir(user) + "/watchlist.json"
+    if os.path.exists(f): return json.load(open(f))
+    return []
+
+def save_watchlist(user, wl):
+    json.dump(wl, open(user_dir(user) + "/watchlist.json", "w"))
+
+# ── TasteDive ─────────────────────────────────────────────────────────
+def tastedive_similar(title):
+    """Get similar titles from TasteDive (free, no key)."""
+    q = urllib.parse.quote(title)
+    data = api_get(f"https://tastedive.com/api/similar?q={q}&type=movie&limit=5&info=1")
+    if not data: return []
+    return [{"title": r.get("Name",""), "type": r.get("Type",""), "description": r.get("wTeaser","")} for r in data.get("Similar",{}).get("Results",[])]
 
 # ── Trakt ─────────────────────────────────────────────────────────────
 def trakt_headers(user):
@@ -923,11 +945,14 @@ def render_ratings(user):
         sub_icon = "🗨" if has_subs else ("💬" if has_suggested else ('<a href="' + BASE + '/subs/' + iid + '" title="Find subtitles">🔤</a>' if iid in tmm else ""))
         local = ('💾 ' + local_src + " " + sub_icon) if iid in tmm else ""
         tooltip = f' title="{t.get("overview","")[:200]}"' if t.get("overview") else ""
-        rows += f'<tr data-g="{t.get("genres","")}" data-r="{r["rating"]}" data-s="{" ".join(provs)}"><td>{poster}</td><td><a href="https://www.imdb.com/title/{iid}/" target="_blank"{tooltip}>{t.get("title",iid)}</a></td><td>{t.get("year","")}</td><td style="font-weight:bold;color:{c}">{r["rating"]}</td><td>{imdb}</td><td class="x">{" ".join(scores)}</td><td>{stream}</td><td class="x">{t.get("genres","")}</td><td class="x">{r.get("date","")}</td><td>{local}</td></tr>'
+        rows += f'<tr data-g="{t.get("genres","")}" data-r="{r["rating"]}" data-s="{" ".join(provs)}"><td>{poster}</td><td><a href="https://www.imdb.com/title/{iid}/" target="_blank"{tooltip}>{t.get("title",iid)}</a>{trailer_link}{similar_link}</td><td>{t.get("year","")}</td><td style="font-weight:bold;color:{c}">{r["rating"]}</td><td>{imdb}</td><td class="x">{" ".join(scores)}</td><td>{stream}</td><td class="x">{t.get("genres","")}</td><td class="x">{r.get("date","")}</td><td>{local}</td></tr>'
     jb = active_job()[1]
     job_banner = f'<div id="jb" style="background:#1a3a1a;padding:8px 15px;border-radius:6px;margin-bottom:10px"><span id="jm">⏳ {jb["name"]}: {jb["message"]}</span> <progress id="jp" max="100" value="{jb["progress"]/max(jb["total"],1)*100 if jb else 0}" style="vertical-align:middle"></progress></div><script>setInterval(()=>fetch("{BASE}/jobs").then(r=>r.json()).then(d=>{{let a=Object.values(d).find(j=>j.status=="running");if(a){{document.getElementById("jb").style.display="block";document.getElementById("jm").textContent="⏳ "+a.name+": "+a.message;document.getElementById("jp").value=a.total?a.progress/a.total*100:0}}else{{document.getElementById("jb").style.display="none"}}}}),3000)</script>' if jb else ""
     return f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>{user}'s Ratings ({len(ratings)})</title>
-<style>body{{font-family:-apple-system,sans-serif;margin:20px;background:#1a1a2e;color:#eee}}
+<style>body{{font-family:-apple-system,sans-serif;margin:20px;background:var(--bg,#1a1a2e);color:var(--fg,#eee)}}
+:root{{--bg:#1a1a2e;--fg:#eee;--card:#16213e;--border:#333;--accent:#4fc3f7}}
+.light{{--bg:#f5f5f5;--fg:#222;--card:#fff;--border:#ddd;--accent:#0077cc}}
+@media(max-width:768px){{table{{font-size:.8em}}th,td{{padding:4px 6px}}img{{height:50px!important}}.bar{{flex-direction:column}}.x{{display:none}}}}
 table{{border-collapse:collapse;width:100%}}th,td{{padding:6px 10px;text-align:left;border-bottom:1px solid #333}}
 th{{background:#16213e;position:sticky;top:0;cursor:pointer;white-space:nowrap}}th:hover{{background:#1a3a5e}}
 tr:hover{{background:#16213e}}a{{color:#4fc3f7;text-decoration:none}}img{{border-radius:4px}}.x{{font-size:.8em;color:#aaa}}
@@ -936,20 +961,21 @@ input,select{{padding:6px;border-radius:4px;border:1px solid #444;background:#16
 <script>function f(){{const q=document.getElementById('s').value.toLowerCase(),g=document.getElementById('g').value,mr=document.getElementById('mr').value,st=document.getElementById('st').value;
 document.querySelectorAll('tbody tr').forEach(r=>r.style.display=(r.textContent.toLowerCase().includes(q)&&(!g||r.dataset.g.includes(g))&&(!mr||parseInt(r.dataset.r)>=parseInt(mr))&&(!st||r.dataset.s.includes(st)))?'':'none')}}
 function sortTable(n){{const tb=document.querySelector('tbody'),rows=[...tb.rows],dir=tb.dataset.sort==n?-1:1;tb.dataset.sort=dir==1?n:'';
-rows.sort((a,b)=>{{let x=a.cells[n].textContent,y=b.cells[n].textContent;return(!isNaN(x)&&!isNaN(y)?(x-y):x.localeCompare(y))*dir}});rows.forEach(r=>tb.appendChild(r))}}</script></head><body>
+rows.sort((a,b)=>{{let x=a.cells[n].textContent,y=b.cells[n].textContent;return(!isNaN(x)&&!isNaN(y)?(x-y):x.localeCompare(y))*dir}});rows.forEach(r=>tb.appendChild(r))}}</script><script>if(localStorage.getItem("theme")==="light")document.body.classList.add("light")</script></head><body>
 {job_banner}
 <div style="display:flex;justify-content:space-between;align-items:center"><h2>🎬 {user}'s Ratings — {len(ratings)} titles</h2>{render_user_bar(user)}</div>
 <div class="bar"><input id="s" onkeyup="f()" placeholder="Search..." style="width:220px">
 <select id="g" onchange="f()"><option value="">All genres</option>{genre_opts}</select>
 <select id="mr" onchange="f()"><option value="">Min ★</option>{''.join(f'<option value="{i}">{i}+</option>' for i in range(10,0,-1))}</select>
 <select id="st" onchange="f()"><option value="">All streams</option>{"".join('<option value="' + p + '">' + PROVIDER_ICONS.get(p,"▪") + " " + p + '</option>' for p in sorted(user_provs))}</select>
-<a href="{BASE}/enrich">⚡ Enrich</a> <a href="{BASE}/recs/{user}">🎯 Recs</a> <a href="{BASE}/catalog">📺 Catalog</a> <a href="{BASE}/setup/{user}">⚙</a>
+<a href="{BASE}/tonight/{user}">🎲 Tonight</a> <a href="{BASE}/stats/{user}">📊</a> <a href="{BASE}/export/{user}">⬇</a> <a href="{BASE}/enrich">⚡</a> <a href="{BASE}/recs/{user}">🎯 Recs</a> <a href="{BASE}/catalog">📺 Catalog</a> <a href="{BASE}/setup/{user}">⚙</a>
 {f'<a href="{BASE}/trakt/sync/{user}">↕ Trakt</a>' if has_trakt else ""}
-<span style="color:#666;font-size:.8em">{" ".join(services)}</span></div>
+<button onclick="document.body.classList.toggle('light');localStorage.setItem('theme',document.body.classList.contains('light')?'light':'dark')" style="background:none;border:1px solid #444;border-radius:4px;cursor:pointer;padding:2px 8px;color:var(--fg)">🌓</button> <span style="color:#666;font-size:.8em">{" ".join(services)}</span></div>
 <table><thead><tr><th></th><th onclick="sortTable(1)">Title</th><th onclick="sortTable(2)">Year</th><th onclick="sortTable(3)">★</th><th onclick="sortTable(4)">IMDB</th><th>Scores</th><th>Stream</th><th onclick="sortTable(7)">Genres</th><th onclick="sortTable(8)">Rated</th><th>💾</th></tr></thead>
 <tbody>{rows}</tbody></table></body></html>"""
 
 def render_recs(user):
+    watchlist = set(load_watchlist(user))
     titles = load_titles()
     recs, profile = get_streaming_recs(user, titles, 50)
     top_kw = sorted(profile["keywords"].items(), key=lambda x: x[1], reverse=True)[:15]
@@ -968,14 +994,19 @@ def render_recs(user):
         leaving_html = '<details style="margin-bottom:15px"><summary style="cursor:pointer;color:#d72">' + str(len(leaving)) + ' titles recently left a service</summary><table style="margin-top:8px">' + lrows + '</table></details>'
     rows = ""
     for iid, t, score in recs:
+        wl_icon = '<a href="' + BASE + '/watchlist/rm/' + iid + '" title="Remove from watchlist">❤️</a>' if iid in watchlist else '<a href="' + BASE + '/watchlist/add/' + iid + '" title="Add to watchlist">🤍</a>'
         poster = f'<img src="{t["poster"]}" height="70" loading="lazy">' if t.get("poster") else ""
         provs = " ".join(PROVIDER_ICONS.get(p, "▪") for p in t.get("providers", []) if p in MY_PROVIDERS)
         imdb = f'{t.get("imdb_rating","")}' if t.get("imdb_rating") else ""
         kws = ", ".join(t.get("keywords", [])[:5])
         tooltip = f' title="{t.get("overview","")[:200]}"' if t.get("overview") else ""
-        rows += f'<tr><td>{poster}</td><td><a href="https://www.imdb.com/title/{iid}/" target="_blank"{tooltip}>{t.get("title",iid)}</a></td><td>{t.get("year","")}</td><td>{imdb}</td><td>{provs}</td><td style="color:#2d7;font-weight:bold">{score}</td><td class="x">{kws}</td></tr>'
+        stars = "".join('<a href="' + BASE + '/rate/' + user + '/' + iid + '/' + str(s) + '" style="text-decoration:none;color:gold" title="' + str(s) + '">' + ("★" if s <= 5 else "☆") + '</a>' for s in range(1, 11))
+        rows += f'<tr><td>{poster}</td><td><a href="https://www.imdb.com/title/{iid}/" target="_blank"{tooltip}>{t.get("title",iid)}</a>{trailer_link}{similar_link}</td><td>{t.get("year","")}</td><td>{imdb}</td><td>{provs}</td><td>{wl_icon}</td><td style="color:#2d7;font-weight:bold">{score}</td><td class="x">{kws}</td><td>{stars}</td></tr>'
     return f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>Recommendations for {user}</title>
-<style>body{{font-family:-apple-system,sans-serif;margin:20px;background:#1a1a2e;color:#eee}}
+<style>body{{font-family:-apple-system,sans-serif;margin:20px;background:var(--bg,#1a1a2e);color:var(--fg,#eee)}}
+:root{{--bg:#1a1a2e;--fg:#eee;--card:#16213e;--border:#333;--accent:#4fc3f7}}
+.light{{--bg:#f5f5f5;--fg:#222;--card:#fff;--border:#ddd;--accent:#0077cc}}
+@media(max-width:768px){{table{{font-size:.8em}}th,td{{padding:4px 6px}}img{{height:50px!important}}.bar{{flex-direction:column}}.x{{display:none}}}}
 table{{border-collapse:collapse;width:100%}}th,td{{padding:6px 10px;text-align:left;border-bottom:1px solid #333}}
 th{{background:#16213e;position:sticky;top:0}}tr:hover{{background:#16213e}}a{{color:#4fc3f7;text-decoration:none}}
 img{{border-radius:4px}}.x{{font-size:.8em;color:#aaa}}</style></head><body>
@@ -984,7 +1015,7 @@ img{{border-radius:4px}}.x{{font-size:.8em;color:#aaa}}</style></head><body>
 <details><summary style="cursor:pointer;color:#4fc3f7">Your taste profile</summary>
 <p><b>Top keywords:</b> {taste}</p><p><b>Top genres:</b> {genre_taste}</p></details>
 <br>
-<table><thead><tr><th></th><th>Title</th><th>Year</th><th>IMDB</th><th>Stream</th><th>Match</th><th>Keywords</th></tr></thead>
+<table><thead><tr><th></th><th>Title</th><th>Year</th><th>IMDB</th><th></th><th>Stream</th><th>Match</th><th>Keywords</th><th>Rate</th></tr></thead>
 <tbody>{rows}</tbody></table>
 <p style="margin-top:20px"><a href="{BASE}/">← Back to ratings</a></p></body></html>"""
 
@@ -1107,6 +1138,54 @@ async function syncFromBrowser(){{
 <p>Region: <b>{WATCH_COUNTRY}</b> | <a href="{BASE}/catalog">Browse catalog</a></p>
 </div></body></html>"""
 
+def render_stats(user):
+    titles = load_titles()
+    ratings = load_user_ratings(user)
+    if not ratings: return f'<html><body style="background:#1a1a2e;color:#eee;padding:40px"><h2>No ratings</h2></body></html>'
+    # Compute stats
+    scores = [r["rating"] for r in ratings.values()]
+    avg = sum(scores) / len(scores)
+    genre_count = {}
+    director_count = {}
+    year_count = {}
+    for iid, r in ratings.items():
+        t = titles.get(iid, {})
+        for g in (t.get("genres") or "").split(","):
+            g = g.strip()
+            if g: genre_count[g] = genre_count.get(g, 0) + 1
+        for d in (t.get("directors") or "").split(","):
+            d = d.strip()
+            if d: director_count[d] = director_count.get(d, 0) + 1
+        y = str(t.get("year",""))[:4]
+        if y: year_count[y] = year_count.get(y, 0) + 1
+    top_genres = sorted(genre_count.items(), key=lambda x: x[1], reverse=True)[:12]
+    top_dirs = sorted(director_count.items(), key=lambda x: x[1], reverse=True)[:10]
+    rating_dist = [sum(1 for s in scores if s == i) for i in range(1, 11)]
+    max_bar = max(rating_dist) or 1
+    dist_bars = "".join(f'<div style="display:flex;align-items:center;gap:8px;margin:2px 0"><span style="width:30px;text-align:right">{i}</span><div style="background:#4fc3f7;height:18px;width:{rating_dist[i-1]/max_bar*300}px;border-radius:3px"></div><span style="color:#888;font-size:.85em">{rating_dist[i-1]}</span></div>' for i in range(10, 0, -1))
+    genre_bars = "".join(f'<div style="display:flex;align-items:center;gap:8px;margin:2px 0"><span style="width:100px;text-align:right;font-size:.85em">{g}</span><div style="background:#4fc3f7;height:16px;width:{c/top_genres[0][1]*250}px;border-radius:3px"></div><span style="color:#888;font-size:.85em">{c}</span></div>' for g, c in top_genres)
+    dir_list = "".join(f"<tr><td>{d}</td><td>{c}</td></tr>" for d, c in top_dirs)
+    return f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>{user} Stats</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>body{{font-family:-apple-system,sans-serif;background:#1a1a2e;color:#eee;margin:20px}}
+.grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:20px}}
+.card{{background:#16213e;padding:20px;border-radius:12px}}
+table{{border-collapse:collapse;width:100%}}td{{padding:4px 8px;border-bottom:1px solid #333}}
+a{{color:#4fc3f7;text-decoration:none}}h3{{margin-top:0}}</style></head>
+<body><div style="display:flex;justify-content:space-between;align-items:center">
+<h2>📊 {user}'s Stats</h2><a href="{BASE}/u/{user}">← Ratings</a></div>
+<div style="display:flex;gap:20px;margin-bottom:20px;flex-wrap:wrap">
+<div class="card" style="text-align:center"><div style="font-size:3em">{len(ratings)}</div>titles rated</div>
+<div class="card" style="text-align:center"><div style="font-size:3em">{avg:.1f}</div>average rating</div>
+<div class="card" style="text-align:center"><div style="font-size:3em">{max(scores)}</div>highest</div>
+<div class="card" style="text-align:center"><div style="font-size:3em">{min(scores)}</div>lowest</div>
+</div>
+<div class="grid">
+<div class="card"><h3>Rating Distribution</h3>{dist_bars}</div>
+<div class="card"><h3>Top Genres</h3>{genre_bars}</div>
+<div class="card"><h3>Most-Watched Directors</h3><table>{dir_list}</table></div>
+</div></body></html>"""
+
 def render_catalog():
     if not os.path.exists(CATALOG_FILE):
         return f'<html><body style="background:#1a1a2e;color:#eee;font-family:sans-serif;padding:40px"><h2>No catalog</h2><a href="{BASE}/catalog/fetch" style="color:#4fc3f7">Fetch catalog for {WATCH_COUNTRY}</a></body></html>'
@@ -1127,7 +1206,10 @@ def render_catalog():
         provs = " ".join(PROVIDER_ICONS.get(p, "▪") for p in r.get("providers", []))
         rows += f'<tr><td>{poster}</td><td>{r["title"]}</td><td>{r.get("year","")}</td><td>{r.get("tmdb_rating","")}</td><td>{provs}</td><td>{r["type"]}</td></tr>'
     return f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>Catalog {WATCH_COUNTRY} ({data["count"]})</title>
-<style>body{{font-family:-apple-system,sans-serif;margin:20px;background:#1a1a2e;color:#eee}}
+<style>body{{font-family:-apple-system,sans-serif;margin:20px;background:var(--bg,#1a1a2e);color:var(--fg,#eee)}}
+:root{{--bg:#1a1a2e;--fg:#eee;--card:#16213e;--border:#333;--accent:#4fc3f7}}
+.light{{--bg:#f5f5f5;--fg:#222;--card:#fff;--border:#ddd;--accent:#0077cc}}
+@media(max-width:768px){{table{{font-size:.8em}}th,td{{padding:4px 6px}}img{{height:50px!important}}.bar{{flex-direction:column}}.x{{display:none}}}}
 table{{border-collapse:collapse;width:100%}}th,td{{padding:6px 10px;text-align:left;border-bottom:1px solid #333}}
 th{{background:#16213e;position:sticky;top:0}}tr:hover{{background:#16213e}}img{{border-radius:4px}}
 input{{padding:6px;border-radius:4px;border:1px solid #444;background:#16213e;color:#eee;width:250px}}a{{color:#4fc3f7;text-decoration:none}}</style>
@@ -1210,6 +1292,101 @@ th,td{{padding:6px 10px;text-align:left;border-bottom:1px solid #333}}th{{backgr
                 self._redirect(link)
             else:
                 self._html("<html><body>Download failed</body></html>")
+            return
+        elif p.startswith("/stats/"):
+            u = parts[-1]
+            self._html(render_stats(u))
+            return
+        elif p.startswith("/export/"):
+            u = parts[-1]
+            titles = load_titles()
+            ratings = load_user_ratings(u)
+            csv_out = "Const,Your Rating,Date Rated,Title,Year,Genres,IMDb Rating,Type\n"
+            for iid, r in sorted(ratings.items(), key=lambda x: x[1].get("date",""), reverse=True):
+                t = titles.get(iid, {})
+                csv_out += f'{iid},{r["rating"]},{r.get("date","")},"{t.get("title","")}",{t.get("year","")},"{t.get("genres","")}",{t.get("imdb_rating","")},{t.get("type","")}\n'
+            self.send_response(200)
+            self.send_header("Content-Type", "text/csv")
+            self.send_header("Content-Disposition", f'attachment; filename="{u}_ratings.csv"')
+            self.end_headers()
+            self.wfile.write(csv_out.encode())
+            return
+        elif p.startswith("/tonight/"):
+            u = parts[-1]
+            import random
+            titles = load_titles()
+            recs, _ = get_streaming_recs(u, titles, 20)
+            if recs:
+                iid, t, score = random.choice(recs[:10])
+                provs = " ".join(PROVIDER_ICONS.get(p,"") for p in t.get("providers",[]) if p in get_user_active_providers(u))
+                trailer = ""
+                if t.get("tmdb_id") and TMDB_KEY:
+                    kind = "tv" if t.get("type") == "tv" else "movie"
+                    vids = api_get(f"https://api.themoviedb.org/3/{kind}/{t['tmdb_id']}/videos?api_key={TMDB_KEY}")
+                    if vids:
+                        yt = next((v for v in vids.get("results",[]) if v.get("site")=="YouTube" and v.get("type")=="Trailer"), None)
+                        if yt: trailer = f'<iframe width="560" height="315" src="https://www.youtube.com/embed/{yt["key"]}" frameborder="0" allowfullscreen style="border-radius:8px;margin-top:15px"></iframe>'
+                poster = f'<img src="{t["poster"]}" style="border-radius:8px;max-height:400px">' if t.get("poster") else ""
+                self._html(f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>Tonight</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>body{{font-family:-apple-system,sans-serif;background:#1a1a2e;color:#eee;display:flex;justify-content:center;padding:30px;text-align:center}}
+.card{{background:#16213e;padding:30px;border-radius:16px;max-width:600px}}a{{color:#4fc3f7;text-decoration:none}}
+button{{padding:12px 30px;background:#4fc3f7;border:none;border-radius:8px;cursor:pointer;font-size:1.1em;margin:8px}}</style></head>
+<body><div class="card">
+<h1>🎬 Tonight you should watch...</h1>
+{poster}
+<h2>{t.get("title","?")} ({t.get("year","")})</h2>
+<p style="font-size:1.2em">{provs}</p>
+<p style="color:#aaa">{t.get("overview","")[:300]}</p>
+<p>IMDB: {t.get("imdb_rating","-")} | Match score: {score}</p>
+{trailer}
+<div style="margin-top:20px">
+<a href="{BASE}/tonight/{u}"><button>🎲 Pick another</button></a>
+<a href="{BASE}/recs/{u}"><button style="background:#16213e;border:1px solid #4fc3f7;color:#4fc3f7">See all recs</button></a>
+<a href="{BASE}/u/{u}"><button style="background:#16213e;border:1px solid #4fc3f7;color:#4fc3f7">← Ratings</button></a>
+</div></div></body></html>""")
+            else:
+                self._html(f'<html><body style="background:#1a1a2e;color:#eee;font-family:sans-serif;padding:40px;text-align:center"><h2>No recommendations yet</h2><p>Enrich your titles first</p><a href="{BASE}/" style="color:#4fc3f7">Back</a></body></html>')
+            return
+        elif p.startswith("/watchlist/add/"):
+            u = self._user(parts)
+            iid = parts[-1]
+            wl = load_watchlist(u)
+            if iid not in wl: wl.append(iid)
+            save_watchlist(u, wl)
+            self._redirect(self.headers.get("Referer", f"{BASE}/u/{u}"))
+            return
+        elif p.startswith("/watchlist/rm/"):
+            u = self._user(parts)
+            iid = parts[-1]
+            wl = load_watchlist(u)
+            if iid in wl: wl.remove(iid)
+            save_watchlist(u, wl)
+            self._redirect(self.headers.get("Referer", f"{BASE}/u/{u}"))
+            return
+        elif p.startswith("/similar/"):
+            iid = parts[-1]
+            titles = load_titles()
+            t = titles.get(iid, {})
+            results = tastedive_similar(t.get("title", ""))
+            rows = "".join("<tr><td><b>" + r["title"] + "</b></td><td>" + r.get("description","")[:200] + "</td></tr>" for r in results)
+            self._html(f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>Similar</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>body{{font-family:sans-serif;background:#1a1a2e;color:#eee;margin:20px}}table{{border-collapse:collapse;width:100%}}
+td{{padding:8px;border-bottom:1px solid #333}}a{{color:#4fc3f7}}</style></head>
+<body><h2>Similar to {t.get("title","?")}</h2>
+<table>{rows}</table><p><a href="{BASE}/">← Back</a></p></body></html>""")
+            return
+        elif p.startswith("/rate/"):
+            # Inline rating: /rate/<user>/<imdb_id>/<score>
+            u = parts[-3] if len(parts) >= 3 else self._user(parts)
+            iid = parts[-2]
+            score = int(parts[-1])
+            if 1 <= score <= 10:
+                ratings = load_user_ratings(u)
+                ratings[iid] = {"rating": score, "date": time.strftime("%Y-%m-%d")}
+                save_user_ratings(u, ratings)
+            self._redirect(self.headers.get("Referer", f"{BASE}/u/{u}"))
             return
         elif p.startswith("/media/sync/"):
             u = parts[-1]
