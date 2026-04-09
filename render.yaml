@@ -1,0 +1,8 @@
+services:
+  - type: web
+    name: cinephile-crossroads
+    runtime: docker
+    plan: free
+    envVars:
+      - key: WATCH_COUNTRY
+        value: US

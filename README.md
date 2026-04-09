@@ -4,6 +4,11 @@ A self-hosted, zero-dependency movie & TV ratings dashboard that aggregates data
 
 ![Python](https://img.shields.io/badge/python-3.12-blue) ![Docker](https://img.shields.io/badge/docker-ready-blue) ![License](https://img.shields.io/badge/license-MIT-green) ![Dependencies](https://img.shields.io/badge/dependencies-zero-brightgreen)
 
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/template/new?repo=collaed/CinephileCrossroads) [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/collaed/CinephileCrossroads)
+
+<!-- Add a screenshot: replace this with an actual screenshot URL -->
+<!-- ![Screenshot](https://your-domain.com/screenshot.png) -->
+
 ## Features
 
 ### 📊 Ratings Dashboard
