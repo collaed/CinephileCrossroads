@@ -344,10 +344,19 @@ def fetch_plex_library(url, token):
                     iid = guid["id"].replace("imdb://", "")
             if not iid: continue
             media = item.get("Media", [{}])[0]
+            part = media.get("Part", [{}])[0]
+            streams = part.get("Stream", [])
+            video = next((s for s in streams if s.get("streamType") == 1), {})
+            audio_streams = [s for s in streams if s.get("streamType") == 2]
+            sub_streams = [s for s in streams if s.get("streamType") == 3]
             library[iid] = {
-                "path": (media.get("Part", [{}])[0]).get("file", ""),
+                "path": part.get("file", ""),
                 "quality": media.get("videoResolution", ""),
-                "size": str(media.get("Part", [{}])[0].get("size", "")),
+                "size": str(part.get("size", "")),
+                "video_codec": video.get("codec", media.get("videoCodec", "")),
+                "video_bitrate": media.get("bitrate", ""),
+                "audio": [{"codec": a.get("codec",""), "channels": a.get("channels",""), "language": a.get("language","")} for a in audio_streams],
+                "subtitles": [{"language": s.get("language",""), "codec": s.get("codec",""), "forced": s.get("forced",False)} for s in sub_streams],
                 "source": "plex",
             }
     return library
@@ -370,10 +379,17 @@ def fetch_jellyfin_library(url, token, user_id=""):
         sources = item.get("MediaSources", [{}])
         path = sources[0].get("Path", "") if sources else ""
         size = str(sources[0].get("Size", "")) if sources else ""
+        streams = sources[0].get("MediaStreams", []) if sources else []
+        video = next((s for s in streams if s.get("Type") == "Video"), {})
+        audio_list = [s for s in streams if s.get("Type") == "Audio"]
+        sub_list = [s for s in streams if s.get("Type") == "Subtitle"]
         library[iid] = {
-            "path": path,
-            "quality": item.get("Width", ""),
-            "size": size,
+            "path": path, "size": size,
+            "quality": str(video.get("Height", item.get("Width", ""))),
+            "video_codec": video.get("Codec", ""),
+            "video_bitrate": video.get("BitRate", ""),
+            "audio": [{"codec": a.get("Codec",""), "channels": a.get("Channels",""), "language": a.get("Language","")} for a in audio_list],
+            "subtitles": [{"language": s.get("Language",""), "codec": s.get("Codec",""), "forced": s.get("IsForced",False)} for s in sub_list],
             "source": "jellyfin",
         }
     return library
@@ -393,10 +409,16 @@ def fetch_kodi_library(url):
         for m in data.get("result", {}).get("movies", []):
             iid = m.get("imdbnumber", "")
             if iid and iid.startswith("tt"):
-                vstreams = m.get("streamdetails", {}).get("video", [{}])
+                sd = m.get("streamdetails", {})
+                vstreams = sd.get("video", [{}])
+                astreams = sd.get("audio", [])
+                sstreams = sd.get("subtitle", [])
                 library[iid] = {
                     "path": m.get("file", ""),
                     "quality": str(vstreams[0].get("height", "")) if vstreams else "",
+                    "video_codec": vstreams[0].get("codec", "") if vstreams else "",
+                    "audio": [{"codec": a.get("codec",""), "channels": a.get("channels",""), "language": a.get("language","")} for a in astreams],
+                    "subtitles": [{"language": s.get("language","")} for s in sstreams],
                     "source": "kodi",
                 }
     # TV Shows
@@ -506,6 +528,49 @@ def sync_media_servers(user):
             print(f"  {server_type} error: {e}")
     save_user_tmm(user, library)
     return library
+
+
+# ── OpenSubtitles ─────────────────────────────────────────────────────
+OPENSUBS_API = "https://api.opensubtitles.com/api/v1"
+
+def opensubs_search(imdb_id, languages=None):
+    """Search OpenSubtitles for subtitles matching an IMDB ID.
+    Returns list of {language, release, download_count, rating, file_id, hash_match}."""
+    api_key = _load_key("opensubs")
+    if not api_key: return []
+    params = f"imdb_id={imdb_id.replace('tt','')}"
+    if languages: params += "&languages=" + ",".join(languages)
+    data = api_get(f"{OPENSUBS_API}/subtitles?{params}",
+                   {"Api-Key": api_key, "User-Agent": "CinephileCrossroads v1.0"})
+    if not data: return []
+    results = []
+    for s in data.get("data", []):
+        attr = s.get("attributes", {})
+        results.append({
+            "language": attr.get("language", ""),
+            "release": attr.get("release", ""),
+            "download_count": attr.get("download_count", 0),
+            "rating": attr.get("ratings", 0),
+            "hearing_impaired": attr.get("hearing_impaired", False),
+            "file_id": (attr.get("files", [{}])[0]).get("file_id", ""),
+            "hash_match": attr.get("moviehash_match", False),
+        })
+    results.sort(key=lambda x: (x["hash_match"], x["download_count"]), reverse=True)
+    return results
+
+def opensubs_download_link(file_id):
+    """Get download link for a subtitle file."""
+    api_key = _load_key("opensubs")
+    if not api_key: return None
+    data = api_post(f"{OPENSUBS_API}/download", {"file_id": file_id},
+                    {"Api-Key": api_key, "User-Agent": "CinephileCrossroads v1.0"})
+    if data: return data.get("link")
+    return None
+
+def _load_key(name):
+    if os.path.exists(KEYS_FILE):
+        return json.load(open(KEYS_FILE)).get(name, "")
+    return ""
 
 
 # ── Trakt ─────────────────────────────────────────────────────────────
@@ -702,10 +767,13 @@ def fetch_streaming_catalog(jid=None):
             if detail and detail.get("imdb_id"):
                 iid = detail["imdb_id"]
                 if iid not in titles:
+                    # Also fetch genres
+                    info = api_get(f"https://api.themoviedb.org/3/{kind}/{tmdb_id}?api_key={TMDB_KEY}")
+                    genres = ", ".join(g["name"] for g in (info or {}).get("genres", []))
                     titles[iid] = {"title": c["title"], "year": c.get("year"), "type": kind,
                         "tmdb_id": tmdb_id, "tmdb_rating": c.get("tmdb_rating"),
-                        "poster": c.get("poster"), "overview": c.get("overview"),
-                        "providers": c.get("providers", [])}
+                        "poster": c.get("poster"), "overview": c.get("overview", ""),
+                        "providers": c.get("providers", []), "genres": genres}
                     added += 1
                     if jid and added % 20 == 0:
                         job_progress(jid, added, len(merged), f"Seeding titles ({added})")
@@ -817,7 +885,9 @@ def render_ratings(user):
             stream = f'<a href="{link}" target="_blank" title="{", ".join(mine)}">{icons}</a>' if link else f'<span title="{", ".join(mine)}">{icons}</span>'
         local_info = tmm.get(iid, {})
         local_src = local_info.get("source", "tmm") if local_info else ""
-        local = ('💾 ' + local_src) if iid in tmm else ""
+        has_subs = bool(local_info.get("subtitles")) if local_info else False
+        sub_icon = "🗨" if has_subs else ('<a href="' + BASE + '/subs/' + iid + '" title="Find subtitles">🔤</a>' if iid in tmm else "")
+        local = ('💾 ' + local_src + " " + sub_icon) if iid in tmm else ""
         tooltip = f' title="{t.get("overview","")[:200]}"' if t.get("overview") else ""
         rows += f'<tr data-g="{t.get("genres","")}" data-r="{r["rating"]}" data-s="{" ".join(provs)}"><td>{poster}</td><td><a href="https://www.imdb.com/title/{iid}/" target="_blank"{tooltip}>{t.get("title",iid)}</a></td><td>{t.get("year","")}</td><td style="font-weight:bold;color:{c}">{r["rating"]}</td><td>{imdb}</td><td class="x">{" ".join(scores)}</td><td>{stream}</td><td class="x">{t.get("genres","")}</td><td class="x">{r.get("date","")}</td><td>{local}</td></tr>'
     jb = active_job()[1]
@@ -904,6 +974,7 @@ hr{{border-color:#333;margin:20px 0}}</style></head>
 <label>TMDB</label><input name="tmdb" value="{TMDB_KEY}">
 <label>OMDB</label><input name="omdb" value="{OMDB_KEY}">
 <label>TVDB</label><input name="tvdb" value="{TVDB_KEY}">
+<label>OpenSubtitles (<a href="https://www.opensubtitles.com/consumers" target="_blank">get key</a>)</label><input name="opensubs" placeholder="OpenSubtitles API key">
 <button type="submit">Save</button></form><hr>
 <h3>Trakt</h3>
 {'<span style="color:#2d7">✓ Connected</span> <a href="'+BASE+'/trakt/auth/'+user+'">(reconnect)</a>' if has_trakt else f'<a href="{BASE}/trakt/auth/{user}"><button>Connect Trakt</button></a>' if TRAKT_ID else ''}<hr>
@@ -1069,6 +1140,34 @@ class H(BaseHTTPRequestHandler):
             u = parts[-1]
             if not active_job()[1]: start_job("trakt_sync", _bg_trakt_sync, u)
             self._redirect(f"{BASE}/")
+        elif p.startswith("/subs/"):
+            imdb_id = parts[-1]
+            langs = qs.get("lang", ["en"])
+            subs = opensubs_search(imdb_id, langs)
+            titles = load_titles()
+            t = titles.get(imdb_id, {})
+            rows = ""
+            for s in subs[:20]:
+                badge = '<span style="color:#2d7">★ hash match</span>' if s["hash_match"] else ""
+                hi = "🦻" if s["hearing_impaired"] else ""
+                dl = f'<a href="{BASE}/subs/dl/{s["file_id"]}">⬇</a>' if s["file_id"] else ""
+                rows += "<tr><td>" + s["language"] + "</td><td>" + s["release"][:60] + "</td><td>" + str(s["download_count"]) + "</td><td>" + str(s["rating"]) + "</td><td>" + badge + " " + hi + "</td><td>" + dl + "</td></tr>"
+            self._html(f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>Subtitles</title>
+<style>body{{font-family:sans-serif;background:#1a1a2e;color:#eee;margin:20px}}table{{border-collapse:collapse;width:100%}}
+th,td{{padding:6px 10px;text-align:left;border-bottom:1px solid #333}}th{{background:#16213e}}a{{color:#4fc3f7}}</style></head>
+<body><h2>Subtitles for {t.get("title", imdb_id)}</h2>
+<table><thead><tr><th>Lang</th><th>Release</th><th>Downloads</th><th>Rating</th><th>Match</th><th></th></tr></thead>
+<tbody>{rows}</tbody></table>
+<p><a href="{BASE}/">← Back</a></p></body></html>""")
+            return
+        elif p.startswith("/subs/dl/"):
+            file_id = int(parts[-1])
+            link = opensubs_download_link(file_id)
+            if link:
+                self._redirect(link)
+            else:
+                self._html("<html><body>Download failed</body></html>")
+            return
         elif p.startswith("/media/sync/"):
             u = parts[-1]
             if not active_job()[1]:
@@ -1173,7 +1272,7 @@ button{{padding:10px 20px;background:#4fc3f7;border:none;border-radius:6px;curso
             return
         elif self.path.startswith("/keys"):
             params = urllib.parse.parse_qs(body.decode())
-            keys = {k: params.get(k, [""])[0] for k in ("tmdb", "omdb", "tvdb")}
+            keys = {k: params.get(k, [""])[0] for k in ("tmdb", "omdb", "tvdb", "opensubs")}
             json.dump(keys, open(KEYS_FILE, "w"))
             global TMDB_KEY, OMDB_KEY, TVDB_KEY
             TMDB_KEY, OMDB_KEY, TVDB_KEY = keys["tmdb"], keys["omdb"], keys["tvdb"]
