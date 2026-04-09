@@ -39,6 +39,7 @@ MY_PROVIDERS = {"Netflix", "Amazon Prime Video", "Disney Plus", "Max"}  # User's
 DATA_DIR = "/data"
 TITLES_FILE = f"{DATA_DIR}/titles.json"
 CATALOG_FILE = f"{DATA_DIR}/catalog.json"
+CATALOG_PREV = f"{DATA_DIR}/catalog_prev.json"
 KEYS_FILE = f"{DATA_DIR}/api_keys.json"
 PORT = 8000
 BASE = "/imdb"
@@ -407,7 +408,7 @@ def enrich_titles(jid=None):
     save_titles(titles)
     print(f"Enriched {count} titles")
 
-def fetch_streaming_catalog():
+def fetch_streaming_catalog(jid=None):
     """Fetch full streaming catalog for WATCH_COUNTRY from TMDB discover API.
     Seeds the shared title store with unrated titles for recommendations."""
     if not TMDB_KEY: return
@@ -425,6 +426,7 @@ def fetch_streaming_catalog():
                         "poster": f"https://image.tmdb.org/t/p/w185{r['poster_path']}" if r.get("poster_path") else "",
                         "overview": r.get("overview", "")[:200], "provider": pname})
                 if page >= data.get("total_pages", 1): break
+                if jid: job_progress(jid, len(catalog), 0, f"{pname} {kind} page {page}")
                 page += 1; time.sleep(0.15)
     merged = {}
     for c in catalog:
@@ -433,9 +435,14 @@ def fetch_streaming_catalog():
             if c["provider"] not in merged[key]["providers"]: merged[key]["providers"].append(c["provider"])
         else: c["providers"] = [c["provider"]]; del c["provider"]; merged[key] = c
     result = sorted(merged.values(), key=lambda x: x.get("tmdb_rating", 0), reverse=True)
+    # Save previous catalog for "leaving soon" detection
+    if os.path.exists(CATALOG_FILE):
+        import shutil
+        shutil.copy(CATALOG_FILE, CATALOG_PREV)
     json.dump({"updated": time.strftime("%Y-%m-%d %H:%M"), "count": len(result), "catalog": result}, open(CATALOG_FILE, "w"))
     print(f"Catalog: {len(result)} titles")
     # Seed title store with catalog entries for recommendations
+    if jid: job_progress(jid, 0, len(merged), "Seeding title store...")
     titles = load_titles()
     added = 0
     for c in result:
@@ -452,6 +459,8 @@ def fetch_streaming_catalog():
                         "poster": c.get("poster"), "overview": c.get("overview"),
                         "providers": c.get("providers", [])}
                     added += 1
+                    if jid and added % 20 == 0:
+                        job_progress(jid, added, len(merged), f"Seeding titles ({added})")
                 elif not titles[iid].get("providers"):
                     titles[iid]["providers"] = c.get("providers", [])
             time.sleep(0.1)
@@ -459,8 +468,34 @@ def fetch_streaming_catalog():
     print(f"Seeded {added} new titles from catalog")
 
 # ── Background job wrappers ───────────────────────────────────────────
+def get_leaving_titles():
+    """Compare current vs previous catalog to find titles that disappeared from a provider."""
+    if not os.path.exists(CATALOG_PREV) or not os.path.exists(CATALOG_FILE):
+        return []
+    prev = json.load(open(CATALOG_PREV))
+    curr = json.load(open(CATALOG_FILE))
+    # Build provider sets: {tmdb_id: set(providers)}
+    prev_map = {}
+    for c in prev.get("catalog", []):
+        prev_map[c["tmdb_id"]] = set(c.get("providers", []))
+    curr_map = {}
+    for c in curr.get("catalog", []):
+        curr_map[c["tmdb_id"]] = set(c.get("providers", []))
+    leaving = []
+    for tid, prev_provs in prev_map.items():
+        curr_provs = curr_map.get(tid, set())
+        lost = prev_provs - curr_provs
+        if lost:
+            # Find title info
+            info = next((c for c in prev.get("catalog", []) if c["tmdb_id"] == tid), {})
+            leaving.append({"title": info.get("title", "?"), "year": info.get("year", ""),
+                           "lost_from": list(lost), "still_on": list(curr_provs),
+                           "poster": info.get("poster", "")})
+    return leaving
+
+
 def _bg_enrich(jid): enrich_titles(jid)
-def _bg_catalog(jid): job_progress(jid, 0, 1, "Fetching..."); fetch_streaming_catalog()
+def _bg_catalog(jid): fetch_streaming_catalog(jid)
 def _bg_trakt_sync(jid, user):
     titles = load_titles(); ratings = load_user_ratings(user)
     job_progress(jid, 0, 3, "Pushing to Trakt...")
@@ -503,6 +538,16 @@ def render_ratings(user):
     if TMDB_KEY: services.append("TMDB✓")
     if OMDB_KEY: services.append("OMDB✓")
     if TVDB_KEY: services.append("TVDB✓")
+    leaving = get_leaving_titles()
+    leaving_html = ""
+    if leaving:
+        lrows = ""
+        for l in leaving[:20]:
+            poster = '<img src="' + l.get("poster","") + '" height=40>' if l.get("poster") else ""
+            lost = ", ".join(l["lost_from"])
+            still = ", ".join(l["still_on"]) or "nowhere"
+            lrows += "<tr><td>" + poster + "</td><td>" + l["title"] + " (" + l["year"] + ")</td><td>Left: " + lost + "</td><td>Still on: " + still + "</td></tr>"
+        leaving_html = '<details style="margin-bottom:15px"><summary style="cursor:pointer;color:#d72">' + str(len(leaving)) + ' titles recently left a service</summary><table style="margin-top:8px">' + lrows + '</table></details>'
     rows = ""
     sorted_ratings = sorted(ratings.items(), key=lambda x: x[1].get("date", ""), reverse=True)
     for iid, r in sorted_ratings:
@@ -556,6 +601,16 @@ def render_recs(user):
     top_g = sorted(profile["genres"].items(), key=lambda x: x[1], reverse=True)[:8]
     taste = " ".join(f'<span style="background:#16213e;padding:2px 8px;border-radius:10px;font-size:.8em">{k} ({v:.1f})</span>' for k, v in top_kw)
     genre_taste = " ".join(f'<span style="background:#1a3a5e;padding:2px 8px;border-radius:10px;font-size:.8em">{k} ({v:.1f})</span>' for k, v in top_g)
+    leaving = get_leaving_titles()
+    leaving_html = ""
+    if leaving:
+        lrows = ""
+        for l in leaving[:20]:
+            poster = '<img src="' + l.get("poster","") + '" height=40>' if l.get("poster") else ""
+            lost = ", ".join(l["lost_from"])
+            still = ", ".join(l["still_on"]) or "nowhere"
+            lrows += "<tr><td>" + poster + "</td><td>" + l["title"] + " (" + l["year"] + ")</td><td>Left: " + lost + "</td><td>Still on: " + still + "</td></tr>"
+        leaving_html = '<details style="margin-bottom:15px"><summary style="cursor:pointer;color:#d72">' + str(len(leaving)) + ' titles recently left a service</summary><table style="margin-top:8px">' + lrows + '</table></details>'
     rows = ""
     for iid, t, score in recs:
         poster = f'<img src="{t["poster"]}" height="70" loading="lazy">' if t.get("poster") else ""
@@ -612,6 +667,16 @@ def render_catalog():
     if not os.path.exists(CATALOG_FILE):
         return f'<html><body style="background:#1a1a2e;color:#eee;font-family:sans-serif;padding:40px"><h2>No catalog</h2><a href="{BASE}/catalog/fetch" style="color:#4fc3f7">Fetch catalog for {WATCH_COUNTRY}</a></body></html>'
     data = json.load(open(CATALOG_FILE))
+    leaving = get_leaving_titles()
+    leaving_html = ""
+    if leaving:
+        lrows = ""
+        for l in leaving[:20]:
+            poster = '<img src="' + l.get("poster","") + '" height=40>' if l.get("poster") else ""
+            lost = ", ".join(l["lost_from"])
+            still = ", ".join(l["still_on"]) or "nowhere"
+            lrows += "<tr><td>" + poster + "</td><td>" + l["title"] + " (" + l["year"] + ")</td><td>Left: " + lost + "</td><td>Still on: " + still + "</td></tr>"
+        leaving_html = '<details style="margin-bottom:15px"><summary style="cursor:pointer;color:#d72">' + str(len(leaving)) + ' titles recently left a service</summary><table style="margin-top:8px">' + lrows + '</table></details>'
     rows = ""
     for r in data["catalog"]:
         poster = f'<img src="{r["poster"]}" height="60" loading="lazy">' if r.get("poster") else ""
@@ -626,7 +691,7 @@ input{{padding:6px;border-radius:4px;border:1px solid #444;background:#16213e;co
 </head><body><h2>📺 Streaming Catalog — {WATCH_COUNTRY} — {data["count"]} titles</h2>
 <div style="margin-bottom:15px;display:flex;gap:12px"><input id="s" onkeyup="f()" placeholder="Search...">
 <a href="{BASE}/catalog/fetch">↻ Refresh</a> <a href="{BASE}/">← Ratings</a></div>
-<table><thead><tr><th></th><th>Title</th><th>Year</th><th>TMDB</th><th>On</th><th>Type</th></tr></thead>
+{leaving_html}<table><thead><tr><th></th><th>Title</th><th>Year</th><th>TMDB</th><th>On</th><th>Type</th></tr></thead>
 <tbody>{rows}</tbody></table></body></html>"""
 
 # ── HTTP Server ───────────────────────────────────────────────────────
