@@ -35,7 +35,7 @@ TRAKT_ID = os.environ.get("TRAKT_ID", "")
 TRAKT_SECRET = os.environ.get("TRAKT_SECRET", "")
 TRAKT_REDIRECT = os.environ.get("TRAKT_REDIRECT", "https://your-domain.com/trakt/callback")
 WATCH_COUNTRY = os.environ.get("WATCH_COUNTRY", "LU")  # ISO 3166-1 for streaming availability
-MY_PROVIDERS = {"Netflix", "Amazon Prime Video", "Disney Plus", "Max"}  # User's subscriptions
+DEFAULT_PROVIDERS = {"Netflix", "Amazon Prime Video", "Disney Plus", "Max"}  # Defaults for new users  # User's subscriptions
 DATA_DIR = "/data"
 TITLES_FILE = f"{DATA_DIR}/titles.json"
 CATALOG_FILE = f"{DATA_DIR}/catalog.json"
@@ -133,6 +133,19 @@ def list_users():
     if os.path.exists(d): return [u for u in os.listdir(d) if os.path.isdir(f"{d}/{u}")]
     return []
 
+def _render_provider_config(user):
+    all_provs = get_all_providers()
+    active = get_user_active_providers(user)
+    if not all_provs:
+        return '<p style="color:#888">Add a TMDB API key to see available providers</p>'
+    checks = ""
+    for p in all_provs:
+        name = p["name"]
+        checked = "checked" if name in active else ""
+        icon = PROVIDER_ICONS.get(name, "")
+        checks += '<label style="display:inline-block;margin:3px 8px;cursor:pointer"><input type="checkbox" name="prov" value="' + name + '" ' + checked + '> ' + icon + ' ' + name + '</label>'
+    return '<form method="POST" action="' + BASE + '/providers/' + user + '"><div style="max-height:200px;overflow-y:auto;background:#1a1a2e;padding:8px;border-radius:6px">' + checks + '</div><button type="submit" style="margin-top:8px;padding:6px 16px;background:#4fc3f7;border:none;border-radius:6px;cursor:pointer">Save subscriptions</button></form>'
+
 def _render_media_servers(user):
     config = load_user_media_config(user)
     html = ""
@@ -173,6 +186,40 @@ def load_user_tmm(user):
     f = f"{user_dir(user)}/tmm_library.json"
     if os.path.exists(f): return json.load(open(f))
     return {}
+
+def load_user_providers(user):
+    """Load user's streaming subscriptions. Returns {name: bool}."""
+    f = user_dir(user) + "/providers.json"
+    if os.path.exists(f): return json.load(open(f))
+    return None
+
+def save_user_providers(user, providers):
+    json.dump(providers, open(user_dir(user) + "/providers.json", "w"))
+
+def get_user_active_providers(user):
+    """Get set of provider names the user subscribes to."""
+    p = load_user_providers(user)
+    if p is None: return DEFAULT_PROVIDERS
+    return {k for k, v in p.items() if v}
+
+def get_all_providers():
+    """Get all available providers for WATCH_COUNTRY from TMDB."""
+    if not TMDB_KEY: return []
+    cached = DATA_DIR + "/providers_cache.json"
+    if os.path.exists(cached):
+        c = json.load(open(cached))
+        if time.time() - c.get("ts", 0) < 86400:
+            return c["providers"]
+    providers = []
+    for kind in ("movie", "tv"):
+        data = api_get(f"https://api.themoviedb.org/3/watch/providers/{kind}?api_key={TMDB_KEY}&watch_region={WATCH_COUNTRY}")
+        if data:
+            for p in data.get("results", []):
+                if p["provider_name"] not in [x["name"] for x in providers]:
+                    providers.append({"name": p["provider_name"], "id": p["provider_id"]})
+    providers.sort(key=lambda x: x["name"])
+    json.dump({"ts": time.time(), "providers": providers}, open(cached, "w"))
+    return providers
 
 def save_user_tmm(user, lib):
     json.dump(lib, open(f"{user_dir(user)}/tmm_library.json", "w"))
@@ -557,8 +604,9 @@ def get_recommendations(user, titles, n=50, provider_filter=None):
 
 def get_streaming_recs(user, titles, n=30):
     """Recommendations filtered to user's streaming subscriptions."""
+    """Recommendations filtered to user's streaming subscriptions."""
     """Recommendations filtered to user's streaming services."""
-    return get_recommendations(user, titles, n, provider_filter=MY_PROVIDERS)
+    return get_recommendations(user, titles, n, provider_filter=get_user_active_providers(user))
 
 # ── Enrichment ────────────────────────────────────────────────────────
 def _richness(t):
@@ -731,6 +779,7 @@ def render_ratings(user):
     titles = load_titles(); ratings = load_user_ratings(user)
     if not ratings: return render_setup(user)
     tmm = load_user_tmm(user)
+    user_provs = get_user_active_providers(user)
     genres = sorted(set(g.strip() for iid in ratings for g in titles.get(iid, {}).get("genres", "").split(",") if g.strip()))
     genre_opts = "".join(f'<option value="{g}">{g}</option>' for g in genres)
     has_trakt = load_user_trakt_token(user) is not None
@@ -760,7 +809,7 @@ def render_ratings(user):
         if t.get("metacritic"): scores.append(f'Ⓜ{t["metacritic"]}')
         if t.get("tmdb_rating"): scores.append(f'T{t["tmdb_rating"]}')
         provs = t.get("providers", [])
-        mine = [p for p in provs if p in MY_PROVIDERS]
+        mine = [p for p in provs if p in user_provs]
         stream = ""
         if mine:
             icons = " ".join(PROVIDER_ICONS.get(p, "▪") for p in mine)
@@ -789,7 +838,7 @@ rows.sort((a,b)=>{{let x=a.cells[n].textContent,y=b.cells[n].textContent;return(
 <div class="bar"><input id="s" onkeyup="f()" placeholder="Search..." style="width:220px">
 <select id="g" onchange="f()"><option value="">All genres</option>{genre_opts}</select>
 <select id="mr" onchange="f()"><option value="">Min ★</option>{''.join(f'<option value="{i}">{i}+</option>' for i in range(10,0,-1))}</select>
-<select id="st" onchange="f()"><option value="">All streams</option><option value="Netflix">🟥 Netflix</option><option value="Amazon Prime">📦 Prime</option><option value="Disney">🏰 Disney+</option><option value="Max">🟪 Max</option></select>
+<select id="st" onchange="f()"><option value="">All streams</option>{"".join('<option value="' + p + '">' + PROVIDER_ICONS.get(p,"▪") + " " + p + '</option>' for p in sorted(user_provs))}</select>
 <a href="{BASE}/enrich">⚡ Enrich</a> <a href="{BASE}/recs/{user}">🎯 Recs</a> <a href="{BASE}/catalog">📺 Catalog</a> <a href="{BASE}/setup/{user}">⚙</a>
 {f'<a href="{BASE}/trakt/sync/{user}">↕ Trakt</a>' if has_trakt else ""}
 <span style="color:#666;font-size:.8em">{" ".join(services)}</span></div>
@@ -947,7 +996,9 @@ async function syncFromBrowser(){{
 <h3>Local Library (TMM / file upload)</h3>
 <form method="POST" action="{BASE}/tmm/{user}" enctype="multipart/form-data">
 <input type="file" name="tmm" accept=".csv,.txt"><button type="submit">Upload</button></form><hr>
-<h3>Streaming</h3>
+<h3>My Streaming Services</h3>
+{_render_provider_config(user)}
+<h3>Streaming Region</h3>
 <p>Region: <b>{WATCH_COUNTRY}</b> | <a href="{BASE}/catalog">Browse catalog</a></p>
 </div></body></html>"""
 
@@ -1103,6 +1154,15 @@ button{{padding:10px 20px;background:#4fc3f7;border:none;border-radius:6px;curso
                 }
                 save_user_media_config(user, config)
             self._redirect(f"{BASE}/setup/{user}")
+        elif self.path.startswith("/providers/"):
+            user = parts[-1]
+            params = urllib.parse.parse_qs(body.decode())
+            selected = params.get("prov", [])
+            all_provs = get_all_providers()
+            config = {p["name"]: (p["name"] in selected) for p in all_provs}
+            save_user_providers(user, config)
+            self._redirect(f"{BASE}/setup/{user}")
+            return
         elif self.path.startswith("/api/library/"):
             user = parts[-1]
             data = json.loads(body.decode())
