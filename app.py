@@ -386,11 +386,30 @@ a{{color:#4fc3f7;text-decoration:none}}
 <table><thead><tr><th></th><th>Title</th><th>Year</th><th>TMDB</th><th>On</th><th>Type</th><th>Seen</th></tr></thead>
 <tbody>{rows}</tbody></table></body></html>"""
 
+def _richness(r):
+    """Score how much data a title already has. Lower = needs more work."""
+    score = 0
+    if r.get("poster"): score += 2
+    if r.get("overview") or r.get("plot"): score += 1
+    if r.get("rotten_tomatoes"): score += 1
+    if r.get("metacritic"): score += 1
+    if r.get("tmdb_rating"): score += 1
+    if r.get("providers"): score += 1
+    if r.get("tvdb_id"): score += 1
+    return score
+
 def enrich_all(ratings, jid=None):
-    todo = [r for r in ratings if r.get("id") and not r.get("_enriched")]
+    # Unenriched first, then re-enrich poorest data
+    never = [r for r in ratings if r.get("id") and not r.get("_enriched")]
+    partial = sorted(
+        [r for r in ratings if r.get("id") and r.get("_enriched") and _richness(r) < 5],
+        key=_richness
+    )
+    todo = never + partial
     total = len(todo)
     count = 0
     for r in todo:
+        r.pop("_enriched", None)  # allow re-enrichment
         if TMDB_KEY:
             t = tmdb_enrich(r["id"])
             for k in ("poster", "overview", "tmdb_rating", "providers", "watch_link"):
