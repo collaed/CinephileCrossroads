@@ -578,6 +578,45 @@ def _load_key(name):
     return ""
 
 
+# ── Mood system ──────────────────────────────────────────────────────
+MOOD_MAP = {
+    "light": {"comedy", "feel-good", "family", "romantic comedy", "animation", "friendship", "coming of age", "heartwarming"},
+    "intense": {"thriller", "suspense", "tension", "psychological thriller", "chase", "hostage", "survival", "conspiracy"},
+    "funny": {"comedy", "satire", "parody", "slapstick", "dark comedy", "absurd humor", "stand-up comedy", "farce"},
+    "mind-bending": {"twist ending", "nonlinear timeline", "time travel", "dream", "parallel universe", "simulation", "unreliable narrator", "surrealism", "philosophical"},
+    "dark": {"dark", "dystopia", "serial killer", "noir", "death", "revenge", "violence", "crime", "corruption"},
+    "epic": {"epic", "war", "battle", "kingdom", "empire", "historical", "sword", "medieval", "ancient"},
+    "romantic": {"romance", "love", "love triangle", "wedding", "relationship", "heartbreak", "passion"},
+    "scary": {"horror", "ghost", "haunted", "zombie", "supernatural", "slasher", "monster", "demon", "paranormal"},
+    "inspiring": {"biography", "based on true story", "underdog", "overcoming", "sports", "triumph", "motivation", "dream"},
+}
+
+def mood_filter(titles, mood, user_ratings):
+    """Filter unrated titles matching a mood via keyword overlap."""
+    mood_kws = MOOD_MAP.get(mood, set())
+    mood_genres = {mood.capitalize()} if mood in ("romantic", "scary", "funny") else set()
+    results = []
+    for iid, t in titles.items():
+        if iid in user_ratings: continue
+        kws = set(t.get("keywords", []))
+        genres = set(g.strip().lower() for g in (t.get("genres") or "").split(","))
+        overlap = len(kws & mood_kws) + len(genres & mood_genres) * 0.5
+        if overlap > 0:
+            results.append((iid, t, overlap))
+    results.sort(key=lambda x: (-x[2], -(x[1].get("tmdb_rating") or 0)))
+    return results
+
+# ── Seasonal recommendations ──────────────────────────────────────────
+def seasonal_keywords():
+    """Return extra keyword weights based on current month."""
+    import datetime
+    month = datetime.datetime.now().month
+    if month == 12: return {"christmas": 3, "holiday": 2, "snow": 1, "family": 1, "winter": 1, "santa": 2}
+    if month == 10: return {"horror": 3, "halloween": 3, "ghost": 2, "zombie": 2, "haunted": 2, "monster": 1}
+    if month in (6, 7, 8): return {"summer": 2, "beach": 1, "adventure": 1, "road trip": 1, "vacation": 1}
+    if month == 2: return {"romance": 3, "love": 2, "valentine": 2, "relationship": 1}
+    return {}
+
 # ── Watchlist ─────────────────────────────────────────────────────────
 def load_watchlist(user):
     f = user_dir(user) + "/watchlist.json"
@@ -608,6 +647,35 @@ def trakt_auth_url():
 def trakt_exchange_code(code):
     return api_post("https://api.trakt.tv/oauth/token", {"code": code, "client_id": TRAKT_ID,
         "client_secret": TRAKT_SECRET, "redirect_uri": TRAKT_REDIRECT, "grant_type": "authorization_code"})
+
+def trakt_fetch_history(user):
+    """Pull watch history from Trakt — returns [{imdb_id, title, watched_at, type}]."""
+    h = trakt_headers(user)
+    if not h: return []
+    history = []
+    for kind in ["movies", "shows"]:
+        page = 1
+        while page <= 10:
+            data = api_get(f"https://api.trakt.tv/users/me/history/{kind}?page={page}&limit=100", h)
+            if not data or len(data) == 0: break
+            for item in data:
+                obj = item.get("movie") or item.get("show") or {}
+                iid = obj.get("ids", {}).get("imdb", "")
+                if iid:
+                    history.append({"id": iid, "title": obj.get("title", ""),
+                        "watched_at": (item.get("watched_at") or "")[:10],
+                        "type": "movie" if "movie" in item else "show"})
+            page += 1
+            time.sleep(0.3)
+    return history
+
+def save_user_history(user, history):
+    json.dump(history, open(user_dir(user) + "/history.json", "w"))
+
+def load_user_history(user):
+    f = user_dir(user) + "/history.json"
+    if os.path.exists(f): return json.load(open(f))
+    return []
 
 def trakt_fetch_ratings(user):
     """Pull all movie and show ratings from Trakt for a user."""
@@ -654,7 +722,7 @@ def build_taste_profile(user_ratings, titles):
             if g: genre_scores[g] = genre_scores.get(g, 0) + weight
     return {"keywords": keyword_scores, "genres": genre_scores}
 
-def score_title(title, profile):
+def score_title(title, profile, seasonal=None):
     """Score a candidate title against user's taste profile.
     Combines keyword match + genre match, boosted by critical ratings."""
     """Score a title against a taste profile. Higher = better match."""
@@ -669,6 +737,13 @@ def score_title(title, profile):
     # Boost for high IMDB/TMDB ratings
     if title.get("imdb_rating"): score *= (0.5 + title["imdb_rating"] / 20)
     if title.get("tmdb_rating"): score *= (0.5 + title["tmdb_rating"] / 20)
+    # Seasonal boost
+    if seasonal:
+        for kw in title.get("keywords", []):
+            score += seasonal.get(kw, 0)
+        for g in (title.get("genres") or "").split(","):
+            g = g.strip().lower()
+            if g: score += seasonal.get(g, 0) * 0.5
     return round(score, 2)
 
 def get_recommendations(user, titles, n=50, provider_filter=None):
@@ -679,15 +754,16 @@ def get_recommendations(user, titles, n=50, provider_filter=None):
     rated_ids = set(user_ratings.keys())
     profile = build_taste_profile(user_ratings, titles)
     candidates = []
+    seasonal_kw = seasonal_keywords()
     for iid, t in titles.items():
         if iid in rated_ids: continue
         if provider_filter:
             provs = set(t.get("providers", []))
             if not provs & set(provider_filter): continue
-        s = score_title(t, profile)
+        s = score_title(t, profile, seasonal_kw)
         if s > 0: candidates.append((iid, t, s))
     candidates.sort(key=lambda x: x[2], reverse=True)
-    return candidates[:n], profile
+    return candidates[:n], profile, seasonal_kw
 
 def get_streaming_recs(user, titles, n=30):
     """Recommendations filtered to user's streaming subscriptions."""
@@ -865,6 +941,12 @@ def _bg_auto_subs(jid, user):
     job_progress(jid, total, total, f"Done: found subs for {found}/{total}")
 
 
+def _bg_history(jid, user):
+    job_progress(jid, 0, 1, "Fetching Trakt history...")
+    history = trakt_fetch_history(user)
+    save_user_history(user, history)
+    job_progress(jid, 1, 1, f"Saved {len(history)} watch events")
+
 def _bg_enrich(jid): enrich_titles(jid)
 def _bg_catalog(jid): fetch_streaming_catalog(jid)
 def _bg_trakt_sync(jid, user):
@@ -879,6 +961,44 @@ def _bg_trakt_sync(jid, user):
     save_user_ratings(user, ratings); save_titles(titles)
 
 # ── CSV import ────────────────────────────────────────────────────────
+def import_letterboxd(user, text):
+    """Import Letterboxd CSV export (diary.csv or ratings.csv)."""
+    titles_db = load_titles()
+    ratings = load_user_ratings(user)
+    imported = 0
+    for row in csv.DictReader(io.StringIO(text)):
+        name = row.get("Name", row.get("Film", ""))
+        year = row.get("Year", "")
+        rating_str = row.get("Rating", "")
+        date = row.get("Date", row.get("Watched Date", row.get("Date Rated", "")))
+        if not name or not rating_str: continue
+        # Letterboxd uses 0.5-5.0 scale, convert to 1-10
+        try: score = int(float(rating_str) * 2)
+        except: continue
+        if score < 1: continue
+        # Lookup IMDB ID via TMDB search
+        if TMDB_KEY:
+            q = urllib.parse.quote(name)
+            search = api_get(f"https://api.themoviedb.org/3/search/movie?api_key={TMDB_KEY}&query={q}&year={year}")
+            if search and search.get("results"):
+                tmdb_id = search["results"][0]["id"]
+                ext = api_get(f"https://api.themoviedb.org/3/movie/{tmdb_id}/external_ids?api_key={TMDB_KEY}")
+                if ext and ext.get("imdb_id"):
+                    iid = ext["imdb_id"]
+                    if iid not in titles_db:
+                        r = search["results"][0]
+                        titles_db[iid] = {"title": name, "year": year, "tmdb_id": tmdb_id,
+                            "poster": f"https://image.tmdb.org/t/p/w185{r['poster_path']}" if r.get("poster_path") else "",
+                            "overview": r.get("overview", ""), "tmdb_rating": r.get("vote_average")}
+                    if iid not in ratings:
+                        ratings[iid] = {"rating": score, "date": date}
+                        imported += 1
+            time.sleep(0.15)
+    save_titles(titles_db)
+    save_user_ratings(user, ratings)
+    print(f"Letterboxd: imported {imported} ratings for {user}")
+    return imported
+
 def import_csv(user, text):
     """Import IMDB CSV export. Splits data into shared titles + user ratings."""
     titles = load_titles(); ratings = {}
@@ -969,16 +1089,17 @@ rows.sort((a,b)=>{{let x=a.cells[n].textContent,y=b.cells[n].textContent;return(
 <select id="mr" onchange="f()"><option value="">Min ★</option>{''.join(f'<option value="{i}">{i}+</option>' for i in range(10,0,-1))}</select>
 <select id="dec" onchange="f()"><option value="">All decades</option><option value="2020">2020s</option><option value="2010">2010s</option><option value="2000">2000s</option><option value="1990">1990s</option><option value="1980">1980s</option><option value="1970">1970s</option><option value="1960">1960s</option><option value="1950">1950s</option></select>
 <select id="st" onchange="f()"><option value="">All streams</option>{"".join('<option value="' + p + '">' + PROVIDER_ICONS.get(p,"▪") + " " + p + '</option>' for p in sorted(user_provs))}</select>
-<a href="{BASE}/tonight/{user}">🎲 Tonight</a> <a href="{BASE}/stats/{user}">📊</a> <a href="{BASE}/export/{user}">⬇</a> <a href="{BASE}/enrich">⚡</a> <a href="{BASE}/recs/{user}">🎯 Recs</a> <a href="{BASE}/catalog">📺</a> <a href="{BASE}/new">🆕</a> <a href="{BASE}/random/{user}">🎰</a> <a href="{BASE}/compare/">👥</a> <a href="{BASE}/rss/{user}" title="RSS">📡</a> <a href="{BASE}/setup/{user}">⚙</a>
+<a href="{BASE}/tonight/{user}">🎲 Tonight</a> <a href="{BASE}/stats/{user}">📊</a> <a href="{BASE}/export/{user}">⬇</a> <a href="{BASE}/enrich">⚡</a> <a href="{BASE}/recs/{user}">🎯 Recs</a> <a href="{BASE}/catalog">📺</a> <a href="{BASE}/new">🆕</a> <a href="{BASE}/random/{user}">🎰</a> <a href="{BASE}/compare/">👥</a> <a href="{BASE}/rss/{user}" title="RSS">📡</a> <a href="{BASE}/profile/{user}">👤</a> <a href="{BASE}/friendrecs/{user}">👫</a> <a href="{BASE}/history/{user}" title="Sync Trakt history">📅</a> <a href="{BASE}/setup/{user}">⚙</a>
 {f'<a href="{BASE}/trakt/sync/{user}">↕ Trakt</a>' if has_trakt else ""}
 <button onclick="document.body.classList.toggle('light');localStorage.setItem('theme',document.body.classList.contains('light')?'light':'dark')" style="background:none;border:1px solid #444;border-radius:4px;cursor:pointer;padding:2px 8px;color:var(--fg)">🌓</button> <span style="color:#666;font-size:.8em">{" ".join(services)}</span></div>
+<div style="margin-bottom:10px;font-size:1.2em">Mood: <a href="{BASE}/mood/{user}/light" title="Light" style="text-decoration:none">☀️</a><a href="{BASE}/mood/{user}/intense" title="Intense" style="text-decoration:none">🔥</a><a href="{BASE}/mood/{user}/funny" title="Funny" style="text-decoration:none">😂</a><a href="{BASE}/mood/{user}/mind-bending" title="Mind-Bending" style="text-decoration:none">🌀</a><a href="{BASE}/mood/{user}/dark" title="Dark" style="text-decoration:none">🌑</a><a href="{BASE}/mood/{user}/epic" title="Epic" style="text-decoration:none">⚔️</a><a href="{BASE}/mood/{user}/romantic" title="Romantic" style="text-decoration:none">💕</a><a href="{BASE}/mood/{user}/scary" title="Scary" style="text-decoration:none">👻</a><a href="{BASE}/mood/{user}/inspiring" title="Inspiring" style="text-decoration:none">✨</a></div>
 <table><thead><tr><th></th><th onclick="sortTable(1)">Title</th><th onclick="sortTable(2)">Year</th><th onclick="sortTable(3)">★</th><th onclick="sortTable(4)">IMDB</th><th>Scores</th><th>Stream</th><th onclick="sortTable(7)">Genres</th><th onclick="sortTable(8)">Rated</th><th>💾</th></tr></thead>
 <tbody>{rows}</tbody></table></body></html>"""
 
 def render_recs(user):
     watchlist = set(load_watchlist(user))
     titles = load_titles()
-    recs, profile = get_streaming_recs(user, titles, 50)
+    recs, profile, seasonal = get_streaming_recs(user, titles, 50)
     top_kw = sorted(profile["keywords"].items(), key=lambda x: x[1], reverse=True)[:15]
     top_g = sorted(profile["genres"].items(), key=lambda x: x[1], reverse=True)[:8]
     taste = " ".join(f'<span style="background:#16213e;padding:2px 8px;border-radius:10px;font-size:.8em">{k} ({v:.1f})</span>' for k, v in top_kw)
@@ -1012,7 +1133,7 @@ table{{border-collapse:collapse;width:100%}}th,td{{padding:6px 10px;text-align:l
 th{{background:#16213e;position:sticky;top:0}}tr:hover{{background:#16213e}}a{{color:#4fc3f7;text-decoration:none}}
 img{{border-radius:4px}}.x{{font-size:.8em;color:#aaa}}</style></head><body>
 <div style="display:flex;justify-content:space-between;align-items:center"><h2>🎯 Recommendations for {user}</h2>{render_user_bar(user, "recs", False)}</div>
-<p style="color:#888">Based on your taste profile — available on your streaming services in {WATCH_COUNTRY}</p>
+<p style="color:#888">Based on your taste profile{" 🎄 Holiday boost active!" if seasonal.get("christmas") else " 🎃 Spooky season boost!" if seasonal.get("halloween") else " 💕 Romance boost!" if seasonal.get("romance") else ""} — available on your streaming services in {WATCH_COUNTRY}</p>
 <details><summary style="cursor:pointer;color:#4fc3f7">Your taste profile</summary>
 <p><b>Top keywords:</b> {taste}</p><p><b>Top genres:</b> {genre_taste}</p></details>
 <br>
@@ -1130,6 +1251,10 @@ async function syncFromBrowser(){{
 
 {_render_media_servers(user)}
 <hr>
+<h3>Letterboxd Import</h3>
+<p>Export from <a href="https://letterboxd.com/settings/data/" target="_blank">Letterboxd</a> (ratings.csv):</p>
+<form method="POST" action="{BASE}/letterboxd/{user}" enctype="multipart/form-data">
+<input type="file" name="csv" accept=".csv"><button type="submit">Import</button></form><hr>
 <h3>Local Library (TMM / file upload)</h3>
 <form method="POST" action="{BASE}/tmm/{user}" enctype="multipart/form-data">
 <input type="file" name="tmm" accept=".csv,.txt"><button type="submit">Upload</button></form><hr>
@@ -1137,6 +1262,47 @@ async function syncFromBrowser(){{
 {_render_provider_config(user)}
 <h3>Streaming Region</h3>
 <p>Region: <b>{WATCH_COUNTRY}</b> | <a href="{BASE}/catalog">Browse catalog</a></p>
+</div></body></html>"""
+
+def render_public_profile(user):
+    titles = load_titles()
+    ratings = load_user_ratings(user)
+    if not ratings: return '<html><body style="background:#1a1a2e;color:#eee;padding:40px"><h2>No ratings</h2></body></html>'
+    scores = [r["rating"] for r in ratings.values()]
+    avg = sum(scores) / len(scores)
+    # Top rated
+    top = sorted(ratings.items(), key=lambda x: x[1]["rating"], reverse=True)[:10]
+    top_html = ""
+    for iid, r in top:
+        t = titles.get(iid, {})
+        poster = '<img src="' + t.get("poster","") + '" height="80" style="border-radius:6px;margin:4px">' if t.get("poster") else ""
+        top_html += '<div style="text-align:center;width:100px" title="' + t.get("title","") + " " + str(r["rating"]) + '/10">' + poster + '<div style="font-size:.8em">' + str(r["rating"]) + '/10</div></div>'
+    # Genre breakdown
+    genre_count = {}
+    for iid in ratings:
+        for g in (titles.get(iid, {}).get("genres") or "").split(","):
+            g = g.strip()
+            if g: genre_count[g] = genre_count.get(g, 0) + 1
+    top_genres = sorted(genre_count.items(), key=lambda x: x[1], reverse=True)[:8]
+    genre_tags = " ".join('<span style="background:#16213e;padding:3px 10px;border-radius:12px;font-size:.85em">' + g + " (" + str(c) + ")</span>" for g, c in top_genres)
+    # Recent
+    recent = sorted(ratings.items(), key=lambda x: x[1].get("date",""), reverse=True)[:5]
+    recent_html = "".join("<li>" + titles.get(iid, {}).get("title", iid) + " — " + str(r["rating"]) + "/10 (" + r.get("date","") + ")</li>" for iid, r in recent)
+    return f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>{user}'s Profile</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta property="og:title" content="{user}'s Movie Profile">
+<meta property="og:description" content="{len(ratings)} titles rated, avg {avg:.1f}/10">
+<style>body{{font-family:-apple-system,sans-serif;background:#1a1a2e;color:#eee;margin:0;padding:20px}}
+.card{{background:#16213e;padding:20px;border-radius:12px;margin-bottom:15px}}a{{color:#4fc3f7}}</style></head>
+<body><div style="max-width:700px;margin:0 auto">
+<div class="card" style="text-align:center"><h1>{user}</h1>
+<div style="display:flex;justify-content:center;gap:30px;margin:15px 0">
+<div><div style="font-size:2.5em">{len(ratings)}</div>rated</div>
+<div><div style="font-size:2.5em">{avg:.1f}</div>average</div></div>
+<div>{genre_tags}</div></div>
+<div class="card"><h3>Top Rated</h3><div style="display:flex;flex-wrap:wrap;gap:8px;justify-content:center">{top_html}</div></div>
+<div class="card"><h3>Recently Rated</h3><ul>{recent_html}</ul></div>
+<p style="text-align:center"><a href="{BASE}/u/{user}">Full ratings →</a></p>
 </div></body></html>"""
 
 def render_compare(u1, u2):
@@ -1176,6 +1342,38 @@ a{{color:#4fc3f7}}</style></head>
 <div class="card"><h3>🥊 You disagree on</h3><table><tr><th>Title</th><th>{u1}</th><th>{u2}</th><th>Gap</th></tr>{disagree_rows}</table></div>
 </div>
 <p style="margin-top:20px"><a href="{BASE}/">← Back</a></p></body></html>"""
+
+def render_friend_recs(user):
+    """Show titles highly rated by other users that this user hasn't seen."""
+    titles = load_titles()
+    my_ratings = load_user_ratings(user)
+    recs = {}
+    for other in list_users():
+        if other == user: continue
+        other_ratings = load_user_ratings(other)
+        for iid, r in other_ratings.items():
+            if iid in my_ratings: continue
+            if r["rating"] < 8: continue
+            if iid not in recs: recs[iid] = []
+            recs[iid].append({"user": other, "rating": r["rating"]})
+    # Sort by number of friends who liked it, then by avg rating
+    ranked = sorted(recs.items(), key=lambda x: (-len(x[1]), -sum(r["rating"] for r in x[1])/len(x[1])))[:30]
+    rows = ""
+    for iid, friends in ranked:
+        t = titles.get(iid, {})
+        poster = '<img src="' + t.get("poster","") + '" height="60" loading="lazy">' if t.get("poster") else ""
+        who = ", ".join(f["user"] + " " + str(f["rating"]) + "/10" for f in friends)
+        provs = " ".join(PROVIDER_ICONS.get(p,"") for p in t.get("providers",[]))
+        rows += "<tr><td>" + poster + "</td><td>" + t.get("title","") + "</td><td>" + str(t.get("year","")) + "</td><td>" + provs + "</td><td>" + who + "</td></tr>"
+    return f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>Friend Recs</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>body{{font-family:sans-serif;background:#1a1a2e;color:#eee;margin:20px}}table{{border-collapse:collapse;width:100%}}
+th,td{{padding:6px 10px;text-align:left;border-bottom:1px solid #333}}th{{background:#16213e}}img{{border-radius:4px}}a{{color:#4fc3f7}}</style></head>
+<body><h2>👫 Friends recommend for {user}</h2>
+<p style="color:#888">Titles rated 8+ by other users that you haven't seen</p>
+<table><thead><tr><th></th><th>Title</th><th>Year</th><th>Stream</th><th>Recommended by</th></tr></thead>
+<tbody>{rows}</tbody></table>
+<p><a href="{BASE}/u/{user}">← Back</a></p></body></html>"""
 
 def render_stats(user):
     titles = load_titles()
@@ -1408,6 +1606,43 @@ button{{padding:10px 24px;background:#4fc3f7;border:none;border-radius:8px;curso
                 links = "".join(f'<a href="{BASE}/compare/{users[i]}/{users[j]}" style="display:inline-block;margin:5px;padding:8px 16px;background:#16213e;border-radius:6px;color:#4fc3f7;text-decoration:none">{users[i]} vs {users[j]}</a>' for i in range(len(users)) for j in range(i+1, len(users)))
                 self._html(f'<html><head><meta charset="utf-8"><style>body{{font-family:sans-serif;background:#1a1a2e;color:#eee;padding:40px;text-align:center}}</style></head><body><h2>Compare Users</h2>{links or "Need 2+ users"}<br><br><a href="{BASE}/" style="color:#4fc3f7">Back</a></body></html>')
             return
+        elif p.startswith("/profile/"):
+            u = parts[-1]
+            self._html(render_public_profile(u))
+            return
+        elif p.startswith("/history/"):
+            u = parts[-1]
+            if not active_job()[1]:
+                start_job("history", lambda jid: _bg_history(jid, u))
+            self._redirect(f"{BASE}/u/{u}")
+            return
+        elif p.startswith("/mood/"):
+            u = parts[-2] if len(parts) >= 2 else self._user(parts)
+            mood = parts[-1]
+            titles = load_titles()
+            ratings = load_user_ratings(u)
+            provs = get_user_active_providers(u)
+            results = mood_filter(titles, mood, ratings)
+            # Filter to streaming
+            results = [(iid, t, s) for iid, t, s in results if set(t.get("providers",[])) & provs][:30]
+            rows = ""
+            for iid, t, s in results:
+                poster = '<img src="' + t.get("poster","") + '" height="60" loading="lazy">' if t.get("poster") else ""
+                stream = " ".join(PROVIDER_ICONS.get(p,"") for p in t.get("providers",[]) if p in provs)
+                rows += "<tr><td>" + poster + "</td><td>" + t.get("title","") + "</td><td>" + str(t.get("year","")) + "</td><td>" + str(t.get("tmdb_rating","")) + "</td><td>" + stream + "</td></tr>"
+            mood_emoji = {"light":"☀️","intense":"🔥","funny":"😂","mind-bending":"🌀","dark":"🌑","epic":"⚔️","romantic":"💕","scary":"👻","inspiring":"✨"}.get(mood,"🎬")
+            self._html(f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>{mood} picks</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>body{{font-family:sans-serif;background:#1a1a2e;color:#eee;margin:20px}}table{{border-collapse:collapse;width:100%}}
+th,td{{padding:6px 10px;text-align:left;border-bottom:1px solid #333}}th{{background:#16213e}}img{{border-radius:4px}}a{{color:#4fc3f7}}</style></head>
+<body><h2>{mood_emoji} {mood.title()} picks — {len(results)} titles</h2>
+<table><thead><tr><th></th><th>Title</th><th>Year</th><th>TMDB</th><th>Stream</th></tr></thead><tbody>{rows}</tbody></table>
+<p style="margin-top:15px"><a href="{BASE}/u/{u}">← Back</a></p></body></html>""")
+            return
+        elif p.startswith("/friendrecs/"):
+            u = parts[-1]
+            self._html(render_friend_recs(u))
+            return
         elif p.startswith("/stats/"):
             u = parts[-1]
             self._html(render_stats(u))
@@ -1599,6 +1834,18 @@ button{{padding:10px 20px;background:#4fc3f7;border:none;border-radius:6px;curso
             config = {p["name"]: (p["name"] in selected) for p in all_provs}
             save_user_providers(user, config)
             self._redirect(f"{BASE}/setup/{user}")
+            return
+        elif self.path.startswith("/letterboxd/"):
+            user = parts[-1]
+            boundary = self.headers["Content-Type"].split("boundary=")[1].encode()
+            for part in body.split(b"--" + boundary):
+                if b'name="csv"' in part:
+                    csv_data = part.split(b"\r\n\r\n", 1)[1].rsplit(b"\r\n", 1)[0]
+                    if not active_job()[1]:
+                        text = csv_data.decode("utf-8-sig")
+                        start_job("letterboxd", lambda jid: import_letterboxd(user, text))
+                    break
+            self._redirect(f"{BASE}/u/{user}")
             return
         elif self.path.startswith("/api/library/"):
             user = parts[-1]
