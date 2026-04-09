@@ -1,0 +1,21 @@
+services:
+  cinephile:
+    build: .
+    container_name: cinephile
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - IMDB_UR=           # Your IMDB ur ID (e.g. ur1234567)
+      - TMDB_KEY=          # themoviedb.org API key
+      - OMDB_KEY=          # omdbapi.com API key
+      - TVDB_KEY=          # thetvdb.com API key
+      - TRAKT_ID=          # Trakt OAuth client ID
+      - TRAKT_SECRET=      # Trakt OAuth client secret
+      - TRAKT_REDIRECT=https://your-domain.com/trakt/callback
+      - WATCH_COUNTRY=LU   # ISO 3166-1 country code for streaming availability
+    volumes:
+      - data:/data
+
+volumes:
+  data:
