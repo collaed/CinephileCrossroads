@@ -1,29 +1,5 @@
 #!/usr/bin/env python3
-"""
-CinephileCrossroads — Self-hosted multi-user movie & TV ratings dashboard.
-
-Aggregates data from IMDB, TMDB, OMDB, TVDB, and Trakt into a single searchable
-interface with streaming availability and taste-based recommendations.
-
-Architecture:
-    - titles.json: Shared title metadata (posters, scores, keywords, streaming)
-    - users/<name>/ratings.json: Per-user ratings {imdb_id: {rating, date}}
-    - users/<name>/trakt_token.json: Per-user Trakt OAuth tokens
-    - users/<name>/tmm_library.json: Per-user local library (tinyMediaManager)
-    - catalog.json: Full streaming catalog for the configured country
-
-Recommendation engine:
-    1. Builds a weighted taste profile from user's highly-rated titles
-       using TMDB keywords and genres (rating 6+ contributes, weighted by score)
-    2. Scores all unrated titles in the store against the profile
-    3. Filters to titles available on user's streaming services
-    4. Returns top matches sorted by taste score
-
-All heavy operations (enrichment, catalog fetch, Trakt sync) run in background
-threads with progress tracking via /jobs API endpoint.
-
-Zero external Python dependencies — pure stdlib + Docker.
-"""
+"""CinephileCrossroads — Multi-user movie ratings + recommendations."""
 import csv, json, os, io, time, urllib.request, urllib.parse, threading, math
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
@@ -34,8 +10,8 @@ TVDB_KEY = os.environ.get("TVDB_KEY", "")
 TRAKT_ID = os.environ.get("TRAKT_ID", "")
 TRAKT_SECRET = os.environ.get("TRAKT_SECRET", "")
 TRAKT_REDIRECT = os.environ.get("TRAKT_REDIRECT", "https://your-domain.com/trakt/callback")
-WATCH_COUNTRY = os.environ.get("WATCH_COUNTRY", "LU")  # ISO 3166-1 for streaming availability
-MY_PROVIDERS = {"Netflix", "Amazon Prime Video", "Disney Plus", "Max"}  # User's subscriptions
+WATCH_COUNTRY = os.environ.get("WATCH_COUNTRY", "LU")
+MY_PROVIDERS = {"Netflix", "Amazon Prime Video", "Disney Plus", "Max"}
 DATA_DIR = "/data"
 TITLES_FILE = f"{DATA_DIR}/titles.json"
 CATALOG_FILE = f"{DATA_DIR}/catalog.json"
@@ -43,7 +19,7 @@ KEYS_FILE = f"{DATA_DIR}/api_keys.json"
 PORT = 8000
 BASE = "/imdb"
 PROVIDER_ICONS = {"Netflix": "🟥", "Amazon Prime Video": "📦", "Disney Plus": "🏰", "Max": "🟪", "Apple TV Plus": "🍎"}
-LU_PROVIDER_IDS = {"Netflix": 8, "Amazon Prime Video": 119, "Disney Plus": 337}  # TMDB provider IDs per country
+LU_PROVIDER_IDS = {"Netflix": 8, "Amazon Prime Video": 119, "Disney Plus": 337}
 
 # ── Background jobs ───────────────────────────────────────────────────
 _jobs = {}
@@ -94,7 +70,6 @@ def api_post(url, data, headers=None):
 
 # ── Title store (shared across users) ─────────────────────────────────
 def load_titles():
-    """Load shared title metadata. Keyed by IMDB ID (e.g. tt1234567)."""
     if os.path.exists(TITLES_FILE):
         return json.load(open(TITLES_FILE))
     return {}
@@ -104,7 +79,6 @@ def save_titles(titles):
     json.dump(titles, open(TITLES_FILE, "w"))
 
 def get_title(titles, imdb_id):
-    """Get metadata for a single title from the shared store."""
     return titles.get(imdb_id, {})
 
 def set_title(titles, imdb_id, data):
@@ -118,7 +92,6 @@ def user_dir(user):
     return d
 
 def load_user_ratings(user):
-    """Load user ratings. Returns {imdb_id: {rating: int, date: str}}."""
     f = f"{user_dir(user)}/ratings.json"
     if os.path.exists(f): return json.load(open(f))
     return {}
@@ -127,7 +100,6 @@ def save_user_ratings(user, ratings):
     json.dump(ratings, open(f"{user_dir(user)}/ratings.json", "w"))
 
 def list_users():
-    """List all registered usernames."""
     d = f"{DATA_DIR}/users"
     if os.path.exists(d): return [u for u in os.listdir(d) if os.path.isdir(f"{d}/{u}")]
     return []
@@ -150,7 +122,6 @@ def save_user_tmm(user, lib):
 
 # ── Migration from old format ─────────────────────────────────────────
 def migrate_old_data():
-    """One-time migration from v1 (single ratings.json) to v2 (titles + users split)."""
     old = f"{DATA_DIR}/ratings.json"
     if not os.path.exists(old) or os.path.exists(TITLES_FILE):
         return
@@ -181,7 +152,6 @@ def migrate_old_data():
 
 # ── Enrichment APIs ───────────────────────────────────────────────────
 def tmdb_enrich(imdb_id):
-    """Fetch poster, overview, rating, streaming providers, keywords, and similar titles from TMDB."""
     if not TMDB_KEY: return {}
     data = api_get(f"https://api.themoviedb.org/3/find/{imdb_id}?api_key={TMDB_KEY}&external_source=imdb_id")
     if not data: return {}
@@ -200,19 +170,18 @@ def tmdb_enrich(imdb_id):
         lu = wp.get("results", {}).get(WATCH_COUNTRY, {})
         result["providers"] = [p["provider_name"] for p in lu.get("flatrate", [])]
         result["watch_link"] = lu.get("link", "")
-    # Keywords for taste-based recommendations (the "Movie Genome")
+    # Keywords for recommendations
     kw = api_get(f"https://api.themoviedb.org/3/{kind}/{tmdb_id}/keywords?api_key={TMDB_KEY}")
     if kw:
         kw_list = kw.get("keywords") or kw.get("results") or []
         result["keywords"] = [k["name"] for k in kw_list[:20]]
-    # TMDB-recommended similar titles (used to expand recommendation pool)
+    # Similar titles
     sim = api_get(f"https://api.themoviedb.org/3/{kind}/{tmdb_id}/recommendations?api_key={TMDB_KEY}&page=1")
     if sim:
         result["similar_tmdb"] = [s["id"] for s in (sim.get("results") or [])[:10]]
     return result
 
 def omdb_enrich(imdb_id):
-    """Fetch Rotten Tomatoes, Metacritic scores, plot summary from OMDB."""
     if not OMDB_KEY: return {}
     data = api_get(f"https://www.omdbapi.com/?i={imdb_id}&apikey={OMDB_KEY}")
     if not data or data.get("Response") == "False": return {}
@@ -239,7 +208,6 @@ def tvdb_token():
     return tvdb_login()
 
 def tvdb_enrich(imdb_id):
-    """Fetch TVDB ID for cross-referencing TV show data."""
     token = tvdb_token()
     if not token: return {}
     data = api_get(f"https://api4.thetvdb.com/v4/search/remoteid/{imdb_id}", {"Authorization": f"Bearer {token}"})
@@ -262,7 +230,6 @@ def trakt_exchange_code(code):
         "client_secret": TRAKT_SECRET, "redirect_uri": TRAKT_REDIRECT, "grant_type": "authorization_code"})
 
 def trakt_fetch_ratings(user):
-    """Pull all movie and show ratings from Trakt for a user."""
     h = trakt_headers(user)
     if not h: return {}
     ratings = {}
@@ -276,7 +243,6 @@ def trakt_fetch_ratings(user):
     return ratings
 
 def trakt_sync_push(user, ratings, titles):
-    """Push user ratings to Trakt (bidirectional sync — push half)."""
     h = trakt_headers(user)
     if not h: return
     movies, shows = [], []
@@ -290,8 +256,6 @@ def trakt_sync_push(user, ratings, titles):
 
 # ── Recommendation engine ─────────────────────────────────────────────
 def build_taste_profile(user_ratings, titles):
-    """Build weighted keyword/genre profile from highly-rated titles (6+).
-    Weight scales linearly: 6→0.2, 7→0.4, 8→0.6, 9→0.8, 10→1.0"""
     """Build weighted keyword/genre profile from highly-rated titles."""
     keyword_scores = {}
     genre_scores = {}
@@ -307,8 +271,6 @@ def build_taste_profile(user_ratings, titles):
     return {"keywords": keyword_scores, "genres": genre_scores}
 
 def score_title(title, profile):
-    """Score a candidate title against user's taste profile.
-    Combines keyword match + genre match, boosted by critical ratings."""
     """Score a title against a taste profile. Higher = better match."""
     score = 0
     kw_prof = profile["keywords"]
@@ -324,8 +286,6 @@ def score_title(title, profile):
     return round(score, 2)
 
 def get_recommendations(user, titles, n=50, provider_filter=None):
-    """Get top-N recommendations: unrated titles scored against taste profile,
-    optionally filtered to specific streaming providers."""
     """Get top-N recommendations for a user."""
     user_ratings = load_user_ratings(user)
     rated_ids = set(user_ratings.keys())
@@ -342,13 +302,11 @@ def get_recommendations(user, titles, n=50, provider_filter=None):
     return candidates[:n], profile
 
 def get_streaming_recs(user, titles, n=30):
-    """Recommendations filtered to user's streaming subscriptions."""
     """Recommendations filtered to user's streaming services."""
     return get_recommendations(user, titles, n, provider_filter=MY_PROVIDERS)
 
 # ── Enrichment ────────────────────────────────────────────────────────
 def _richness(t):
-    """Score how complete a title's metadata is (0-8). Used to prioritize re-enrichment."""
     score = 0
     if t.get("poster"): score += 2
     if t.get("overview") or t.get("plot"): score += 1
@@ -360,9 +318,6 @@ def _richness(t):
     return score
 
 def enrich_titles(jid=None):
-    """Enrich all titles: unenriched first, then poorest metadata.
-    Pulls from TMDB (poster, keywords, streaming), OMDB (RT, Metacritic), TVDB.
-    Saves incrementally every 50 titles. Runs as background job."""
     titles = load_titles()
     never = [(k, v) for k, v in titles.items() if not v.get("_enriched")]
     partial = sorted([(k, v) for k, v in titles.items() if v.get("_enriched") and _richness(v) < 5],
@@ -395,8 +350,6 @@ def enrich_titles(jid=None):
     print(f"Enriched {count} titles")
 
 def fetch_streaming_catalog():
-    """Fetch full streaming catalog for WATCH_COUNTRY from TMDB discover API.
-    Seeds the shared title store with unrated titles for recommendations."""
     if not TMDB_KEY: return
     catalog = []
     for kind in ("movie", "tv"):
@@ -461,7 +414,6 @@ def _bg_trakt_sync(jid, user):
 
 # ── CSV import ────────────────────────────────────────────────────────
 def import_csv(user, text):
-    """Import IMDB CSV export. Splits data into shared titles + user ratings."""
     titles = load_titles(); ratings = {}
     for row in csv.DictReader(io.StringIO(text)):
         iid = row.get("Const", "")
@@ -618,9 +570,6 @@ input{{padding:6px;border-radius:4px;border:1px solid #444;background:#16213e;co
 
 # ── HTTP Server ───────────────────────────────────────────────────────
 class H(BaseHTTPRequestHandler):
-    """HTTP request handler. Routes are relative to BASE (stripped by reverse proxy).
-    GET routes: /, /u/<user>, /recs/<user>, /catalog, /setup/<user>, /enrich, /jobs
-    POST routes: /upload/<user>, /tmm/<user>, /keys"""
     def _user(self, path_parts):
         """Extract user from URL or default to first user."""
         for i, p in enumerate(path_parts):

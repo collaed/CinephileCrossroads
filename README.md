@@ -1,82 +1,146 @@
 # 🎬 CinephileCrossroads
 
-A self-hosted, single-file movie & TV ratings dashboard that aggregates data from multiple sources into one searchable interface.
+A self-hosted, zero-dependency movie & TV ratings dashboard that aggregates data from multiple sources, shows streaming availability, and provides taste-based recommendations.
 
-![Python](https://img.shields.io/badge/python-3.12-blue) ![Docker](https://img.shields.io/badge/docker-ready-blue) ![License](https://img.shields.io/badge/license-MIT-green)
+![Python](https://img.shields.io/badge/python-3.12-blue) ![Docker](https://img.shields.io/badge/docker-ready-blue) ![License](https://img.shields.io/badge/license-MIT-green) ![Dependencies](https://img.shields.io/badge/dependencies-zero-brightgreen)
 
-## What it does
+## Features
 
-- **Import** your IMDB ratings (CSV export)
-- **Enrich** with posters, plot summaries, and scores from TMDB, OMDB, and TVDB
-- **Stream availability** — see which titles are on Netflix, Prime, Disney+, etc. in your country
-- **Sync with Trakt** — push/pull ratings bidirectionally
-- **Local library** — import your tinyMediaManager (TMM) library to see what you own
-- **Streaming catalog** — browse the full catalog of your streaming services, sorted by rating
-- **Search, filter, sort** — by genre, rating, streaming provider, and more
+### 📊 Ratings Dashboard
+- Import IMDB ratings (CSV export)
+- Enrich with posters, plot summaries, and scores from TMDB, OMDB, and TVDB
+- Searchable, sortable, filterable by genre, rating, and streaming provider
+- Hover titles for plot summaries
+- 💾 indicator for titles in your local library (TMM integration)
 
-## Screenshots
+### 📺 Streaming Availability
+- See which titles are on Netflix, Prime, Disney+, Max, etc. in your country
+- Filter your ratings by streaming provider
+- Browse the full streaming catalog for your region
+- Powered by TMDB watch providers (supports 50+ countries)
 
-```
-🎬 My Ratings — 507 titles
-[Search...] [All genres ▼] [Min ★ ▼] [All streams ▼] ⚡ Enrich 📺 Catalog ⚙
+### 🎯 Taste-Based Recommendations
+- Builds a weighted taste profile from your highly-rated titles using TMDB keywords and genres
+- Inspired by Jinni's "Movie Genome" approach — goes beyond genres to match on themes, moods, and plot elements
+- Scores all unrated titles against your profile
+- Filtered to what's available on your streaming services
+- "What should I watch tonight?" — answered
 
-     Title              Year  ★   IMDB  Scores         Stream    Genres
-🖼️  Vigil               2021  9   7.4   🍅89% Ⓜ72    🟥        Thriller, Crime
-🖼️  What's Cooking...   1966  10  6.7                  📦        Action, Comedy
-🖼️  The Outsider        2020  8   7.4   🍅82%         🟥 🏰     Crime, Drama
-```
+### 👥 Multi-User Support
+- Shared title metadata store (posters, scores, keywords, streaming) — ~2MB for 1000 titles
+- Per-user ratings, Trakt tokens, and local libraries — ~20KB per user
+- Adding a new user is a marginal cost of a few KB
+
+### 🔄 Integrations
+| Service | What it provides | Auth |
+|---------|-----------------|------|
+| **IMDB** | Ratings import (CSV) | None |
+| **TMDB** | Posters, keywords, streaming availability, similar titles | API key |
+| **OMDB** | Rotten Tomatoes 🍅, Metacritic scores | API key |
+| **TVDB** | TV show metadata | API key |
+| **Trakt** | Bidirectional rating sync, watch history | OAuth |
+| **TMM** | Local library indicator (tinyMediaManager) | CSV/file upload |
 
 ## Quick Start
 
 ```bash
 git clone https://github.com/collaed/CinephileCrossroads.git
 cd CinephileCrossroads
-cp docker-compose.yml docker-compose.override.yml
-# Edit docker-compose.override.yml with your API keys
 docker compose up -d
 ```
 
-Then open `http://localhost:8000` and upload your IMDB CSV export.
+Open `http://localhost:8000`, go to ⚙ Setup, and upload your IMDB CSV export.
+
+### With API keys (recommended)
+
+```yaml
+# docker-compose.override.yml
+services:
+  cinephile:
+    environment:
+      - TMDB_KEY=your_tmdb_key
+      - OMDB_KEY=your_omdb_key
+      - TVDB_KEY=your_tvdb_key
+      - TRAKT_ID=your_trakt_client_id
+      - TRAKT_SECRET=your_trakt_client_secret
+      - TRAKT_REDIRECT=https://your-domain.com/trakt/callback
+      - WATCH_COUNTRY=LU
+```
 
 ## API Keys
 
 All optional — the app works with just an IMDB CSV. Each key unlocks more features:
 
-| Service | What it adds | Get a key |
-|---------|-------------|-----------|
-| **TMDB** | Posters, plot summaries, TMDB ratings, streaming availability | [themoviedb.org/settings/api](https://www.themoviedb.org/settings/api) |
-| **OMDB** | Rotten Tomatoes 🍅, Metacritic scores | [omdbapi.com/apikey.aspx](https://www.omdbapi.com/apikey.aspx) |
-| **TVDB** | Additional TV show metadata | [thetvdb.com/dashboard/account/apikey](https://thetvdb.com/dashboard/account/apikey) |
-| **Trakt** | Bidirectional rating sync, watch history | [trakt.tv/oauth/applications](https://trakt.tv/oauth/applications) |
+| Service | Get a key | What it unlocks |
+|---------|-----------|----------------|
+| **TMDB** | [themoviedb.org/settings/api](https://www.themoviedb.org/settings/api) | Posters, keywords, streaming, recommendations |
+| **OMDB** | [omdbapi.com/apikey.aspx](https://www.omdbapi.com/apikey.aspx) | Rotten Tomatoes, Metacritic (1000 req/day free) |
+| **TVDB** | [thetvdb.com/dashboard/account/apikey](https://thetvdb.com/dashboard/account/apikey) | TV show cross-referencing |
+| **Trakt** | [trakt.tv/oauth/applications](https://trakt.tv/oauth/applications) | Rating sync, watch history |
 
-Keys can be set via environment variables or pasted in the ⚙ Setup page at runtime.
+Keys can be set via environment variables or pasted in the ⚙ Setup page at runtime (saved to `/data/api_keys.json`).
+
+## Architecture
+
+```
+/data/
+├── titles.json              # Shared: metadata for all known titles (~2MB/1000 titles)
+├── catalog.json             # Streaming catalog for WATCH_COUNTRY
+├── api_keys.json            # Saved API keys
+├── tvdb_token.json          # TVDB session token
+└── users/
+    ├── alice/
+    │   ├── ratings.json     # {imdb_id: {rating, date}} (~20KB)
+    │   ├── trakt_token.json # Trakt OAuth token
+    │   └── tmm_library.json # Local library IDs
+    └── bob/
+        └── ratings.json
+```
+
+### Data Flow
+
+```
+IMDB CSV ──→ import_csv() ──→ titles.json (shared metadata)
+                            └→ users/X/ratings.json (personal ratings)
+
+Enrich ──→ TMDB (poster, keywords, streaming, similar)
+        ├→ OMDB (RT, Metacritic)
+        └→ TVDB (TV cross-ref)
+        ──→ titles.json (updated)
+
+Recommend ──→ build_taste_profile() from user's high-rated titles
+           ├→ score all unrated titles against profile
+           ├→ filter by streaming availability
+           └→ return top matches
+```
+
+### Recommendation Algorithm
+
+1. **Taste profile**: For each title rated 6+, extract TMDB keywords and genres. Weight by rating: `(rating - 5) / 5` — so a 10/10 contributes 5x more than a 6/10.
+
+2. **Scoring**: Each candidate title is scored by summing keyword matches (full weight) and genre matches (half weight), then boosted by critical ratings (IMDB/TMDB).
+
+3. **Filtering**: Only titles available on the user's streaming services in their country are shown.
+
+4. **Smart enrichment**: Titles with poor metadata are re-enriched first. Richness score (0-8) determines priority.
 
 ## Configuration
 
 ### Environment Variables
 
-| Variable | Description | Example |
+| Variable | Description | Default |
 |----------|-------------|---------|
-| `IMDB_UR` | Your IMDB user ID (ur format) | `ur1234567` |
 | `TMDB_KEY` | TMDB API key | |
 | `OMDB_KEY` | OMDB API key | |
 | `TVDB_KEY` | TVDB API key | |
 | `TRAKT_ID` | Trakt OAuth client ID | |
 | `TRAKT_SECRET` | Trakt OAuth client secret | |
-| `TRAKT_REDIRECT` | Trakt OAuth redirect URI | `https://your-domain.com/trakt/callback` |
-| `WATCH_COUNTRY` | ISO country code for streaming | `LU`, `US`, `GB`, `DE`, `FR`... |
+| `TRAKT_REDIRECT` | Trakt OAuth redirect URI | |
+| `WATCH_COUNTRY` | ISO 3166-1 country code | `LU` |
 
-### Finding your IMDB user ID
+### Reverse Proxy
 
-Your profile URL looks like `imdb.com/user/p.xxxxx/`. The app needs the `ur` ID. Go to ⚙ Setup — it will resolve it automatically, or use the IMDB GraphQL API:
-
-```
-userProfile(input: {profileId: "p.xxxxx"}) { userId }
-```
-
-### Reverse Proxy (Caddy example)
-
-If running behind a reverse proxy under a subpath:
+Behind Caddy with a subpath:
 
 ```
 handle_path /movies/* {
@@ -84,36 +148,39 @@ handle_path /movies/* {
 }
 ```
 
-The app uses the `BASE` constant (default `/imdb`) for all internal links. Adjust in `app.py` if your subpath differs.
+Set the `BASE` constant in `app.py` to match your subpath (default: `/imdb`).
 
-## Features
+### URL Routes
 
-### Ratings Table
-- Sortable columns (click headers)
-- Filter by genre, minimum rating, streaming provider
-- Full-text search
-- Hover titles for plot summaries
-- 💾 icon for titles in your local library
-
-### Streaming Catalog (`/catalog`)
-- Full browsable catalog of movies & TV shows available on your streaming services
-- Filtered by your country
-- Shows which titles you've already rated
-
-### TMM Integration
-Upload a tinyMediaManager CSV export or a plain text file with IMDB IDs (one per line) via ⚙ Setup. Matched titles get a 💾 local indicator.
-
-### Trakt Sync
-- Pushes all your IMDB ratings to Trakt
-- Pulls any Trakt-only ratings back
-- OAuth flow — click "Connect Trakt" in the UI
+| Route | Description |
+|-------|-------------|
+| `/` | Default user's ratings |
+| `/u/<user>` | Specific user's ratings |
+| `/recs/<user>` | Recommendations for user |
+| `/catalog` | Streaming catalog browser |
+| `/setup/<user>` | User setup (import, API keys, Trakt) |
+| `/setup/new` | Create new user |
+| `/enrich` | Trigger background enrichment |
+| `/trakt/sync/<user>` | Sync ratings with Trakt |
+| `/jobs` | Background job status (JSON) |
+| `/api` | Stats endpoint (JSON) |
 
 ## Tech Stack
 
 - **Zero dependencies** — pure Python 3.12 standard library
-- **Single file** — `app.py` (~700 lines)
+- **Single file** — `app.py` (~750 lines)
 - **~50MB Docker image** (python:alpine)
-- **Persistent data** in `/data` volume (ratings, API keys, tokens)
+- **Background job queue** with progress tracking
+- **Incremental saves** during enrichment (no data loss on interruption)
+
+## Roadmap
+
+- [ ] Taste.io / TasteDive integration for "if you liked X" recommendations
+- [ ] Episode tracking for TV shows
+- [ ] Watchlist management
+- [ ] Export ratings to CSV
+- [ ] Dark/light theme toggle
+- [ ] Mobile-optimized layout
 
 ## License
 
