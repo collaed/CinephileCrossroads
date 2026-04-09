@@ -2,6 +2,7 @@
 """IMDB Ratings + TMDB posters/streaming + OMDB scores + Trakt sync + TVDB."""
 import csv, json, os, io, time, urllib.request, urllib.parse
 from http.server import HTTPServer, BaseHTTPRequestHandler
+import threading
 
 IMDB_UR = os.environ.get("IMDB_UR", "")
 TMDB_KEY = os.environ.get("TMDB_KEY", "")
@@ -18,6 +19,48 @@ DATA_FILE = "/data/ratings.json"
 TRAKT_TOKEN_FILE = "/data/trakt_token.json"
 TVDB_TOKEN_FILE = "/data/tvdb_token.json"
 PORT = 8000
+
+# ── Background job queue ──────────────────────────────────────────────
+_jobs = {}  # {id: {status, progress, total, message, started}}
+_job_lock = threading.Lock()
+
+def _job_id():
+    return f"job_{int(time.time()*1000)}"
+
+def start_job(name, fn, *args):
+    jid = _job_id()
+    with _job_lock:
+        _jobs[jid] = {"status": "running", "name": name, "progress": 0, "total": 0, "message": "Starting...", "started": time.strftime("%H:%M:%S")}
+    def wrapper():
+        try:
+            fn(jid, *args)
+            with _job_lock:
+                _jobs[jid]["status"] = "done"
+                _jobs[jid]["message"] = "Complete"
+        except Exception as e:
+            with _job_lock:
+                _jobs[jid]["status"] = "error"
+                _jobs[jid]["message"] = str(e)
+            print(f"Job {name} error: {e}")
+    t = threading.Thread(target=wrapper, daemon=True)
+    t.start()
+    return jid
+
+def job_progress(jid, progress, total, message=""):
+    with _job_lock:
+        if jid in _jobs:
+            _jobs[jid].update({"progress": progress, "total": total, "message": message})
+
+def get_jobs():
+    with _job_lock:
+        return dict(_jobs)
+
+def active_job():
+    with _job_lock:
+        for jid, j in _jobs.items():
+            if j["status"] == "running":
+                return jid, j
+    return None, None
 
 PROVIDER_ICONS = {
     "Netflix": "🟥", "Amazon Prime Video": "📦", "Disney Plus": "🏰",
@@ -343,11 +386,11 @@ a{{color:#4fc3f7;text-decoration:none}}
 <table><thead><tr><th></th><th>Title</th><th>Year</th><th>TMDB</th><th>On</th><th>Type</th><th>Seen</th></tr></thead>
 <tbody>{rows}</tbody></table></body></html>"""
 
-def enrich_all(ratings):
+def enrich_all(ratings, jid=None):
+    todo = [r for r in ratings if r.get("id") and not r.get("_enriched")]
+    total = len(todo)
     count = 0
-    for r in ratings:
-        if not r.get("id") or r.get("_enriched"):
-            continue
+    for r in todo:
         if TMDB_KEY:
             t = tmdb_enrich(r["id"])
             for k in ("poster", "overview", "tmdb_rating", "providers", "watch_link"):
@@ -367,8 +410,13 @@ def enrich_all(ratings):
                     r[k] = tv[k]
         r["_enriched"] = True
         count += 1
+        if jid and count % 5 == 0:
+            job_progress(jid, count, total, f"Enriching {r.get('title','')}")
+            # Save incrementally every 50
+            if count % 50 == 0:
+                save(ratings)
         if count % 20 == 0:
-            print(f"  Enriched {count}...")
+            print(f"  Enriched {count}/{total}...")
             time.sleep(0.1)
     print(f"Enriched {count} titles")
     ratings = tag_local(ratings)
@@ -392,6 +440,37 @@ def parse_csv(text):
         })
     ratings.sort(key=lambda r: r["date"], reverse=True)
     return ratings
+
+
+def _bg_enrich(jid):
+    data = load()
+    if data:
+        data["ratings"] = enrich_all(data["ratings"], jid)
+        data["updated"] = time.strftime("%Y-%m-%d %H:%M")
+        save(data["ratings"])
+
+def _bg_catalog(jid):
+    job_progress(jid, 0, 1, "Fetching streaming catalog...")
+    fetch_streaming_catalog()
+    job_progress(jid, 1, 1, "Done")
+
+def _bg_trakt_sync(jid):
+    data = load()
+    if not data:
+        return
+    job_progress(jid, 0, 3, "Pushing ratings to Trakt...")
+    trakt_sync_ratings(data["ratings"])
+    job_progress(jid, 1, 3, "Pulling Trakt ratings...")
+    tr = trakt_fetch_ratings()
+    if tr:
+        existing = {r["id"] for r in data["ratings"]}
+        for t in tr:
+            if t["id"] and t["id"] not in existing:
+                data["ratings"].append(t)
+        data["count"] = len(data["ratings"])
+        data["updated"] = time.strftime("%Y-%m-%d %H:%M")
+        save(data["ratings"])
+    job_progress(jid, 3, 3, "Sync complete")
 
 # ── HTML ──────────────────────────────────────────────────────────────
 def render(data):
@@ -453,6 +532,7 @@ function sortTable(n){{const tb=document.querySelector('tbody'),rows=[...tb.rows
 rows.sort((a,b)=>{{let x=a.cells[n].textContent,y=b.cells[n].textContent;return(!isNaN(x)&&!isNaN(y)?(x-y):x.localeCompare(y))*dir}});rows.forEach(r=>tb.appendChild(r))}}
 </script></head><body>
 <h2>🎬 My Ratings — {data['count']} titles</h2>
+{('<div id="jb" style="background:#1a3a1a;padding:8px 15px;border-radius:6px;margin-bottom:10px"><span id="jm">⏳ Working...</span> <progress id="jp" max="100" value="0" style="vertical-align:middle"></progress></div><script>setInterval(()=>fetch("' + BASE + '/jobs").then(r=>r.json()).then(d=>{let a=Object.values(d).find(j=>j.status=="running");if(a){document.getElementById("jb").style.display="block";document.getElementById("jm").textContent="⏳ "+a.name+": "+a.message;document.getElementById("jp").value=a.total?a.progress/a.total*100:0}else{document.getElementById("jb").style.display="none";location.reload()}}),3000)</script>') if active_job()[1] else ""}
 <div class="bar"><input id="s" onkeyup="f()" placeholder="Search..." style="width:220px">
 <select id="g" onchange="f()"><option value="">All genres</option>{genre_opts}</select>
 <select id="mr" onchange="f()"><option value="">Min ★</option>{''.join(f'<option value="{i}">{i}+</option>' for i in range(10,0,-1))}</select>
@@ -519,34 +599,29 @@ class H(BaseHTTPRequestHandler):
                     trakt_save_token(token)
             self.send_response(302); self.send_header("Location", f"{BASE}/"); self.end_headers()
         elif p == "/trakt/sync":
-            data = load()
-            if data:
-                trakt_sync_ratings(data["ratings"])
-                tr = trakt_fetch_ratings()
-                if tr:
-                    existing = {r["id"] for r in data["ratings"]}
-                    for t in tr:
-                        if t["id"] and t["id"] not in existing:
-                            data["ratings"].append(t)
-                    data["count"] = len(data["ratings"])
-                    data["updated"] = time.strftime("%Y-%m-%d %H:%M")
-                    save(data["ratings"])
+            jid, j = active_job()
+            if not j:
+                start_job("trakt_sync", _bg_trakt_sync)
             self.send_response(302); self.send_header("Location", f"{BASE}/"); self.end_headers()
         elif p == "/enrich":
-            data = load()
-            if data:
-                data["ratings"] = enrich_all(data["ratings"])
-                data["updated"] = time.strftime("%Y-%m-%d %H:%M")
-                save(data["ratings"])
+            jid, j = active_job()
+            if not j:
+                start_job("enrich", _bg_enrich)
             self.send_response(302); self.send_header("Location", f"{BASE}/"); self.end_headers()
         elif p == "/catalog":
             self._html(render_catalog(load_catalog()))
         elif p == "/catalog/fetch":
-            fetch_streaming_catalog()
+            jid, j = active_job()
+            if not j:
+                start_job("catalog", _bg_catalog)
             self.send_response(302); self.send_header("Location", f"{BASE}/catalog"); self.end_headers()
             return
         elif p == "/setup":
             self._html(setup_page())
+        elif p == "/jobs":
+            self.send_response(200); self.send_header("Content-Type", "application/json"); self.end_headers()
+            self.wfile.write(json.dumps(get_jobs()).encode())
+            return
         elif p == "/api":
             self.send_response(200); self.send_header("Content-Type", "application/json"); self.end_headers()
             self.wfile.write(json.dumps(load() or {}).encode())
