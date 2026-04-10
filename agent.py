@@ -169,8 +169,8 @@ def fetch_tmm(cfg):
     os.makedirs(export_path, exist_ok=True)
     headers = {"Content-Type": "application/json", "api-key": key}
     for kind, endpoint, template in [
-        ("movie", "/api/movie", "MovieListCSV"),
-        ("tvshow", "/api/tvshow", "TvShowListCSV"),
+        ("movie", "/api/movie", "ListExampleCSV"),
+        ("tvshow", "/api/tvshow", "ListExampleCSV"),
     ]:
         payload = json.dumps([
             {"action": "update", "scope": {"name": "all"}},
