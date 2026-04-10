@@ -225,6 +225,7 @@ def fetch_tmm(cfg):
     scan_path = cfg.get("path", "")
     if scan_path and os.path.isdir(scan_path):
         print(f"  Scanning NFO files in {scan_path}...")
+        scanned = 0
         for root, dirs, files in os.walk(scan_path):
             for f in files:
                 if not f.endswith(".nfo"): continue
@@ -283,6 +284,9 @@ def fetch_tmm(cfg):
                                 lib[iid] = [existing, info]
                         else:
                             lib[iid] = info
+                        scanned += 1
+                        if scanned % 500 == 0:
+                            print(f"    Scanned {scanned} NFO files, found {len(lib)} titles...")
                 except: pass
         return lib
     # Mode 2: TMM HTTP API — export to temp dir on same machine, then read
@@ -458,6 +462,9 @@ def main():
     # Map paths and get file sizes
     print("Mapping paths and getting file sizes...")
     sized = 0
+    not_found = 0
+    total_entries = sum(len(v) if isinstance(v, list) else 1 for k, v in library.items() if k != "_episodes" and (isinstance(v, dict) or isinstance(v, list)))
+    processed = 0
     for iid, val in library.items():
         if iid == "_episodes": continue
         entries = val if isinstance(val, list) else [val] if isinstance(val, dict) else []
@@ -476,13 +483,26 @@ def main():
                 try:
                     info["file_size"] = os.path.getsize(path)
                     sized += 1
-                except: pass
-    print(f"  {sized} files sized")
+                except:
+                    not_found += 1
+            else:
+                if path:
+                    not_found += 1
+            processed += 1
+            if processed % 500 == 0:
+                print(f"  Progress: {processed}/{total_entries} — {sized} sized, {not_found} not accessible")
+    print(f"  Done: {sized} sized, {not_found} not accessible out of {total_entries}")
 
     # Compute file hashes for subtitle matching
     print("Computing file hashes...")
+    hash_processed = 0
     library = compute_hashes(library)
-    hashed = sum(1 for v in library.values() if v.get("file_hash"))
+    hashed = 0
+    for k, val in library.items():
+        if k == "_episodes": continue
+        entries = val if isinstance(val, list) else [val] if isinstance(val, dict) else []
+        for info in entries:
+            if isinstance(info, dict) and info.get("file_hash"): hashed += 1
     print(f"  {hashed} files hashed")
 
     # Report titles missing subtitles
