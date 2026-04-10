@@ -451,6 +451,8 @@ def main():
     parser = argparse.ArgumentParser(description="CinephileCrossroads LAN Agent")
     parser.add_argument("--server", required=True, help="CinephileCrossroads URL (e.g. https://tools.ecb.pm/imdb)")
     parser.add_argument("--user", required=True, help="Username to sync to")
+    parser.add_argument("--subs", action="store_true", help="Download missing subtitles via OpenSubtitles")
+    parser.add_argument("--subs-lang", default="en,fr", help="Subtitle languages (comma-separated, default: en,fr)")
     parser.add_argument("--hash", action="store_true", help="Compute file hashes for subtitle matching (slow over network)")
     parser.add_argument("--thumbnails", action="store_true", help="Phase 2: fetch thumbnail requests from server, generate and upload")
     args = parser.parse_args()
@@ -556,6 +558,120 @@ def main():
 
     if args.hash:
         hash_duplicates(args, config, library, push_headers, url)
+
+    if args.subs:
+        download_subtitles(args, config, library)
+
+def download_subtitles(args, config, library):
+    """Download missing subtitles from OpenSubtitles for files without subs."""
+    # Get API key from server
+    try:
+        req = urllib.request.Request(f"{args.server}/api",
+            headers={"User-Agent": "CinephileAgent/1.0"})
+        server_info = json.loads(urllib.request.urlopen(req, timeout=10).read())
+    except:
+        pass
+
+    opensubs_key = config.get("_opensubs_key", "")
+    if not opensubs_key:
+        opensubs_key = input("  OpenSubtitles API key (get from opensubtitles.com/consumers): ").strip()
+        if opensubs_key:
+            config["_opensubs_key"] = opensubs_key
+            json.dump(config, open(CONFIG_FILE, "w"), indent=2)
+    if not opensubs_key:
+        print("  No OpenSubtitles API key - skipping")
+        return
+
+    languages = args.subs_lang.split(",")
+    headers = {"Api-Key": opensubs_key, "User-Agent": "CinephileCrossroads v1.0", "Content-Type": "application/json"}
+
+    # Find files without subtitles
+    missing = []
+    for iid, val in library.items():
+        if iid == "_episodes": continue
+        entries = val if isinstance(val, list) else [val] if isinstance(val, dict) else []
+        for info in entries:
+            if not isinstance(info, dict): continue
+            if info.get("subtitles"): continue
+            path = info.get("local_path") or map_path(info.get("path", ""), config)
+            if os.name == "nt":
+                path = path.replace("/", "\\")
+            if path and os.path.isfile(path):
+                missing.append((iid, info, path))
+
+    if not missing:
+        print("  All files have subtitles")
+        return
+
+    print(f"  {len(missing)} files missing subtitles")
+    downloaded = 0
+    errors = 0
+
+    for i, (iid, info, path) in enumerate(missing):
+        short = os.path.basename(path)[:40]
+        print(f"    [{i+1}/{len(missing)}] {short}...", end="\r")
+
+        # Search by IMDB ID
+        imdb_num = iid.replace("tt", "")
+        search_url = f"https://api.opensubtitles.com/api/v1/subtitles?imdb_id={imdb_num}&languages={','.join(languages)}"
+
+        # Also try hash if available
+        file_hash = info.get("file_hash")
+        if file_hash:
+            search_url += f"&moviehash={file_hash}"
+
+        try:
+            req = urllib.request.Request(search_url, headers=headers)
+            resp = json.loads(urllib.request.urlopen(req, timeout=10).read())
+            results = resp.get("data", [])
+            if not results:
+                continue
+
+            # Pick best result (hash match first, then most downloads)
+            best = None
+            for r in results:
+                attr = r.get("attributes", {})
+                files = attr.get("files", [])
+                if not files: continue
+                if attr.get("moviehash_match"):
+                    best = files[0]
+                    break
+                if not best or attr.get("download_count", 0) > 0:
+                    best = files[0]
+
+            if not best:
+                continue
+
+            # Download
+            dl_req = urllib.request.Request(
+                "https://api.opensubtitles.com/api/v1/download",
+                data=json.dumps({"file_id": best["file_id"]}).encode(),
+                headers=headers)
+            dl_resp = json.loads(urllib.request.urlopen(dl_req, timeout=10).read())
+            dl_link = dl_resp.get("link")
+
+            if dl_link:
+                # Save next to the video file
+                sub_ext = ".srt"
+                lang = results[0].get("attributes", {}).get("language", languages[0])
+                video_base = os.path.splitext(path)[0]
+                sub_path = f"{video_base}.{lang}{sub_ext}"
+
+                sub_data = urllib.request.urlopen(dl_link, timeout=30).read()
+                with open(sub_path, "wb") as f:
+                    f.write(sub_data)
+                downloaded += 1
+                print(f"\n    + {short} -> {lang}{sub_ext}")
+
+        except Exception as e:
+            errors += 1
+            if "429" in str(e):
+                print(f"\n    Rate limited - waiting 10s...")
+                import time; time.sleep(10)
+
+        import time; time.sleep(1)  # Rate limit: 1 req/sec
+
+    print(f"\n  Done: {downloaded} subtitles downloaded, {errors} errors")
 
 def hash_duplicates(args, config, library, headers, base_url):
     """Hash only duplicate files for accurate comparison."""
