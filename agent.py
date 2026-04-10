@@ -77,7 +77,7 @@ def fetch_kodi(cfg):
         headers["Authorization"] = "Basic " + cred
     req = urllib.request.Request(cfg["url"], data=json.dumps(payload).encode(), headers=headers)
     try:
-        resp = urllib.request.urlopen(req, timeout=30)
+        resp = urllib.request.urlopen(req, timeout=120)
         data = json.loads(resp.read())
         for m in data.get("result", {}).get("movies", []):
             iid = m.get("imdbnumber", "")
@@ -388,13 +388,21 @@ def main():
         else:
             multi_lib[iid] = info
     library = multi_lib
-    print(f"Pushing {len(library)} titles to {args.server}...")
+    # Separate episodes from main library
+    episodes = library.pop("_episodes", {})
+    print(f"Pushing {len(library)} titles + {len(episodes)} episodes to {args.server}...")
     token = config.get("_agent_token", "")
     url = f"{args.server}/api/library/{args.user}"
     headers = {"X-Agent-Token": token} if token else {}
     req = urllib.request.Request(url, data=json.dumps({"library": library}).encode(),
         headers={"Content-Type": "application/json", "User-Agent": "CinephileAgent/1.0", **headers})
     result = json.loads(urllib.request.urlopen(req, timeout=30).read())
+    # Push episodes separately within the same library
+    if episodes:
+        ep_payload = {"library": {"_episodes": episodes}}
+        ep_req = urllib.request.Request(url, data=json.dumps(ep_payload).encode(),
+            headers={"Content-Type": "application/json", "User-Agent": "CinephileAgent/1.0", **headers})
+        urllib.request.urlopen(ep_req, timeout=60)
     print(f"Done — server has {result.get('count', '?')} titles in library")
 
 if __name__ == "__main__":
