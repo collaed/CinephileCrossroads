@@ -2284,7 +2284,7 @@ th,td{{padding:6px 10px;text-align:left;border-bottom:1px solid #333}}th{{backgr
 {items}</channel></rss>""".encode())
             return
         elif p == "/new":
-            self._html(render_new_on_streaming())
+            self._page(render_new_on_streaming(), "discover", user)
             return
         elif p.startswith("/random/"):
             u = parts[-1]
@@ -2315,7 +2315,7 @@ button{{padding:10px 24px;background:#4fc3f7;border:none;border-radius:8px;curso
             # /compare/user1/user2
             if len(parts) >= 3:
                 u1, u2 = parts[-2], parts[-1]
-                self._html(render_compare(u1, u2))
+                self._page(render_compare(u1, u2), "social")
             else:
                 users = list_users()
                 links = "".join(f'<a href="{BASE}/compare/{users[i]}/{users[j]}" style="display:inline-block;margin:5px;padding:8px 16px;background:#16213e;border-radius:6px;color:#4fc3f7;text-decoration:none">{users[i]} vs {users[j]}</a>' for i in range(len(users)) for j in range(i+1, len(users)))
@@ -2388,7 +2388,7 @@ td{{padding:8px;border-bottom:1px solid #333}}a{{color:#4fc3f7;text-decoration:n
             return
         elif p.startswith("/stats/"):
             u = parts[-1]
-            self._html(render_stats(u))
+            self._page(render_stats(u), "ratings", u)
             return
         elif p.startswith("/export/"):
             u = parts[-1]
@@ -2488,11 +2488,11 @@ td{{padding:8px;border-bottom:1px solid #333}}a{{color:#4fc3f7}}</style></head>
             return
         elif p.startswith("/tvshows/"):
             u = parts[-1] if len(parts) > 1 else self._user(parts)
-            self._html(render_tvshows(u))
+            self._page(render_tvshows(u), "library", u)
             return
         elif p.startswith("/library/"):
             u = parts[-1] if len(parts) > 1 else self._user(parts)
-            self._html(render_library(u))
+            self._page(render_library(u), "library", u)
             return
         elif p.startswith("/media/sync/"):
             u = parts[-1]
@@ -2504,9 +2504,9 @@ td{{padding:8px;border-bottom:1px solid #333}}a{{color:#4fc3f7}}</style></head>
             self._redirect(f"{BASE}/")
         elif p.startswith("/recs/"):
             u = parts[-1]
-            self._html(render_recs(u))
+            self._page(render_recs(u), "discover", u)
         elif p == "/catalog":
-            self._html(render_catalog())
+            self._page(render_catalog(), "discover", user)
         elif p == "/catalog/fetch":
             if not active_job()[1]: start_job("catalog", _bg_catalog)
             self._redirect(f"{BASE}/catalog")
@@ -2524,7 +2524,7 @@ button{{padding:10px 20px;background:#4fc3f7;border:none;border-radius:6px;curso
                 if name: user_dir(name)
                 self._redirect(f"{BASE}/setup/{name}" if name else f"{BASE}/setup/new")
             else:
-                self._html(render_setup(u))
+                self._page(render_setup(u), "setup", u)
         elif p == "/jobs":
             self._json(get_jobs())
         elif p.startswith("/thumbnails/"):
@@ -2704,6 +2704,8 @@ button{{padding:10px 20px;background:#4fc3f7;border:none;border-radius:6px;curso
             AGENT_TOKEN = keys.get("agent_token", "")
             self._redirect(f"{BASE}/")
 
+    def _page(self, body, section="ratings", user=""):
+        self._html(wrap_page(body, section, user))
     def _html(self, body):
         self.send_response(200); self.send_header("Content-Type", "text/html"); self.end_headers()
         self.wfile.write(body.encode())

@@ -449,8 +449,111 @@ def check_path_access(config, library):
         resp = input("  Fix another? [y/N] ").strip().lower()
     print("")
 
+
+def daemon_mode(args, config):
+    """Run as a daemon, polling the server for tasks."""
+    print(f"Agent daemon mode — polling {args.server} every 60s")
+    headers = {"Content-Type": "application/json", "User-Agent": "CinephileAgent/2.0"}
+    base_url = args.server.rstrip("/")
+    
+    while True:
+        try:
+            # Poll for tasks
+            req = urllib.request.Request(f"{base_url}/api/tasks", headers=headers)
+            resp = urllib.request.urlopen(req, timeout=10)
+            data = json.loads(resp.read())
+            tasks = data.get("tasks", [])
+            
+            if tasks:
+                print(f"  {len(tasks)} pending tasks")
+                for task in tasks:
+                    tid = task["id"]
+                    ttype = task["type"]
+                    params = task.get("params", {})
+                    print(f"  Running: {ttype} ({tid})")
+                    
+                    result = {}
+                    try:
+                        if ttype == "size_files":
+                            # Size specific files
+                            paths = params.get("paths", [])
+                            sized = {}
+                            for p in paths:
+                                mp = map_path(p, config)
+                                if os.path.isfile(mp):
+                                    sized[p] = os.path.getsize(mp)
+                            result = {"sized": len(sized), "data": sized}
+                        
+                        elif ttype == "hash_files":
+                            paths = params.get("paths", [])
+                            hashed = {}
+                            for p in paths:
+                                mp = map_path(p, config)
+                                if os.path.isfile(mp):
+                                    h = opensubtitles_hash(mp)
+                                    if h: hashed[p] = {"hash": h, "size": os.path.getsize(mp)}
+                            result = {"hashed": len(hashed), "data": hashed}
+                        
+                        elif ttype == "download_subs":
+                            imdb_id = params.get("imdb_id")
+                            path = params.get("path")
+                            lang = params.get("language", "en")
+                            if imdb_id and path:
+                                mp = map_path(path, config)
+                                # Search OpenSubtitles
+                                file_hash = None
+                                if os.path.isfile(mp):
+                                    file_hash = opensubtitles_hash(mp)
+                                result = {"imdb_id": imdb_id, "hash": file_hash, "path": path}
+                        
+                        elif ttype == "check_quality":
+                            paths = params.get("paths", [])
+                            quality = {}
+                            for p in paths:
+                                mp = map_path(p, config)
+                                if os.path.isfile(mp):
+                                    quality[p] = {"size": os.path.getsize(mp), "exists": True}
+                            result = {"checked": len(quality), "data": quality}
+                        
+                        elif ttype == "find_duplicates":
+                            # Report files with same size
+                            paths = params.get("paths", [])
+                            sizes = {}
+                            for p in paths:
+                                mp = map_path(p, config)
+                                if os.path.isfile(mp):
+                                    s = os.path.getsize(mp)
+                                    sizes.setdefault(s, []).append(p)
+                            dupes = {str(s): ps for s, ps in sizes.items() if len(ps) > 1}
+                            result = {"duplicates": len(dupes), "data": dupes}
+                        
+                        else:
+                            result = {"error": f"Unknown task type: {ttype}"}
+                    
+                    except Exception as e:
+                        result = {"error": str(e)}
+                    
+                    # Report completion
+                    try:
+                        complete_data = json.dumps({"result": result}).encode()
+                        req = urllib.request.Request(
+                            f"{base_url}/api/tasks/complete/{tid}",
+                            data=complete_data, headers=headers)
+                        urllib.request.urlopen(req, timeout=10)
+                        print(f"  Completed: {ttype}")
+                    except Exception as e:
+                        print(f"  Failed to report: {e}")
+            
+        except Exception as e:
+            if "urlopen" not in str(type(e).__name__):
+                print(f"  Poll error: {e}")
+        
+        time.sleep(60)
+
+
 def main():
     parser = argparse.ArgumentParser(description="CinephileCrossroads LAN Agent")
+    parser.add_argument("--daemon", action="store_true", help="Run as daemon, polling server for tasks")
     parser.add_argument("--server", required=True, help="CinephileCrossroads URL (e.g. https://tools.ecb.pm/imdb)")
     parser.add_argument("--user", required=True, help="Username to sync to")
     parser.add_argument("--subs", action="store_true", help="Download missing subtitles via OpenSubtitles")
@@ -466,6 +569,10 @@ def main():
 
     check_prerequisites()
     config = json.load(open(CONFIG_FILE))
+    
+    if args.daemon:
+        daemon_mode(args, config)
+        return  # Never reaches here
     library = {}
     for name, cfg in config.items():
         if name.startswith("_"): continue
