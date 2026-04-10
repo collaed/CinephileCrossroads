@@ -69,7 +69,7 @@ def fetch_jellyfin(cfg):
 def fetch_kodi(cfg):
     lib = {}
     payload = {"jsonrpc": "2.0", "method": "VideoLibrary.GetMovies", "id": 1,
-               "params": {"properties": ["imdbnumber", "file"]}}
+               "params": {"properties": ["imdbnumber", "file", "streamdetails", "runtime", "title", "year"]}}
     headers = {"Content-Type": "application/json"}
     if cfg.get("user") and cfg.get("password"):
         import base64

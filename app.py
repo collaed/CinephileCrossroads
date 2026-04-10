@@ -1328,7 +1328,7 @@ rows.sort((a,b)=>{{let x=a.cells[n].textContent,y=b.cells[n].textContent;return(
 <select id="mr" onchange="f()"><option value="">Min ★</option>{''.join(f'<option value="{i}">{i}+</option>' for i in range(10,0,-1))}</select>
 <select id="dec" onchange="f()"><option value="">All decades</option><option value="2020">2020s</option><option value="2010">2010s</option><option value="2000">2000s</option><option value="1990">1990s</option><option value="1980">1980s</option><option value="1970">1970s</option><option value="1960">1960s</option><option value="1950">1950s</option></select>
 <select id="st" onchange="f()"><option value="">All streams</option>{"".join('<option value="' + p + '">' + PROVIDER_ICONS.get(p,"▪") + " " + p + '</option>' for p in sorted(user_provs))}</select>
-<a href="{BASE}/tonight/{user}">🎲 <span title="Pick a random recommendation">Tonight</span></a> <a href="{BASE}/stats/{user}" title="Your rating stats">📊</a> <a href="{BASE}/export/{user}" title="Export ratings as CSV">⬇</a> <a href="{BASE}/enrich" title="Enrich titles with metadata">⚡</a> <a href="{BASE}/recs/{user}" title="Personalized recommendations">🎯 Recs</a> <a href="{BASE}/catalog" title="Streaming catalog">📺</a> <a href="{BASE}/new" title="New on streaming">🆕</a> <a href="{BASE}/random/{user}" title="Random unwatched title">🎰</a> <a href="{BASE}/compare/" title="Compare users">👥</a> <a href="{BASE}/rss/{user}" title="RSS feed of your ratings">📡</a> <a href="{BASE}/setup/{user}" title="Setup & configuration">⚙</a>
+<a href="{BASE}/tonight/{user}">🎲 <span title="Pick a random recommendation">Tonight</span></a> <a href="{BASE}/stats/{user}" title="Your rating stats">📊</a> <a href="{BASE}/export/{user}" title="Export ratings as CSV">⬇</a> <a href="{BASE}/enrich" title="Enrich titles with metadata">⚡</a> <a href="{BASE}/recs/{user}" title="Personalized recommendations">🎯 Recs</a> <a href="{BASE}/catalog" title="Streaming catalog">📺</a> <a href="{BASE}/new" title="New on streaming">🆕</a> <a href="{BASE}/random/{user}" title="Random unwatched title">🎰</a> <a href="{BASE}/compare/" title="Compare users">👥</a> <a href="{BASE}/rss/{user}" title="RSS feed of your ratings">📡</a> <a href="{BASE}/setup/{user}" title="Setup & configuration">⚙</a> <a href="{BASE}/library/{user}" title="Library curation">📚</a>
 {f'<a href="{BASE}/trakt/sync/{user}">↕ Trakt</a>' if has_trakt else ""}
 <button onclick="document.body.classList.toggle('light');localStorage.setItem('theme',document.body.classList.contains('light')?'light':'dark')" style="background:none;border:1px solid #444;border-radius:4px;cursor:pointer;padding:2px 8px;color:var(--fg)" title="Toggle dark/light theme">🌓</button> <span style="color:#666;font-size:.8em">{" ".join(services)}</span></div>
 <div style="margin-bottom:10px;font-size:1.2em">Mood: <a href="{BASE}/mood/{user}/light" title="Light" style="text-decoration:none">☀️</a><a href="{BASE}/mood/{user}/intense" title="Intense" style="text-decoration:none">🔥</a><a href="{BASE}/mood/{user}/funny" title="Funny" style="text-decoration:none">😂</a><a href="{BASE}/mood/{user}/mind-bending" title="Mind-Bending" style="text-decoration:none">🌀</a><a href="{BASE}/mood/{user}/dark" title="Dark" style="text-decoration:none">🌑</a><a href="{BASE}/mood/{user}/epic" title="Epic" style="text-decoration:none">⚔️</a><a href="{BASE}/mood/{user}/romantic" title="Romantic" style="text-decoration:none">💕</a><a href="{BASE}/mood/{user}/scary" title="Scary" style="text-decoration:none">👻</a><a href="{BASE}/mood/{user}/inspiring" title="Inspiring" style="text-decoration:none">✨</a></div>
@@ -1466,6 +1466,108 @@ def render_setup(user):
     html += '</div></body></html>'
     return html
 
+
+def render_library(user):
+    """Library curation: duplicates, quality comparison, cleanup suggestions."""
+    library = load_user_tmm(user)
+    titles = load_titles()
+    if not library:
+        return '<html><body style="background:#1a1a2e;color:#eee;font-family:sans-serif;padding:40px"><h2>No local library synced</h2><a href="' + BASE + '/setup/' + user + '" style="color:#4fc3f7">Setup media servers</a></body></html>'
+
+    # Find duplicates by IMDB ID (multiple files for same title)
+    # Group by title name (case-insensitive) to catch different versions
+    from collections import defaultdict
+    by_title = defaultdict(list)
+    for iid, info in library.items():
+        if not isinstance(info, dict): continue
+        name = (info.get("title") or titles.get(iid, {}).get("title") or iid).lower().strip()
+        by_title[name].append((iid, info))
+
+    # Also detect same IMDB ID with different paths (true duplicates)
+    # For now, focus on quality comparison of all titles
+    total = len(library)
+    has_video = sum(1 for v in library.values() if isinstance(v, dict) and v.get("video_codec"))
+    no_subs = sum(1 for v in library.values() if isinstance(v, dict) and not v.get("subtitles"))
+
+    # Quality breakdown
+    quality_dist = defaultdict(int)
+    codec_dist = defaultdict(int)
+    for info in library.values():
+        if not isinstance(info, dict): continue
+        h = info.get("video_height") or info.get("quality", "")
+        if h:
+            h = int(h) if str(h).isdigit() else 0
+            if h >= 2160: quality_dist["4K"] += 1
+            elif h >= 1080: quality_dist["1080p"] += 1
+            elif h >= 720: quality_dist["720p"] += 1
+            elif h > 0: quality_dist["SD"] += 1
+        c = info.get("video_codec", "")
+        if c: codec_dist[c] += 1
+
+    # Find titles with multiple entries (potential duplicates)
+    dupes = [(name, entries) for name, entries in by_title.items() if len(entries) > 1]
+    dupes.sort(key=lambda x: len(x[1]), reverse=True)
+
+    # Build duplicate rows
+    dupe_rows = ""
+    for name, entries in dupes[:50]:
+        for iid, info in entries:
+            h = info.get("video_height") or info.get("quality", "")
+            codec = info.get("video_codec", "")
+            audio = info.get("audio", [])
+            audio_str = ", ".join(a.get("codec","") + " " + str(a.get("channels","")) + "ch " + a.get("language","") for a in audio[:3]) if audio else "?"
+            subs = info.get("subtitles", [])
+            sub_str = ", ".join(s.get("language","") for s in subs[:5]) if subs else "none"
+            path = info.get("path", "")
+            # Suggest: keep highest resolution
+            best = max(entries, key=lambda x: int(x[1].get("video_height", 0) or 0) if isinstance(x[1], dict) else 0)
+            is_best = "✅" if (iid, info) == best else "❌"
+            dupe_rows += "<tr><td>" + name[:40] + "</td><td>" + iid + "</td><td>" + str(h) + "</td><td>" + codec + "</td><td>" + audio_str + "</td><td>" + sub_str + "</td><td>" + is_best + "</td><td style='font-size:.7em;color:#666'>" + path[-60:] + "</td></tr>"
+        dupe_rows += '<tr><td colspan="8" style="border-bottom:2px solid #4fc3f7"></td></tr>'
+
+    # Quality bars
+    q_bars = ""
+    for q in ["4K", "1080p", "720p", "SD"]:
+        c = quality_dist.get(q, 0)
+        if c: q_bars += '<div style="display:flex;align-items:center;gap:8px;margin:2px 0"><span style="width:50px;text-align:right">' + q + '</span><div style="background:#4fc3f7;height:18px;width:' + str(min(c/max(quality_dist.values())*300, 300)) + 'px;border-radius:3px"></div><span style="color:#888">' + str(c) + '</span></div>'
+
+    codec_bars = ""
+    for c, n in sorted(codec_dist.items(), key=lambda x: x[1], reverse=True)[:8]:
+        codec_bars += '<div style="display:flex;align-items:center;gap:8px;margin:2px 0"><span style="width:60px;text-align:right;font-size:.85em">' + c + '</span><div style="background:#4fc3f7;height:16px;width:' + str(min(n/max(codec_dist.values())*250, 250)) + 'px;border-radius:3px"></div><span style="color:#888">' + str(n) + '</span></div>'
+
+    html = '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Library Curation</title>'
+    html += '<meta name="viewport" content="width=device-width,initial-scale=1">'
+    html += '<style>body{font-family:-apple-system,sans-serif;background:#1a1a2e;color:#eee;margin:20px}'
+    html += '.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:15px}'
+    html += '.card{background:#16213e;padding:15px;border-radius:10px}'
+    html += 'table{border-collapse:collapse;width:100%}th,td{padding:4px 8px;text-align:left;border-bottom:1px solid #333;font-size:.85em}'
+    html += 'th{background:#16213e;position:sticky;top:0}a{color:#4fc3f7;text-decoration:none}</style></head><body>'
+    html += '<h2>📚 Library Curation — ' + user + '</h2>'
+
+    # Stats cards
+    html += '<div class="grid" style="margin-bottom:20px">'
+    html += '<div class="card" style="text-align:center"><div style="font-size:2.5em">' + str(total) + '</div>total titles</div>'
+    html += '<div class="card" style="text-align:center"><div style="font-size:2.5em">' + str(has_video) + '</div>with media info</div>'
+    html += '<div class="card" style="text-align:center"><div style="font-size:2.5em;color:#d72">' + str(no_subs) + '</div>missing subtitles</div>'
+    html += '<div class="card" style="text-align:center"><div style="font-size:2.5em;color:#f90">' + str(len(dupes)) + '</div>potential duplicates</div>'
+    html += '</div>'
+
+    # Quality & codec breakdown
+    html += '<div class="grid" style="margin-bottom:20px">'
+    html += '<div class="card"><h3>Resolution</h3>' + q_bars + '</div>'
+    html += '<div class="card"><h3>Codecs</h3>' + codec_bars + '</div>'
+    html += '</div>'
+
+    # Duplicates table
+    if dupes:
+        html += '<h3>🔍 Potential Duplicates (' + str(len(dupes)) + ' titles)</h3>'
+        html += '<p style="color:#888;font-size:.85em">✅ = suggested keep (highest resolution) · ❌ = candidate for removal</p>'
+        html += '<table><thead><tr><th>Title</th><th>IMDB</th><th>Res</th><th>Codec</th><th>Audio</th><th>Subs</th><th>Keep?</th><th>Path</th></tr></thead>'
+        html += '<tbody>' + dupe_rows + '</tbody></table>'
+
+    html += '<p style="margin-top:20px"><a href="' + BASE + '/u/' + user + '">← Ratings</a> · <a href="' + BASE + '/setup/' + user + '">⚙ Setup</a></p>'
+    html += '</body></html>'
+    return html
 
 def render_stats(user):
     titles = load_titles()
@@ -1844,6 +1946,10 @@ td{{padding:8px;border-bottom:1px solid #333}}a{{color:#4fc3f7}}</style></head>
             if not active_job()[1]:
                 start_job("imdb_datasets", lambda jid: (download_imdb_datasets(jid), seed_from_imdb_dataset(jid)))
             self._redirect(f"{BASE}/")
+            return
+        elif p.startswith("/library/"):
+            u = parts[-1] if len(parts) > 1 else self._user(parts)
+            self._html(render_library(u))
             return
         elif p.startswith("/media/sync/"):
             u = parts[-1]
