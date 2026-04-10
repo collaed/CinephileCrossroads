@@ -159,7 +159,36 @@ def fetch_tmm(cfg):
                     match = re.search(r"(tt\d{7,})", content)
                     if match:
                         iid = match.group(1)
-                        lib[iid] = {"path": root, "source": "tmm"}
+                        info = {"path": root, "source": "tmm"}
+                        # Extract media info from NFO <fileinfo> block
+                        vm = re.search(r"<height>(\d+)</height>", content)
+                        if vm: info["video_height"] = int(vm.group(1))
+                        vm = re.search(r"<width>(\d+)</width>", content)
+                        if vm: info["video_width"] = int(vm.group(1))
+                        vm = re.search(r"<codec>(\w+)</codec>", content)
+                        if vm: info["video_codec"] = vm.group(1)
+                        vm = re.search(r"<durationinseconds>(\d+)</durationinseconds>", content)
+                        if vm: info["runtime"] = int(vm.group(1)) // 60
+                        # Audio streams
+                        audio = []
+                        for am in re.finditer(r"<audio>(.*?)</audio>", content, re.DOTALL):
+                            a = {}
+                            ac = re.search(r"<codec>(\w+)</codec>", am.group(1))
+                            if ac: a["codec"] = ac.group(1)
+                            ch = re.search(r"<channels>(\d+)</channels>", am.group(1))
+                            if ch: a["channels"] = int(ch.group(1))
+                            lg = re.search(r"<language>(\w+)</language>", am.group(1))
+                            if lg: a["language"] = lg.group(1)
+                            if a: audio.append(a)
+                        if audio: info["audio"] = audio
+                        # Subtitles
+                        subs = []
+                        for sm in re.finditer(r"<subtitle>(.*?)</subtitle>", content, re.DOTALL):
+                            lg = re.search(r"<language>(\w+)</language>", sm.group(1))
+                            if lg: subs.append({"language": lg.group(1)})
+                        if subs: info["subtitles"] = subs
+                        info["quality"] = str(info.get("video_height", ""))
+                        lib[iid] = info
                 except: pass
         return lib
     # Mode 2: TMM HTTP API — export to temp dir on same machine, then read
