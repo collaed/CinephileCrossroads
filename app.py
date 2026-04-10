@@ -26,6 +26,7 @@ Zero external Python dependencies — pure stdlib + Docker.
 """
 import csv, json, os, io, time, urllib.request, urllib.parse, threading, math
 from http.server import HTTPServer, BaseHTTPRequestHandler
+from socketserver import ThreadingMixIn
 
 
 # ── Config ────────────────────────────────────────────────────────────
@@ -3316,4 +3317,6 @@ if __name__ == "__main__":
     print(f"CineCross — {len(titles)} titles, users: {users}")
     print(f"  TMDB:{'✓' if TMDB_KEY else '✗'} OMDB:{'✓' if OMDB_KEY else '✗'} TVDB:{'✓' if TVDB_KEY else '✗'} Trakt:{'✓' if TRAKT_ID else '✗'} Region:{WATCH_COUNTRY}")
     threading.Thread(target=_scheduler, daemon=True).start()
-    HTTPServer(("0.0.0.0", PORT), H).serve_forever()
+    class ThreadedServer(ThreadingMixIn, HTTPServer):
+        daemon_threads = True
+    ThreadedServer(("0.0.0.0", PORT), H).serve_forever()
