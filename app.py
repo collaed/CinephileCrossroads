@@ -1474,22 +1474,18 @@ def render_library(user):
     if not library:
         return '<html><body style="background:#1a1a2e;color:#eee;font-family:sans-serif;padding:40px"><h2>No local library synced</h2><a href="' + BASE + '/setup/' + user + '" style="color:#4fc3f7">Setup media servers</a></body></html>'
 
-    # Find duplicates: multiple files with the same IMDB ID = true duplicates
-    # One IMDB ID can have multiple paths (different quality versions)
+    # Detect duplicates two ways:
     from collections import defaultdict
-    by_iid = defaultdict(list)
+    by_title_year = defaultdict(list)
     for iid, info in library.items():
         if not isinstance(info, dict): continue
         path = info.get("path", "")
         if not path: continue
-        by_iid[iid].append(info)
-    # Also detect multiple paths within a single entry (shouldn't happen but check)
-    # The real duplicates are IDs with multiple distinct paths
-    by_title = defaultdict(list)
-    for iid, entries in by_iid.items():
-        if len(entries) <= 1: continue
-        for info in entries:
-            by_title[iid].append((iid, info))
+        t = (info.get("title") or titles.get(iid, {}).get("title") or "").strip()
+        y = str(info.get("year") or titles.get(iid, {}).get("year") or "")
+        key = (t.lower() + "|" + y) if t else iid
+        by_title_year[key].append((iid, info))
+    by_title = {k: v for k, v in by_title_year.items() if len(v) > 1}
 
     # Also detect same IMDB ID with different paths (true duplicates)
     # For now, focus on quality comparison of all titles
@@ -1513,7 +1509,8 @@ def render_library(user):
         if c: codec_dist[c] += 1
 
     # Find titles with multiple entries (potential duplicates)
-    dupes = [(iid, entries) for iid, entries in by_title.items()]
+    dupes = [(key, entries) for key, entries in by_title.items()]
+    dupes.sort(key=lambda x: len(x[1]), reverse=True)
     dupes.sort(key=lambda x: len(x[1]), reverse=True)
 
     # Build duplicate rows grouped by title

@@ -336,6 +336,18 @@ def main():
     if missing_subs:
         print(f"  {len(missing_subs)} titles have no subtitles")
 
+    # Convert to list format for duplicates
+    multi_lib = {}
+    for iid, info in library.items():
+        if not isinstance(info, dict): continue
+        if iid in multi_lib:
+            if isinstance(multi_lib[iid], list):
+                multi_lib[iid].append(info)
+            else:
+                multi_lib[iid] = [multi_lib[iid], info]
+        else:
+            multi_lib[iid] = info
+    library = multi_lib
     print(f"Pushing {len(library)} titles to {args.server}...")
     token = config.get("_agent_token", "")
     url = f"{args.server}/api/library/{args.user}"
