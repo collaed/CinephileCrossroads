@@ -340,12 +340,15 @@ def fetch_tmm(cfg):
     return lib
 
 def map_path(path, config):
-    """Map remote paths (e.g. Kodi NFS) to local paths (e.g. Windows SMB)."""
+    """Map remote paths (e.g. Kodi NFS) to local paths (e.g. Windows SMB).
+    Handles stack:// URLs by extracting the first file path."""
+    # Handle stack:// (Kodi multi-part files)
+    if path.startswith("stack://"):
+        path = path.replace("stack://", "").split(" , ")[0].strip()
     mappings = config.get("_path_mappings", {})
     for remote, local in mappings.items():
         if path.startswith(remote):
             mapped = local + path[len(remote):]
-            # Fix separators for current OS
             if os.name == "nt":
                 mapped = mapped.replace("/", "\\")
             else:
