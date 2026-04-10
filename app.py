@@ -1876,6 +1876,73 @@ def render_setup(user):
 
 
 # ── TV Show Intelligence ──────────────────────────────────────────────
+
+# ── Library Organization ──────────────────────────────────────────────
+def analyze_library(user):
+    """Analyze library for organization issues."""
+    library = load_user_tmm(user)
+    titles = load_titles()
+    items = {k: v for k, v in library.items() if not k.startswith("_") and isinstance(v, dict)}
+    
+    # Orphans: in library but not in titles store (unmatched)
+    orphans = [(iid, info) for iid, info in items.items() if iid not in titles]
+    
+    # Drive/folder summary
+    from collections import defaultdict
+    drives = defaultdict(lambda: {"count": 0, "size": 0})
+    for iid, info in items.items():
+        path = info.get("path", "")
+        # Extract root (drive or first 2 path components)
+        parts = path.replace("\\", "/").split("/")
+        root = "/".join(parts[:4]) if len(parts) > 3 else "/".join(parts[:2])
+        drives[root]["count"] += 1
+        s = info.get("file_size") or info.get("size") or 0
+        if isinstance(s, str):
+            try: s = int(s)
+            except: s = 0
+        drives[root]["size"] += s
+    
+    # Duplicates: same IMDB ID appearing multiple times (shouldn't happen in dict, but same-size files)
+    from collections import Counter
+    size_counts = Counter()
+    size_map = defaultdict(list)
+    for iid, info in items.items():
+        s = info.get("file_size") or info.get("size") or 0
+        if s:
+            size_counts[s] += 1
+            size_map[s].append((iid, info))
+    dupes = {s: entries for s, entries in size_map.items() if len(entries) > 1}
+    
+    # Quality distribution
+    quality = defaultdict(int)
+    codec = defaultdict(int)
+    for iid, info in items.items():
+        h = info.get("video_height") or info.get("quality") or ""
+        if isinstance(h, int) or (isinstance(h, str) and h.isdigit()):
+            h = int(h)
+            if h >= 2160: quality["4K"] += 1
+            elif h >= 1080: quality["1080p"] += 1
+            elif h >= 720: quality["720p"] += 1
+            elif h > 0: quality["SD"] += 1
+        c = info.get("video_codec", "")
+        if c: codec[c.lower()] += 1
+    
+    # Missing data
+    no_size = sum(1 for info in items.values() if not (info.get("file_size") or info.get("size")))
+    no_subs = sum(1 for info in items.values() if not info.get("subtitles"))
+    
+    return {
+        "total": len(items),
+        "orphans": len(orphans),
+        "drives": dict(sorted(drives.items(), key=lambda x: x[1]["size"], reverse=True)),
+        "duplicates": len(dupes),
+        "dupe_details": {str(s): [(iid, info.get("path","")[:80]) for iid, info in entries] for s, entries in list(dupes.items())[:20]},
+        "quality": dict(quality),
+        "codec": dict(codec),
+        "no_size": no_size,
+        "no_subs": no_subs,
+    }
+
 def analyze_show(show_name, seasons_data):
     """Analyze a TV show for gaps, quality issues, and completion."""
     analysis = {"gaps": [], "quality_issues": [], "completion": {}, "next_episode": None}
@@ -2082,9 +2149,11 @@ def render_library_nav(user, active="library"):
         ("library", "📚 Library", f"{BASE}/library/{user}"),
         ("tvshows", "📺 TV Shows", f"{BASE}/tvshows/{user}"),
         ("scraper", "🔍 Scraper", f"{BASE}/scraper/{user}"),
+        ("org", "🗂 Organize", f"{BASE}/library/org/{user}"),
     ], active)
 
 def render_library(user):
+    """Library page with sub-navigation."""
     """Library curation: duplicates, quality comparison, cleanup suggestions."""
     library = load_user_tmm(user)
     titles = load_titles()
@@ -2429,6 +2498,13 @@ class H(BaseHTTPRequestHandler):
         users = list_users()
         return users[0] if users else "default"
 
+    def handle_one_request(self):
+        try:
+            super().handle_one_request()
+        except Exception as e:
+            print(f"[REQUEST ERROR] {e}")
+            import traceback; traceback.print_exc()
+
     def do_GET(self):
         parts = [p for p in self.path.split("?")[0].split("/") if p]
         qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
@@ -2614,6 +2690,42 @@ td{{padding:8px;border-bottom:1px solid #333}}a{{color:#4fc3f7;text-decoration:n
 <p style="color:#888">Titles from your watchlist now available on your streaming services</p>
 <table>{rows if rows else "<tr><td>No watchlisted titles currently available</td></tr>"}</table>
 <p style="margin-top:15px"><a href="{BASE}/u/{u}">← Back</a></p></body></html>""")
+            return
+        elif p.startswith("/library/org/"):
+            u = parts[-1]
+            analysis = analyze_library(u)
+            # Build drive table
+            drive_rows = ""
+            for path, info in analysis["drives"].items():
+                size_gb = info["size"] / (1024**3) if info["size"] else 0
+                drive_rows += "<tr><td>" + path[:60] + "</td><td>" + str(info["count"]) + "</td><td>" + f"{size_gb:.1f} GB" + "</td></tr>"
+            # Quality bars
+            max_q = max(analysis["quality"].values()) if analysis["quality"] else 1
+            q_bars = ""
+            for q in ["4K", "1080p", "720p", "SD"]:
+                c = analysis["quality"].get(q, 0)
+                if c: q_bars += '<div style="display:flex;gap:8px;align-items:center;margin:2px"><span style="width:50px;text-align:right">' + q + '</span><div style="background:var(--accent);height:16px;width:' + str(min(int(c/max_q*200),200)) + 'px;border-radius:3px"></div> ' + str(c) + '</div>'
+            html = page_head("Library Organization")
+            html += nav_bar("library", u)
+            html += render_library_nav(u, "org")
+            html += '<div class="page">'
+            html += '<div class="grid">'
+            html += '<div class="card card-stat"><div class="num">' + str(analysis["total"]) + '</div>titles</div>'
+            html += '<div class="card card-stat"><div class="num" style="color:var(--warn)">' + str(analysis["orphans"]) + '</div>unmatched</div>'
+            html += '<div class="card card-stat"><div class="num" style="color:var(--warn)">' + str(analysis["duplicates"]) + '</div>duplicate sizes</div>'
+            html += '<div class="card card-stat"><div class="num">' + str(analysis["no_size"]) + '</div>unsized</div>'
+            html += '<div class="card card-stat"><div class="num">' + str(analysis["no_subs"]) + '</div>no subs</div>'
+            html += '</div>'
+            html += '<div class="grid"><div class="card"><h3>Quality</h3>' + q_bars + '</div>'
+            html += '<div class="card"><h3>Drives</h3><table><tr><th>Path</th><th>Files</th><th>Size</th></tr>' + drive_rows + '</table></div></div>'
+            if analysis["dupe_details"]:
+                dupe_rows = ""
+                for size, entries in analysis["dupe_details"].items():
+                    for iid, path in entries:
+                        dupe_rows += "<tr><td>" + iid + "</td><td>" + path + "</td><td>" + str(int(int(size)/(1024*1024))) + " MB</td></tr>"
+                html += '<div class="card" style="margin-top:15px"><h3>Potential Duplicates (same file size)</h3><table><tr><th>ID</th><th>Path</th><th>Size</th></tr>' + dupe_rows + '</table></div>'
+            html += '</div>' + page_foot()
+            self._page(html, "library", u)
             return
         elif p.startswith("/scraper/"):
             u = parts[-1]
@@ -2833,6 +2945,25 @@ button{{padding:10px 20px;background:#4fc3f7;border:none;border-radius:6px;curso
                 except: pass
             self._json({"status": "ok"})
             return
+        elif p.startswith("/api/tasks/complete/"):
+            task_id = parts[-1]
+            import base64
+            encoded = qs.get("r", [""])[0]
+            result = None
+            if encoded:
+                try: result = json.loads(base64.b64decode(encoded).decode())
+                except: pass
+            complete_task(task_id, result)
+            self._json({"status": "ok"})
+            return
+        elif p.startswith("/api/agent_status"):
+            import base64
+            encoded = qs.get("s", [""])[0]
+            if encoded:
+                try: save_agent_status(json.loads(base64.b64decode(encoded).decode()))
+                except: pass
+            self._json({"status": "ok"})
+            return
         elif p == "/api/tasks":
             # Agent polls this for pending tasks
             self._json({"tasks": get_pending_tasks()})
@@ -2849,15 +2980,48 @@ button{{padding:10px 20px;background:#4fc3f7;border:none;border-radius:6px;curso
             self._html(render_ratings(user))
 
     def do_POST(self):
-        global TMDB_KEY, OMDB_KEY, TVDB_KEY, AGENT_TOKEN
-        print(f"[POST] {self.path}")
         try:
-            cl = int(self.headers.get("Content-Length", 0))
-            body = self.rfile.read(cl) if cl > 0 else b""
+            self._do_POST()
         except Exception as e:
-            print(f"[POST] body read error: {e}")
-            body = b""
+            print(f"[POST ERROR] {self.path}: {e}")
+            import traceback; traceback.print_exc()
+            try:
+                self.send_response(500)
+                self.end_headers()
+            except: pass
+
+    def _do_POST(self):
+        global TMDB_KEY, OMDB_KEY, TVDB_KEY, AGENT_TOKEN
+        cl = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(cl) if cl > 0 else b""
         parts = [p for p in self.path.split("?")[0].split("/") if p]
+        # Agent status - handle early
+        if self.path.startswith("/api/agent_status"):
+            if body:
+                try: save_agent_status(json.loads(body.decode()))
+                except: pass
+            self._json({"status": "ok"})
+            return
+        # Task completion - handle early
+        if self.path.startswith("/api/tasks/complete/"):
+            task_id = parts[-1]
+            try: complete_task(task_id, json.loads(body.decode()).get("result") if body else None)
+            except: pass
+            self._json({"status": "ok"})
+            return
+        # Library push - handle early
+        if self.path.startswith("/api/library/"):
+            user = parts[-1]
+            try:
+                data = json.loads(body.decode())
+                library = load_user_tmm(user)
+                library.update(data.get("library", {}))
+                save_user_tmm(user, library)
+                task_count = generate_tasks_for_library(user)
+                self._json({"status": "ok", "count": len(library), "tasks_generated": task_count})
+            except Exception as e:
+                self._json({"error": str(e)})
+            return
         # API endpoints first (before multipart parsing)
         if self.path == "/api/tasks":
             if body:

@@ -14,6 +14,39 @@ AGENT_VERSION = "2.1"
 CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "agent.json")
 LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "agent.log")
 _last_activity = {"task": "starting", "time": "", "errors": 0}
+BUFFER_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "agent_buffer.json")
+
+def buffer_result(task_id, result):
+    """Save completed task result locally when server is unreachable."""
+    buf = []
+    if os.path.exists(BUFFER_FILE):
+        try: buf = json.load(open(BUFFER_FILE))
+        except: pass
+    buf.append({"task_id": task_id, "result": result, "time": time.strftime("%Y-%m-%d %H:%M:%S")})
+    json.dump(buf, open(BUFFER_FILE, "w"))
+
+def flush_buffer(base_url, headers):
+    """Send buffered results to server."""
+    if not os.path.exists(BUFFER_FILE): return 0
+    try: buf = json.load(open(BUFFER_FILE))
+    except: return 0
+    if not buf: return 0
+    flushed = 0
+    remaining = []
+    for item in buf:
+        try:
+            import base64
+            payload = base64.b64encode(json.dumps(item["result"]).encode()).decode()
+            req = urllib.request.Request(
+                f"{base_url}/api/tasks/complete/{item['task_id']}?r={payload}",
+                headers=headers)
+            urllib.request.urlopen(req, timeout=5)
+            flushed += 1
+        except:
+            remaining.append(item)
+    json.dump(remaining, open(BUFFER_FILE, "w"))
+    if flushed: log(f"[task] Flushed {flushed} buffered results")
+    return flushed
 
 DEFAULT_CONFIG = {
     "_path_mappings": {
@@ -527,6 +560,8 @@ def daemon_mode(args, config):
                     sreq = urllib.request.Request(f"{base_url}/api/agent_status?s={encoded}", headers=headers)
                     urllib.request.urlopen(sreq, timeout=5)
                 except: pass
+                # Flush any buffered results first
+                flush_buffer(base_url, headers)
                 # Fetch tasks via GET
                 req = urllib.request.Request(f"{base_url}/api/tasks", headers=headers)
                 resp = urllib.request.urlopen(req, timeout=10)
