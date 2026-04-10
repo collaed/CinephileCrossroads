@@ -1616,13 +1616,17 @@ def render_library(user):
     from collections import defaultdict
     by_title_year = defaultdict(list)
     for iid, info in library.items():
-        if not isinstance(info, dict): continue
-        path = info.get("path", "")
-        if not path: continue
-        t = (info.get("title") or titles.get(iid, {}).get("title") or "").strip()
-        y = str(info.get("year") or titles.get(iid, {}).get("year") or "")
-        key = (t.lower() + "|" + y) if t else iid
-        by_title_year[key].append((iid, info))
+        if iid == "_episodes": continue
+        # Handle list entries (multiple files for same IMDB ID)
+        entries = info if isinstance(info, list) else [info] if isinstance(info, dict) else []
+        for entry in entries:
+            if not isinstance(entry, dict): continue
+            path = entry.get("path", "")
+            if not path: continue
+            t = (entry.get("title") or titles.get(iid, {}).get("title") or "").strip()
+            y = str(entry.get("year") or titles.get(iid, {}).get("year") or "")
+            key = (t.lower() + "|" + y) if t else iid
+            by_title_year[key].append((iid, entry))
     by_title = {k: v for k, v in by_title_year.items() if len(v) > 1}
 
     # Also detect same IMDB ID with different paths (true duplicates)
@@ -2308,7 +2312,37 @@ button{{padding:10px 20px;background:#4fc3f7;border:none;border-radius:6px;curso
                 return
             data = json.loads(body.decode())
             library = load_user_tmm(user)
-            library.update(data.get("library", {}))
+            incoming = data.get("library", {})
+            for iid, info in incoming.items():
+                if iid in library:
+                    existing = library[iid]
+                    if isinstance(info, list):
+                        if isinstance(existing, list):
+                            # Merge by path to avoid exact duplicates
+                            existing_paths = {e.get("path","") for e in existing if isinstance(e, dict)}
+                            for item in info:
+                                if isinstance(item, dict) and item.get("path","") not in existing_paths:
+                                    existing.append(item)
+                        else:
+                            existing_paths = {existing.get("path","")} if isinstance(existing, dict) else set()
+                            new_items = [existing] if isinstance(existing, dict) else []
+                            for item in info:
+                                if isinstance(item, dict) and item.get("path","") not in existing_paths:
+                                    new_items.append(item)
+                            library[iid] = new_items if len(new_items) > 1 else new_items[0] if new_items else info
+                    elif isinstance(info, dict):
+                        if isinstance(existing, list):
+                            if info.get("path","") not in {e.get("path","") for e in existing if isinstance(e, dict)}:
+                                existing.append(info)
+                        elif isinstance(existing, dict):
+                            if info.get("path","") != existing.get("path",""):
+                                library[iid] = [existing, info]
+                            else:
+                                existing.update(info)
+                    else:
+                        library[iid] = info
+                else:
+                    library[iid] = info
             save_user_tmm(user, library)
             self._json({"status": "ok", "count": len(library)})
             return

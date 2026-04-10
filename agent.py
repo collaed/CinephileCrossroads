@@ -274,7 +274,15 @@ def fetch_tmm(cfg):
                             info.setdefault("subtitles", [])
                             info["subtitles"].extend(ext_subs)
                         info["quality"] = str(info.get("video_height", ""))
-                        lib[iid] = info
+                        if iid in lib:
+                            # Duplicate! Convert to list
+                            existing = lib[iid]
+                            if isinstance(existing, list):
+                                existing.append(info)
+                            else:
+                                lib[iid] = [existing, info]
+                        else:
+                            lib[iid] = info
                 except: pass
         return lib
     # Mode 2: TMM HTTP API — export to temp dir on same machine, then read
