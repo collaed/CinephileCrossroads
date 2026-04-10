@@ -8,20 +8,6 @@ if (-NOT ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdenti
 Write-Host "CineCross Windows Setup" -ForegroundColor Cyan
 Write-Host ""
 
-# 1. Install NFS Client
-Write-Host "Installing NFS Client..." -ForegroundColor Yellow
-try {
-    $nfs = Get-WindowsOptionalFeature -Online -FeatureName "ServicesForNFS-ClientOnly" -ErrorAction Stop
-    if ($nfs.State -eq "Enabled") {
-        Write-Host "  NFS Client: already installed" -ForegroundColor Green
-    } else {
-        Enable-WindowsOptionalFeature -Online -FeatureName "ServicesForNFS-ClientOnly" -All -NoRestart -ErrorAction Stop
-        Write-Host "  NFS Client: installed (reboot may be needed)" -ForegroundColor Green
-    }
-} catch {
-    Write-Host "  NFS Client: skipped (optional, SMB works without it)" -ForegroundColor Gray
-}
-
 # 2. Install ffmpeg
 Write-Host ""
 Write-Host "Installing ffmpeg..." -ForegroundColor Yellow
