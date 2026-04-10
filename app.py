@@ -50,6 +50,7 @@ LU_PROVIDER_IDS = {"Netflix": 8, "Amazon Prime Video": 119, "Disney Plus": 337} 
 
 # ── Server Task Queue (for agent) ─────────────────────────────────────
 TASK_QUEUE_FILE = f"{DATA_DIR}/task_queue.json"
+AGENT_STATUS_FILE = f"{DATA_DIR}/agent_status.json"
 
 def load_task_queue():
     if os.path.exists(TASK_QUEUE_FILE):
@@ -61,6 +62,14 @@ def save_task_queue(queue):
 
 
 # ── Auto-task generation ──────────────────────────────────────────────
+def save_agent_status(status):
+    status["last_seen"] = time.strftime("%Y-%m-%d %H:%M:%S")
+    json.dump(status, open(AGENT_STATUS_FILE, "w"))
+
+def load_agent_status():
+    if os.path.exists(AGENT_STATUS_FILE): return json.load(open(AGENT_STATUS_FILE))
+    return {}
+
 def generate_tasks_for_library(user):
     """Analyze library and enqueue tasks for the agent. Priority: 0=dupes, 1=quality, 2=subs."""
     library = load_user_tmm(user)
@@ -1604,6 +1613,20 @@ def import_csv(user, text):
     print(f"Imported {len(ratings)} ratings for {user}, {len(titles)} titles total")
 
 # ── HTML rendering ────────────────────────────────────────────────────
+def _render_agent_status():
+    s = load_agent_status()
+    if not s: return '<p style="color:#888">No agent connected</p>'
+    version = s.get("agent_version", "?")
+    uptime_s = s.get("uptime", 0)
+    uptime = str(uptime_s // 3600) + "h " + str((uptime_s % 3600) // 60) + "m"
+    last = s.get("last_activity", {})
+    errors = s.get("consecutive_errors", 0)
+    dot = "🟢" if errors == 0 else "🔴"
+    logs = s.get("recent_logs", [])
+    log_lines = "".join(l.rstrip() + "\n" for l in logs[-8:])
+    log_html = '<pre style="font-size:.75em;max-height:120px;overflow-y:auto;background:#1a1a2e;padding:8px;border-radius:4px;margin-top:8px">' + log_lines + '</pre>' if logs else ""
+    return dot + ' <b>Agent v' + version + '</b> · Seen: ' + s.get("last_seen","?") + ' · Up: ' + uptime + ' · Last: ' + last.get("task","idle") + ' at ' + last.get("time","?") + log_html
+
 def _render_provider_config(user):
     all_provs = get_all_providers()
     active = get_user_active_providers(user)
@@ -1836,6 +1859,11 @@ def render_setup(user):
     html += '<h3>IMDB Dataset</h3>'
     html += '<p>Download IMDB bulk data (200K+ titles, ~220MB). Eliminates most API calls.</p>'
     html += '<a href="' + BASE + '/datasets/download" style="display:inline-block;padding:8px 16px;background:#1a1a2e;border:1px solid #4fc3f7;border-radius:6px;color:#4fc3f7;text-decoration:none">Download IMDB Datasets</a><hr>'
+    
+    # Agent Status
+    html += '<h3>Agent Status</h3>'
+    html += _render_agent_status()
+    html += '<hr>'
     
     # Streaming Region
     html += '<h3>Streaming Region</h3>'
@@ -2892,6 +2920,13 @@ button{{padding:10px 20px;background:#4fc3f7;border:none;border-radius:6px;curso
                     library[iid]["thumbnail"] = "/thumbnails/" + iid.replace("/","_") + ".jpg"
                     save_user_tmm(user, library)
             self._json({"status": "ok"})
+            return
+        elif self.path == "/api/tasks":
+            # Agent handshake: POST status, receive tasks
+            if body:
+                try: save_agent_status(json.loads(body.decode()))
+                except: pass
+            self._json({"tasks": get_pending_tasks()})
             return
         elif self.path.startswith("/api/tasks/complete/"):
             task_id = parts[-1]

@@ -10,7 +10,10 @@ Run via cron for automatic sync: */30 * * * * python3 /path/to/agent.py --server
 """
 import json, os, sys, urllib.request, urllib.parse, argparse
 
+AGENT_VERSION = "2.1"
 CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "agent.json")
+LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "agent.log")
+_last_activity = {"task": "starting", "time": "", "errors": 0}
 
 DEFAULT_CONFIG = {
     "_path_mappings": {
@@ -27,6 +30,27 @@ DEFAULT_CONFIG = {
     "_agent_token": "paste-your-token-here",
     "tmm": {"enabled": False, "path": "/path/to/tmm/movies", "url": "http://192.168.1.x:7878", "token": "", "template": "ListExampleCSV"},
 }
+
+def log(msg):
+    """Print and append to log file."""
+    line = time.strftime("%H:%M:%S") + " " + msg
+    print(line)
+    try:
+        with open(LOG_FILE, "a") as f:
+            f.write(line + "\n")
+        # Keep log file under 50KB
+        if os.path.getsize(LOG_FILE) > 50000:
+            lines = open(LOG_FILE).readlines()
+            open(LOG_FILE, "w").writelines(lines[-200:])
+    except: pass
+
+def get_recent_logs(n=20):
+    """Get last N lines from the log file."""
+    try:
+        if os.path.exists(LOG_FILE):
+            return open(LOG_FILE).readlines()[-n:]
+    except: pass
+    return []
 
 def api_get(url):
     try:
@@ -469,32 +493,45 @@ def daemon_mode(args, config):
                     try:
                         items = FETCHERS[name](cfg)
                         library.update(items)
-                        print(f"[sync] {name}: {len(items)} titles")
+                        log(f"[sync] {name}: {len(items)} titles")
                     except Exception as e:
-                        print(f"[sync] {name} error: {e}")
+                        log(f"[sync] {name} error: {e}")
                 if library:
                     library = compute_hashes(library)
                     api_post(f"{base_url}/api/library/{args.user}", {"library": library})
-                    print(f"[sync] Pushed {len(library)} titles")
+                    log(f"[sync] Pushed {len(library)} titles")
             except Exception as e:
-                print(f"[sync] Error: {e}")
+                log(f"[sync] Error: {e}")
                 time.sleep(60)  # Retry sooner on error
                 continue
             time.sleep(1800)  # Every 30 min
     
+    _start_time = time.time()
+
     def task_loop():
         consecutive_errors = 0
         """Poll server for tasks and execute them."""
         while True:
             try:
-                req = urllib.request.Request(f"{base_url}/api/tasks", headers=headers)
+                # Handshake: send status with every poll
+                status_payload = json.dumps({
+                    "agent_version": AGENT_VERSION,
+                    "last_activity": _last_activity,
+                    "recent_logs": get_recent_logs(10),
+                    "uptime": int(time.time() - _start_time),
+                    "consecutive_errors": consecutive_errors,
+                }).encode()
+                req = urllib.request.Request(f"{base_url}/api/tasks", data=status_payload, 
+                    headers={**headers, "Content-Type": "application/json"}, method="POST")
                 resp = urllib.request.urlopen(req, timeout=10)
                 tasks = json.loads(resp.read()).get("tasks", [])
                 
                 for task in tasks:
                     tid, ttype = task["id"], task["type"]
                     params = task.get("params", {})
-                    print(f"[task] {ttype} ({tid})")
+                    log(f"[task] {ttype} ({tid})")
+                    _last_activity["task"] = ttype
+                    _last_activity["time"] = time.strftime("%H:%M:%S")
                     result = run_task(ttype, params, config)
                     # Report completion
                     try:
@@ -502,25 +539,29 @@ def daemon_mode(args, config):
                             f"{base_url}/api/tasks/complete/{tid}",
                             data=json.dumps({"result": result}).encode(), headers=headers)
                         urllib.request.urlopen(req, timeout=10)
-                        print(f"[task] Done: {ttype} -> {result.get('error', 'ok')}")
+                        log(f"[task] Done: {ttype} -> {result.get('error', 'ok')}")
                     except Exception as e:
-                        print(f"[task] Report failed: {e}")
+                        log(f"[task] Report failed: {e}")
             except Exception as e:
                 if consecutive_errors == 0:
-                    print(f"[task] Connection lost: {e}")
+                    log(f"[task] Connection lost: {e}")
                 consecutive_errors += 1
+                _last_activity["errors"] = consecutive_errors
                 # Back off: 15s, 30s, 60s, then cap at 60s
                 wait = min(15 * (2 ** min(consecutive_errors - 1, 2)), 60)
                 if consecutive_errors % 4 == 0:
-                    print(f"[task] Still retrying... ({consecutive_errors} attempts)")
+                    log(f"[task] Still retrying... ({consecutive_errors} attempts)")
                 time.sleep(wait)
                 continue
+            if consecutive_errors > 0:
+                log(f"[task] Reconnected after {consecutive_errors} errors")
             consecutive_errors = 0
+            _last_activity["errors"] = 0
             time.sleep(15)  # Check every 15s
     
-    print(f"Agent daemon — server: {base_url}, user: {args.user}")
-    print(f"  Sync thread: every 30 min")
-    print(f"  Task thread: every 15 sec")
+    log(f"Agent daemon — server: {base_url}, user: {args.user}")
+    log(f"  Sync thread: every 30 min")
+    log(f"  Task thread: every 15 sec")
     
     threading.Thread(target=sync_loop, daemon=True).start()
     task_loop()  # Run task loop in main thread
