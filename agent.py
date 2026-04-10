@@ -357,15 +357,16 @@ def check_prerequisites():
     import shutil
     issues = []
 
-    # Check ffmpeg
-    if not shutil.which("ffmpeg"):
-        issues.append(("ffmpeg", "Required for video thumbnails"))
-
-    # Check NFS on Windows
-    if os.name == "nt":
-        nfs = shutil.which("mount")
-        if not nfs:
-            issues.append(("NFS client", "Required for NFS share access"))
+    # Check ffmpeg (try both name and .exe, also try running it)
+    ffmpeg_ok = shutil.which("ffmpeg") or shutil.which("ffmpeg.exe")
+    if not ffmpeg_ok:
+        try:
+            import subprocess
+            subprocess.run(["ffmpeg", "-version"], capture_output=True, timeout=5)
+            ffmpeg_ok = True
+        except: pass
+    if not ffmpeg_ok:
+        issues.append(("ffmpeg", "Optional — needed for video thumbnails"))
 
     if issues:
         print("\n⚠ Missing components:")
