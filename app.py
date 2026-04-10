@@ -972,12 +972,10 @@ def enrich_titles(jid=None):
     never = [(k, v) for k, v in titles.items() if not v.get("_enriched")]
     partial = sorted([(k, v) for k, v in titles.items() if v.get("_enriched") and _richness(v) < 5],
                      key=lambda x: _richness(x[1]))
-    # FIFO: re-enrich oldest titles (enriched_ts > 30 days ago), limited batch
-    import datetime
-    stale_cutoff = (datetime.datetime.now() - datetime.timedelta(days=30)).isoformat()
+    # FIFO: re-enrich the 50 oldest-enriched titles regardless of age
     stale = sorted([(k, v) for k, v in titles.items()
-                    if v.get("_enriched") and v.get("_enriched_ts", "") < stale_cutoff and _richness(v) >= 5],
-                   key=lambda x: x[1].get("_enriched_ts", ""))[:50]  # Max 50 stale per run
+                    if v.get("_enriched") and v.get("_enriched_ts") and _richness(v) >= 5],
+                   key=lambda x: x[1].get("_enriched_ts", ""))[:50]
     todo = never + partial + stale
     total = len(todo)
     count = 0
