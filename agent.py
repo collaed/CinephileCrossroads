@@ -19,6 +19,7 @@ DEFAULT_CONFIG = {
     "kodi": {"enabled": False, "url": "http://192.168.1.x:8080/jsonrpc"},
     "radarr": {"enabled": False, "url": "http://192.168.1.x:7878", "token": ""},
     "sonarr": {"enabled": False, "url": "http://192.168.1.x:8989", "token": ""},
+    "tmm": {"enabled": False, "url": "http://192.168.1.x:7878", "token": "your-tmm-api-key"},
 }
 
 def api_get(url):
@@ -133,8 +134,50 @@ def find_missing_subs(library):
     return [iid for iid, info in library.items()
             if not info.get("subtitles") and info.get("path")]
 
+def fetch_tmm(cfg):
+    """Fetch library from tinyMediaManager via HTTP API export."""
+    import tempfile
+    lib = {}
+    url = cfg["url"].rstrip("/")
+    key = cfg.get("token", "")
+    headers = {"Content-Type": "application/json", "api-key": key}
+    # Trigger export to a temp path
+    export_path = tempfile.mkdtemp()
+    for kind, endpoint in [("movie", "/api/movie"), ("tvshow", "/api/tvshow")]:
+        payload = json.dumps([
+            {"action": "update", "scope": {"name": "all"}},
+            {"action": "export", "scope": {"name": "all"},
+             "args": {"template": "MovieListCSV" if kind == "movie" else "TvShowListCSV",
+                      "exportPath": export_path}}
+        ]).encode()
+        req = urllib.request.Request(url + endpoint, data=payload, headers=headers)
+        try:
+            urllib.request.urlopen(req, timeout=60)
+            # Wait for export to complete
+            import time; time.sleep(5)
+        except Exception as e:
+            print(f"  TMM {kind} export error: {e}")
+            continue
+    # Parse any CSV files in the export path
+    import csv, glob
+    for csvfile in glob.glob(export_path + "/*.csv"):
+        try:
+            with open(csvfile) as f:
+                for row in csv.DictReader(f):
+                    iid = row.get("IMDb Id", row.get("imdbId", row.get("IMDB ID", "")))
+                    if not iid: continue
+                    lib[iid] = {
+                        "path": row.get("Path", row.get("path", "")),
+                        "quality": row.get("Video Resolution", ""),
+                        "source": "tmm",
+                    }
+        except: pass
+    # Cleanup
+    import shutil; shutil.rmtree(export_path, ignore_errors=True)
+    return lib
+
 FETCHERS = {"plex": fetch_plex, "jellyfin": fetch_jellyfin, "emby": fetch_jellyfin,
-            "kodi": fetch_kodi, "radarr": fetch_radarr, "sonarr": fetch_sonarr}
+            "kodi": fetch_kodi, "radarr": fetch_radarr, "sonarr": fetch_sonarr, "tmm": fetch_tmm}
 
 def main():
     parser = argparse.ArgumentParser(description="CinephileCrossroads LAN Agent")

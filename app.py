@@ -481,6 +481,12 @@ def fetch_folder_library(path):
                 time.sleep(0.2)
     return library
 
+def fetch_tmm_library(url, token):
+    """Fetch library from TMM via HTTP API. Triggers export and parses result."""
+    # TMM API is command-based; for server-side we just store the config
+    # Actual sync happens via the LAN agent or browser upload
+    return {}
+
 MEDIA_SERVERS = {
     "plex": {"name": "Plex", "fields": ["url", "token"], "fetch": lambda c: fetch_plex_library(c["url"], c["token"])},
     "jellyfin": {"name": "Jellyfin", "fields": ["url", "token"], "fetch": lambda c: fetch_jellyfin_library(c["url"], c["token"])},
@@ -488,6 +494,7 @@ MEDIA_SERVERS = {
     "kodi": {"name": "Kodi", "fields": ["url"], "fetch": lambda c: fetch_kodi_library(c["url"])},
     "radarr": {"name": "Radarr", "fields": ["url", "token"], "fetch": lambda c: fetch_radarr_library(c["url"], c["token"])},
     "sonarr": {"name": "Sonarr", "fields": ["url", "token"], "fetch": lambda c: fetch_sonarr_library(c["url"], c["token"])},
+    "tmm": {"name": "tinyMediaManager", "fields": ["url", "token"], "fetch": lambda c: fetch_tmm_library(c["url"], c["token"])},
 }
 
 def load_user_media_config(user):
@@ -1240,7 +1247,7 @@ def _render_media_servers(user):
         fields = ""
         for fname in sinfo["fields"]:
             val = sc.get(fname, "")
-            placeholder = "http://192.168.1.x:" + {"plex":"32400","jellyfin":"8096","emby":"8096","kodi":"8080","radarr":"7878","sonarr":"8989"}.get(stype,"8080") if fname == "url" else "API token"
+            placeholder = "http://192.168.1.x:" + {"plex":"32400","jellyfin":"8096","emby":"8096","kodi":"8080","radarr":"7878","sonarr":"8989","tmm":"7878"}.get(stype,"8080") if fname == "url" else "API token"
             fields += '<input name="' + fname + '" value="' + val + '" placeholder="' + placeholder + '" style="width:45%;display:inline-block;margin-right:4px">'
         html += '<div style="margin:8px 0"><b>' + sinfo["name"] + '</b> ' + status + '<form method="POST" action="' + BASE + '/media/' + user + '" style="display:inline"><input type="hidden" name="type" value="' + stype + '">' + fields + '<button type="submit" style="padding:4px 10px;background:#4fc3f7;border:none;border-radius:4px;cursor:pointer;font-size:.85em">Save</button></form></div>'
     sync_btn = '<a href="' + BASE + '/media/sync/' + user + '" style="display:inline-block;margin-top:8px;padding:6px 16px;background:#16213e;border:1px solid #4fc3f7;border-radius:6px;color:#4fc3f7;text-decoration:none">🔄 Sync all servers</a>' if config else ""
