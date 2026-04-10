@@ -458,19 +458,25 @@ def main():
     # Map paths and get file sizes
     print("Mapping paths and getting file sizes...")
     sized = 0
-    for iid, info in library.items():
-        if not isinstance(info, dict): continue
-        path = info.get("path", "")
+    for iid, val in library.items():
+        if iid == "_episodes": continue
+        entries = val if isinstance(val, list) else [val] if isinstance(val, dict) else []
+        for info in entries:
+            if not isinstance(info, dict): continue
+            path = info.get("path", "")
         if path:
             mapped = map_path(path, config)
             if mapped != path:
                 info["local_path"] = mapped
+            # On Windows, fix forward slashes
+            if os.name == "nt":
+                mapped = mapped.replace("/", "\\")
             path = mapped
         if path and os.path.isfile(path):
-            try:
-                info["file_size"] = os.path.getsize(path)
-                sized += 1
-            except: pass
+                try:
+                    info["file_size"] = os.path.getsize(path)
+                    sized += 1
+                except: pass
     print(f"  {sized} files sized")
 
     # Compute file hashes for subtitle matching
