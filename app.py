@@ -43,6 +43,32 @@ TITLES_FILE = f"{DATA_DIR}/titles.json"
 CATALOG_FILE = f"{DATA_DIR}/catalog.json"
 CATALOG_PREV = f"{DATA_DIR}/catalog_prev.json"
 KEYS_FILE = f"{DATA_DIR}/api_keys.json"
+
+import threading as _threading
+_file_locks = {}
+_lock_lock = _threading.Lock()
+
+def _get_lock(path):
+    with _lock_lock:
+        if path not in _file_locks:
+            _file_locks[path] = _threading.Lock()
+        return _file_locks[path]
+
+def safe_json_load(path):
+    lock = _get_lock(path)
+    with lock:
+        if os.path.exists(path):
+            return json.load(open(path))
+    return None
+
+def safe_json_save(path, data):
+    lock = _get_lock(path)
+    with lock:
+        os.makedirs(os.path.dirname(path) if os.path.dirname(path) else '.', exist_ok=True)
+        with open(path + '.tmp', 'w') as f:
+            json.dump(data, f)
+        os.replace(path + '.tmp', path)
+
 PORT = 8000
 AGENT_TOKEN = os.environ.get("AGENT_TOKEN", "")
 BASE = "/imdb"
@@ -55,12 +81,10 @@ TASK_QUEUE_FILE = f"{DATA_DIR}/task_queue.json"
 AGENT_STATUS_FILE = f"{DATA_DIR}/agent_status.json"
 
 def load_task_queue():
-    if os.path.exists(TASK_QUEUE_FILE):
-        return json.load(open(TASK_QUEUE_FILE))
-    return []
+    return safe_json_load(TASK_QUEUE_FILE) or []
 
 def save_task_queue(queue):
-    json.dump(queue, open(TASK_QUEUE_FILE, "w"))
+    safe_json_save(TASK_QUEUE_FILE, queue)
 
 
 # ── Auto-task generation ──────────────────────────────────────────────
@@ -300,8 +324,7 @@ def load_titles():
     return {}
 
 def save_titles(titles):
-    os.makedirs(DATA_DIR, exist_ok=True)
-    json.dump(titles, open(TITLES_FILE, "w"))
+    safe_json_save(TITLES_FILE, titles)
 
 def get_title(titles, imdb_id):
     """Get metadata for a single title from the shared store."""
