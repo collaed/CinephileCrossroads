@@ -47,52 +47,6 @@ BASE = "/imdb"
 PROVIDER_ICONS = {"Netflix": "🟥", "Amazon Prime Video": "📦", "Disney Plus": "🏰", "Max": "🟪", "Apple TV Plus": "🍎"}
 LU_PROVIDER_IDS = {"Netflix": 8, "Amazon Prime Video": 119, "Disney Plus": 337}  # TMDB provider IDs per country
 
-
-# ── Server Task Queue (for agent) ─────────────────────────────────────
-TASK_QUEUE_FILE = f"{DATA_DIR}/task_queue.json"
-
-def load_task_queue():
-    if os.path.exists(TASK_QUEUE_FILE):
-        return json.load(open(TASK_QUEUE_FILE))
-    return []
-
-def save_task_queue(queue):
-    json.dump(queue, open(TASK_QUEUE_FILE, "w"))
-
-def enqueue_task(task_type, params=None, priority=0):
-    """Add a task for the agent. Priority: 0=high, 1=medium, 2=low.
-    Types: find_duplicates, check_quality, download_subs, scrape_movie, rename_file"""
-    queue = load_task_queue()
-    queue.append({
-        "id": f"task_{int(time.time()*1000)}",
-        "type": task_type,
-        "params": params or {},
-        "priority": priority,
-        "status": "pending",
-        "created": time.strftime("%Y-%m-%d %H:%M:%S"),
-    })
-    queue.sort(key=lambda t: t["priority"])
-    save_task_queue(queue)
-
-def get_pending_tasks(limit=10):
-    """Get next pending tasks for the agent."""
-    queue = load_task_queue()
-    pending = [t for t in queue if t["status"] == "pending"]
-    return pending[:limit]
-
-def complete_task(task_id, result=None):
-    """Mark a task as complete."""
-    queue = load_task_queue()
-    for t in queue:
-        if t["id"] == task_id:
-            t["status"] = "done"
-            t["result"] = result
-            t["completed"] = time.strftime("%Y-%m-%d %H:%M:%S")
-    # Keep only last 100 completed
-    done = [t for t in queue if t["status"] == "done"]
-    pending = [t for t in queue if t["status"] != "done"]
-    save_task_queue(pending + done[-100:])
-
 # ── Background jobs ───────────────────────────────────────────────────
 _jobs = {}
 _job_lock = threading.Lock()
@@ -355,108 +309,6 @@ def tvdb_enrich(imdb_id):
     if not data or not data.get("data"): return {}
     r = data["data"][0] if isinstance(data["data"], list) else data["data"]
     return {"tvdb_id": r.get("id")}
-
-
-# ── Movie Scraper ─────────────────────────────────────────────────────
-import re as _re
-
-def parse_movie_filename(filename):
-    """Extract title, year, quality, 3D format from a media filename."""
-    name = os.path.splitext(os.path.basename(filename))[0]
-    # 3D detection
-    is_3d = None
-    for pattern, fmt in [("hsbs", "HSBS"), ("sbs", "SBS"), ("htab", "HTAB"), ("tab", "TAB"), ("mvc", "MVC")]:
-        if pattern in name.lower():
-            is_3d = fmt
-            name = _re.sub(pattern, "", name, flags=_re.IGNORECASE)
-    # Quality
-    quality = ""
-    for q in ["2160p", "1080p", "720p", "480p", "4K", "UHD"]:
-        if q.lower() in name.lower():
-            quality = q; break
-    # Year
-    year_match = _re.search(r"[\.\s\-_\(]((?:19|20)\d{2})[\.\s\-_\)]", name)
-    year = year_match.group(1) if year_match else ""
-    # Title: everything before the year
-    if year:
-        title = name[:name.find(year)].strip()
-    else:
-        title = name
-    title = _re.sub(r"[\.\-_]", " ", title).strip()
-    title = _re.sub(r"\s+", " ", title)
-    return {"title": title, "year": year, "quality": quality, "is_3d": is_3d, "filename": filename}
-
-def identify_movie(parsed, imdb_cache=None):
-    """Match a parsed filename to a title via IMDB dataset or TMDB search."""
-    title, year = parsed["title"], parsed["year"]
-    # Try IMDB dataset first (instant, no API call)
-    if imdb_cache:
-        for iid, t in imdb_cache.items():
-            if t.get("title","").lower() == title.lower() and str(t.get("year","")) == year:
-                return iid, t
-    # Fallback to TMDB search
-    if TMDB_KEY:
-        q = urllib.parse.quote(title)
-        url = f"https://api.themoviedb.org/3/search/movie?api_key={TMDB_KEY}&query={q}"
-        if year: url += f"&year={year}"
-        data = api_get(url)
-        if data and data.get("results"):
-            r = data["results"][0]
-            ext = api_get(f"https://api.themoviedb.org/3/movie/{r['id']}/external_ids?api_key={TMDB_KEY}")
-            if ext and ext.get("imdb_id"):
-                return ext["imdb_id"], {"title": r.get("title",""), "year": (r.get("release_date") or "")[:4], "tmdb_id": r["id"]}
-    return None, None
-
-def generate_nfo(imdb_id, title_data, filepath):
-    """Generate a Kodi-compatible NFO file for a movie."""
-    nfo_path = os.path.splitext(filepath)[0] + ".nfo"
-    t = title_data
-    nfo = f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<movie>
-  <title>{t.get("title","")}</title>
-  <year>{t.get("year","")}</year>
-  <uniqueid type="imdb" default="true">{imdb_id}</uniqueid>
-  <uniqueid type="tmdb">{t.get("tmdb_id","")}</uniqueid>
-  <plot>{t.get("overview","")}</plot>
-  <genre>{t.get("genres","")}</genre>
-  <director>{t.get("directors","")}</director>
-  <rating>{t.get("imdb_rating","")}</rating>
-</movie>"""
-    return nfo_path, nfo
-
-def smart_rename(filepath, imdb_id, title_data, parsed):
-    """Generate a clean filename: Title (Year) [Quality].ext"""
-    ext = os.path.splitext(filepath)[1]
-    title = _re.sub(r'[<>:"/\\|?*]', '', title_data.get("title", ""))
-    year = title_data.get("year", parsed.get("year", ""))
-    quality = parsed.get("quality", "")
-    is_3d = parsed.get("is_3d", "")
-    parts = [title]
-    if year: parts[0] += f" ({year})"
-    if quality: parts.append(f"[{quality}]")
-    if is_3d: parts.append(f"[{is_3d}]")
-    return " ".join(parts) + ext
-
-def scrape_movie_batch(filepaths, jid=None):
-    """Identify and scrape metadata for a batch of movie files.
-    Returns list of {filepath, imdb_id, title_data, parsed, nfo, new_name, status}."""
-    imdb_cache = load_imdb_cache() if os.path.exists(IMDB_DATASET_DIR) else None
-    results = []
-    for i, fp in enumerate(filepaths):
-        parsed = parse_movie_filename(fp)
-        iid, tdata = identify_movie(parsed, imdb_cache)
-        status = "matched" if iid else "unmatched"
-        nfo_path, nfo_content = generate_nfo(iid, tdata or {}, fp) if iid else (None, None)
-        new_name = smart_rename(fp, iid, tdata or {}, parsed) if iid else None
-        results.append({
-            "filepath": fp, "imdb_id": iid, "title_data": tdata,
-            "parsed": parsed, "nfo_path": nfo_path, "nfo_content": nfo_content,
-            "new_name": new_name, "status": status
-        })
-        if jid and (i+1) % 10 == 0:
-            job_progress(jid, i+1, len(filepaths), f"Identified {i+1}/{len(filepaths)}")
-        time.sleep(0.1)
-    return results
 
 # ── Media Server Integrations ─────────────────────────────────────────
 # Each adapter returns {imdb_id: {path, quality, size}} like TMM
@@ -755,45 +607,6 @@ def seasonal_keywords():
     return {}
 
 # ── Watchlist ─────────────────────────────────────────────────────────
-
-# ── Social + Alerts ───────────────────────────────────────────────────
-def get_available_alerts(user):
-    """Check if any watchlisted titles just became available on streaming."""
-    wl = load_watchlist(user)
-    titles = load_titles()
-    provs = get_user_active_providers(user)
-    alerts = []
-    for iid in wl:
-        t = titles.get(iid, {})
-        tp = set(t.get("providers", []))
-        if tp & provs:
-            alerts.append({"id": iid, "title": t.get("title",""), "providers": list(tp & provs)})
-    return alerts
-
-def get_activity_feed(limit=20):
-    """Recent activity across all users."""
-    feed = []
-    for user in list_users():
-        ratings = load_user_ratings(user)
-        titles = load_titles()
-        for iid, r in ratings.items():
-            if r.get("date"):
-                t = titles.get(iid, {})
-                feed.append({"user": user, "action": "rated", "title": t.get("title", iid),
-                             "rating": r["rating"], "date": r["date"], "id": iid})
-    feed.sort(key=lambda x: x["date"], reverse=True)
-    return feed[:limit]
-
-def taste_compatibility(u1, u2):
-    """Calculate taste compatibility between two users (0-100%)."""
-    r1, r2 = load_user_ratings(u1), load_user_ratings(u2)
-    common = set(r1.keys()) & set(r2.keys())
-    if len(common) < 5: return None
-    diffs = [abs(r1[i]["rating"] - r2[i]["rating"]) for i in common]
-    avg_diff = sum(diffs) / len(diffs)
-    # 0 diff = 100%, 5 diff = 0%
-    return max(0, round((1 - avg_diff / 5) * 100))
-
 def load_watchlist(user):
     f = user_dir(user) + "/watchlist.json"
     if os.path.exists(f): return json.load(open(f))
@@ -1147,56 +960,6 @@ def get_streaming_recs(user, titles, n=30):
     return get_recommendations(user, titles, n, provider_filter=get_user_active_providers(user))
 
 # ── Enrichment ────────────────────────────────────────────────────────
-
-# ── Recommendations v2 ────────────────────────────────────────────────
-def collaborative_recommendations(user, titles, n=20):
-    """Find titles loved by users with similar taste (pseudo-collaborative).
-    Uses TMDB 'similar' data as a proxy for collaborative filtering."""
-    ratings = load_user_ratings(user)
-    rated_ids = set(ratings.keys())
-    # Collect similar titles from highly-rated movies
-    similar_scores = {}
-    for iid, r in ratings.items():
-        if r["rating"] < 7: continue
-        t = titles.get(iid, {})
-        for sim_tmdb in t.get("similar_tmdb", []):
-            # Find IMDB ID for this TMDB ID
-            for sid, st in titles.items():
-                if st.get("tmdb_id") == sim_tmdb and sid not in rated_ids:
-                    similar_scores[sid] = similar_scores.get(sid, 0) + r["rating"] / 10
-                    break
-    return sorted(similar_scores.items(), key=lambda x: x[1], reverse=True)[:n]
-
-def anti_recommendations(user, titles, n=10):
-    """Titles you'd probably hate — high-rated titles in genres you consistently rate low."""
-    ratings = load_user_ratings(user)
-    genre_avg = {}
-    genre_count = {}
-    for iid, r in ratings.items():
-        t = titles.get(iid, {})
-        for g in (t.get("genres") or "").split(","):
-            g = g.strip()
-            if not g: continue
-            genre_avg[g] = genre_avg.get(g, 0) + r["rating"]
-            genre_count[g] = genre_count.get(g, 0) + 1
-    # Find genres with low average (< 5) and enough samples (3+)
-    hated_genres = set()
-    for g, total in genre_avg.items():
-        avg = total / genre_count[g]
-        if avg < 5 and genre_count[g] >= 3:
-            hated_genres.add(g)
-    if not hated_genres: return []
-    # Find highly-rated titles in those genres
-    anti = []
-    rated_ids = set(ratings.keys())
-    for iid, t in titles.items():
-        if iid in rated_ids: continue
-        t_genres = set(g.strip() for g in (t.get("genres") or "").split(","))
-        if t_genres & hated_genres and t.get("imdb_rating", 0) and t["imdb_rating"] > 7:
-            anti.append((iid, t, t["imdb_rating"]))
-    anti.sort(key=lambda x: x[2], reverse=True)
-    return anti[:n]
-
 def _richness(t):
     """Score how complete a title's metadata is (0-8). Used to prioritize re-enrichment."""
     score = 0
@@ -1704,59 +1467,6 @@ def render_setup(user):
     return html
 
 
-
-# ── TV Show Intelligence ──────────────────────────────────────────────
-def analyze_show(show_name, seasons_data):
-    """Analyze a TV show for gaps, quality issues, and completion."""
-    analysis = {"gaps": [], "quality_issues": [], "completion": {}, "next_episode": None}
-    all_watched = []
-    
-    for season_num in sorted(seasons_data.keys()):
-        eps = seasons_data[season_num]
-        if season_num == 0: continue  # Skip specials
-        ep_nums = sorted(set(ep.get("episode", 0) for ep in eps))
-        
-        # Episode gaps: find missing numbers in sequence
-        if ep_nums:
-            expected = set(range(1, max(ep_nums) + 1))
-            missing = sorted(expected - set(ep_nums))
-            if missing:
-                analysis["gaps"].append({"season": season_num, "missing": missing})
-        
-        # Season completion
-        watched_in_season = sum(1 for ep in eps if ep.get("playcount", 0) > 0)
-        analysis["completion"][season_num] = {
-            "total": len(eps), "watched": watched_in_season,
-            "pct": round(watched_in_season / len(eps) * 100) if eps else 0
-        }
-        
-        # Quality consistency: flag mixed resolutions within a season
-        heights = set(ep.get("video_height", 0) for ep in eps if ep.get("video_height"))
-        if len(heights) > 1:
-            analysis["quality_issues"].append({
-                "season": season_num, "type": "mixed_resolution",
-                "values": sorted(heights, reverse=True)
-            })
-        
-        # Track watched episodes for next-episode prediction
-        for ep in eps:
-            if ep.get("playcount", 0) > 0:
-                all_watched.append((season_num, ep.get("episode", 0)))
-    
-    # Next episode prediction: find the first unwatched after last watched
-    if all_watched:
-        last_s, last_e = max(all_watched)
-        for season_num in sorted(seasons_data.keys()):
-            if season_num < last_s: continue
-            for ep in sorted(seasons_data[season_num], key=lambda x: x.get("episode", 0)):
-                s, e = season_num, ep.get("episode", 0)
-                if (s, e) > (last_s, last_e) and ep.get("playcount", 0) == 0:
-                    analysis["next_episode"] = {"season": s, "episode": e, "title": ep.get("title", "")}
-                    break
-            if analysis["next_episode"]: break
-    
-    return analysis
-
 def render_tvshows(user):
     """TV Shows screen: episodes grouped by show/season, quality, duplicates."""
     library = load_user_tmm(user)
@@ -1830,18 +1540,6 @@ def render_tvshows(user):
         show_rows += '<td><div style="display:flex;align-items:center;gap:6px"><div style="background:#333;border-radius:3px;width:80px;height:12px"><div style="background:' + bar_color + ';height:12px;width:' + str(pct * 0.8) + 'px;border-radius:3px"></div></div>' + str(pct) + '%</div></td>'
         show_rows += '<td>' + res_str + '</td>'
         show_rows += '<td style="font-size:.85em">' + codec_str + '</td>'
-        # TV Intelligence
-        analysis = analyze_show(show_name, seasons)
-        badges = ""
-        if analysis["gaps"]:
-            gap_count = sum(len(g["missing"]) for g in analysis["gaps"])
-            badges += '<span style="color:#d72" title="' + str(gap_count) + ' missing episodes">⚠' + str(gap_count) + ' gaps</span> '
-        if analysis["quality_issues"]:
-            badges += '<span style="color:#f90" title="Mixed quality in season">🔀 mixed</span> '
-        if analysis["next_episode"]:
-            ne = analysis["next_episode"]
-            badges += '<span style="color:#4fc3f7" title="Next: S' + str(ne["season"]).zfill(2) + 'E' + str(ne["episode"]).zfill(2) + '">▶ S' + str(ne["season"]).zfill(2) + 'E' + str(ne["episode"]).zfill(2) + '</span>'
-        show_rows += '<td>' + badges + '</td>'
         show_rows += '</tr>'
 
     # Quality bars
@@ -1880,7 +1578,7 @@ def render_tvshows(user):
 
     # Show list
     html += '<div style="margin-bottom:10px"><input id="s" onkeyup="f()" placeholder="Search shows..."></div>'
-    html += '<table><thead><tr><th>Show</th><th>Seasons</th><th>Episodes</th><th>Watched</th><th>Quality</th><th>Codecs</th><th>Intel</th></tr></thead>'
+    html += '<table><thead><tr><th>Show</th><th>Seasons</th><th>Episodes</th><th>Watched</th><th>Quality</th><th>Codecs</th></tr></thead>'
     html += '<tbody>' + show_rows + '</tbody></table>'
 
     # Duplicate episodes
@@ -2355,37 +2053,6 @@ th,td{{padding:6px 10px;text-align:left;border-bottom:1px solid #333}}th{{backgr
 <p style="margin-top:15px"><a href="{BASE}/u/{u}">← Back</a></p></body></html>""")
             return
 
-        elif p == "/feed":
-            feed = get_activity_feed()
-            titles = load_titles()
-            rows = ""
-            for f in feed:
-                poster = titles.get(f["id"],{}).get("poster","")
-                img = '<img src="' + poster + '" height="40" style="border-radius:4px">' if poster else ""
-                rows += '<tr><td>' + img + '</td><td><b>' + f["user"] + '</b> rated <a href="https://www.imdb.com/title/' + f["id"] + '/" target="_blank">' + f["title"] + '</a></td><td style="font-weight:bold">' + str(f["rating"]) + '/10</td><td style="color:#888">' + f["date"] + '</td></tr>'
-            self._html(f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>Activity Feed</title>
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<style>body{{font-family:sans-serif;background:#1a1a2e;color:#eee;margin:20px}}table{{border-collapse:collapse;width:100%}}
-td{{padding:8px;border-bottom:1px solid #333}}a{{color:#4fc3f7;text-decoration:none}}</style></head>
-<body><h2>📡 Activity Feed</h2><table>{rows}</table>
-<p style="margin-top:15px"><a href="{BASE}/">← Back</a></p></body></html>""")
-            return
-        elif p.startswith("/alerts/"):
-            u = parts[-1]
-            alerts = get_available_alerts(u)
-            rows = ""
-            for a in alerts:
-                provs = " ".join(PROVIDER_ICONS.get(p,"") for p in a["providers"])
-                rows += '<tr><td><a href="https://www.imdb.com/title/' + a["id"] + '/" target="_blank">' + a["title"] + '</a></td><td>' + provs + '</td></tr>'
-            self._html(f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>Alerts</title>
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<style>body{{font-family:sans-serif;background:#1a1a2e;color:#eee;margin:20px}}table{{border-collapse:collapse;width:100%}}
-td{{padding:8px;border-bottom:1px solid #333}}a{{color:#4fc3f7;text-decoration:none}}</style></head>
-<body><h2>🔔 Watchlist Alerts — {u}</h2>
-<p style="color:#888">Titles from your watchlist now available on your streaming services</p>
-<table>{rows if rows else "<tr><td>No watchlisted titles currently available</td></tr>"}</table>
-<p style="margin-top:15px"><a href="{BASE}/u/{u}">← Back</a></p></body></html>""")
-            return
         elif p.startswith("/stats/"):
             u = parts[-1]
             self._html(render_stats(u))
@@ -2541,13 +2208,6 @@ button{{padding:10px 20px;background:#4fc3f7;border:none;border-radius:6px;curso
                 self.send_response(404)
                 self.end_headers()
             return
-        elif p == "/api/tasks":
-            # Agent polls this for pending tasks
-            self._json({"tasks": get_pending_tasks()})
-            return
-        elif p.startswith("/api/tasks/complete/"):
-            # Agent reports task completion (via POST below)
-            pass
         elif p == "/api":
             self._json({"titles": len(load_titles()), "users": {u: len(load_user_ratings(u)) for u in list_users()}})
         elif p.startswith("/u/"):
@@ -2639,12 +2299,6 @@ button{{padding:10px 20px;background:#4fc3f7;border:none;border-radius:6px;curso
                 if iid in library and isinstance(library[iid], dict):
                     library[iid]["thumbnail"] = "/thumbnails/" + iid.replace("/","_") + ".jpg"
                     save_user_tmm(user, library)
-            self._json({"status": "ok"})
-            return
-        elif self.path.startswith("/api/tasks/complete/"):
-            task_id = parts[-1]
-            data = json.loads(body.decode()) if body else {}
-            complete_task(task_id, data.get("result"))
             self._json({"status": "ok"})
             return
         elif self.path.startswith("/api/library/"):

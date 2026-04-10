@@ -329,6 +329,32 @@ Set the `BASE` constant in `app.py` to match your subpath (default: `/imdb`).
 - **Zero API calls** for anonymous users (all public pages serve cached data)
 - **Multi-user** with minimal per-user overhead (~75KB)
 
+# Roadmap - v2
+
+### Resident Agent + Server Task Queue
+- Agent daemon mode, server-controlled task queue
+- Priority: duplicates > quality > subs > rest  
+- Dry-run mode, trash folder, undo log
+
+### Movie Scraper (TMM Replacement)
+- Identify movies from filenames via IMDB dataset + TMDB
+- Runtime validation, background auto-matching + human review queue
+- Write NFO, download artwork, smart rename, 3D detection (SBS/HSBS/TAB/MVC)
+
+### Library Organization
+- Auto-organize by genre/decade/rating, merge across drives, orphan detection
+
+### TV Show Intelligence
+- Episode gaps, quality consistency, season completion, next episode prediction
+
+### Recommendations v2
+- Collaborative filtering, mood/time-based, seasonal boost, anti-recommendation
+
+### Streaming + Social + Technical
+- Trakt scrobbling, GDPR CSV import, available/leaving alerts
+- Shared watchlist, activity feed, taste compatibility
+- SQLite migration, WebSocket, plugin system, multi-instance federation
+
 ## License
 
 MIT
