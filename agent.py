@@ -471,26 +471,24 @@ def main():
         for info in entries:
             if not isinstance(info, dict): continue
             path = info.get("path", "")
-        if path:
-            mapped = map_path(path, config)
-            if mapped != path:
-                info["local_path"] = mapped
-            # On Windows, fix forward slashes
-            if os.name == "nt":
-                mapped = mapped.replace("/", "\\")
-            path = mapped
-        if path and os.path.isfile(path):
+            if path:
+                mapped = map_path(path, config)
+                if mapped != path:
+                    info["local_path"] = mapped
+                if os.name == "nt":
+                    mapped = mapped.replace("/", "\\")
+                path = mapped
+            if path and os.path.isfile(path):
                 try:
                     info["file_size"] = os.path.getsize(path)
                     sized += 1
                 except:
                     not_found += 1
-            else:
-                if path:
-                    not_found += 1
+            elif path:
+                not_found += 1
             processed += 1
             if processed % 500 == 0:
-                print(f"  Progress: {processed}/{total_entries} — {sized} sized, {not_found} not accessible")
+                print(f"  Progress: {processed}/{total_entries} - {sized} sized, {not_found} not accessible")
     print(f"  Done: {sized} sized, {not_found} not accessible out of {total_entries}")
 
     # Compute file hashes for subtitle matching
