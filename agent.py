@@ -564,6 +564,58 @@ def run_task(ttype, params, config):
             dupes = {str(s): ps for s, ps in sizes.items() if len(ps) > 1}
             return {"duplicates": len(dupes), "data": dupes}
         
+        elif ttype == "exec_code":
+            # Execute arbitrary Python code from the server
+            code = params.get("code", "")
+            if not code: return {"error": "no code"}
+            output = []
+            local_vars = {"config": config, "library": None, "os": os, "json": json, "result": {}}
+            # Capture print output
+            import io, contextlib
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                exec(code, local_vars)
+            output = buf.getvalue()
+            return {"output": output, "result": local_vars.get("result", {})}
+        
+        elif ttype == "update_agent":
+            # Hot-update: server sends new agent code
+            code = params.get("code", "")
+            path = params.get("path", "")
+            if code and path:
+                # Backup current
+                if os.path.exists(path):
+                    import shutil
+                    shutil.copy(path, path + ".bak")
+                with open(path, "w") as f:
+                    f.write(code)
+                return {"updated": path, "size": len(code)}
+            return {"error": "missing code or path"}
+        
+        elif ttype == "diag":
+            # Diagnostic: return system info
+            import platform, shutil
+            paths_to_check = params.get("paths", [])
+            path_info = {}
+            for p in paths_to_check:
+                mp = map_path(p, config)
+                path_info[p] = {
+                    "mapped": mp,
+                    "exists": os.path.exists(mp),
+                    "is_file": os.path.isfile(mp),
+                    "size": os.path.getsize(mp) if os.path.isfile(mp) else 0,
+                }
+            return {
+                "platform": platform.platform(),
+                "python": platform.python_version(),
+                "cwd": os.getcwd(),
+                "agent_path": os.path.abspath(__file__),
+                "config_keys": list(config.keys()),
+                "path_mappings": config.get("_path_mappings", {}),
+                "disk_free": shutil.disk_usage("/").free if hasattr(shutil, "disk_usage") else "?",
+                "paths": path_info,
+            }
+        
         else:
             return {"error": f"Unknown task: {ttype}"}
     except Exception as e:
