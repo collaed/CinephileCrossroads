@@ -250,6 +250,13 @@ def tmdb_enrich(imdb_id):
         lu = wp.get("results", {}).get(WATCH_COUNTRY, {})
         result["providers"] = [p["provider_name"] for p in lu.get("flatrate", [])]
         result["watch_link"] = lu.get("link", "")
+    # Cast (top 5 actors)
+    credits = api_get(f"https://api.themoviedb.org/3/{kind}/{tmdb_id}/credits?api_key={TMDB_KEY}")
+    if credits:
+        cast = [c["name"] for c in (credits.get("cast") or [])[:5]]
+        if cast: result["cast"] = ", ".join(cast)
+        directors = [c["name"] for c in (credits.get("crew") or []) if c.get("job") == "Director"]
+        if directors: result["directors"] = ", ".join(directors)
     # Trailer
     vids = api_get(f"https://api.themoviedb.org/3/{kind}/{tmdb_id}/videos?api_key={TMDB_KEY}")
     if vids:
@@ -1200,52 +1207,70 @@ rows.sort((a,b)=>{{let x=a.cells[n].textContent,y=b.cells[n].textContent;return(
 <tbody>{rows}</tbody></table></body></html>"""
 
 def render_recs(user):
-    watchlist = set(load_watchlist(user))
     titles = load_titles()
-    recs, profile, seasonal = get_streaming_recs(user, titles, 50)
-    top_kw = sorted(profile["keywords"].items(), key=lambda x: x[1], reverse=True)[:15]
-    top_g = sorted(profile["genres"].items(), key=lambda x: x[1], reverse=True)[:8]
-    taste = " ".join(f'<span style="background:#16213e;padding:2px 8px;border-radius:10px;font-size:.8em">{k} ({v:.1f})</span>' for k, v in top_kw)
-    genre_taste = " ".join(f'<span style="background:#1a3a5e;padding:2px 8px;border-radius:10px;font-size:.8em">{k} ({v:.1f})</span>' for k, v in top_g)
-    leaving = get_leaving_titles()
-    leaving_html = ""
-    if leaving:
-        lrows = ""
-        for l in leaving[:20]:
-            poster = '<img src="' + l.get("poster","") + '" height=40>' if l.get("poster") else ""
-            lost = ", ".join(l["lost_from"])
-            still = ", ".join(l["still_on"]) or "nowhere"
-            lrows += "<tr><td>" + poster + "</td><td>" + l["title"] + " (" + l["year"] + ")</td><td>Left: " + lost + "</td><td>Still on: " + still + "</td></tr>"
-        leaving_html = '<details style="margin-bottom:15px"><summary style="cursor:pointer;color:#d72">' + str(len(leaving)) + ' titles recently left a service</summary><table style="margin-top:8px">' + lrows + '</table></details>'
-    rows = ""
-    for iid, t, score in recs:
-        wl_icon = '<a href="' + BASE + '/watchlist/rm/' + iid + '" title="Remove from watchlist">❤️</a>' if iid in watchlist else '<a href="' + BASE + '/watchlist/add/' + iid + '" title="Add to watchlist">🤍</a>'
-        poster = f'<img src="{t["poster"]}" height="70" loading="lazy">' if t.get("poster") else ""
-        provs = " ".join(PROVIDER_ICONS.get(p, "▪") for p in t.get("providers", []) if p in get_user_active_providers(user))
-        imdb = f'{t.get("imdb_rating","")}' if t.get("imdb_rating") else ""
-        kws = ", ".join(t.get("keywords", [])[:5])
-        tooltip = f' title="{t.get("overview","")[:200]}"' if t.get("overview") else ""
-        awards_badge = " 🏆" if t.get("awards") and ("Oscar" in t.get("awards","") or "Won" in t.get("awards","")) else ""
-        trailer_link = (' <a href="' + t.get("trailer","") + '" target="_blank" title="Trailer">▶️</a>') if t.get("trailer") else ""
-        similar_link = ' <a href="' + BASE + '/similar/' + iid + '" title="Similar">🔗</a>'
-        stars = "".join('<a href="' + BASE + '/rate/' + user + '/' + iid + '/' + str(s) + '" style="text-decoration:none;color:gold" title="' + str(s) + '">' + ("★" if s <= 5 else "☆") + '</a>' for s in range(1, 11))
-        rows += f'<tr><td>{poster}</td><td><a href="https://www.imdb.com/title/{iid}/" target="_blank"{tooltip}>{t.get("title",iid)}</a>{awards_badge}{trailer_link}{similar_link}</td><td>{t.get("year","")}</td><td>{imdb}</td><td>{provs}</td><td>{wl_icon}</td><td style="color:#2d7;font-weight:bold">{score}</td><td class="x">{kws}</td><td>{stars}</td></tr>'
-    return f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>Recommendations for {user}</title>
-<style>body{{font-family:-apple-system,sans-serif;margin:20px;background:var(--bg,#1a1a2e);color:var(--fg,#eee)}}
-:root{{--bg:#1a1a2e;--fg:#eee;--card:#16213e;--border:#333;--accent:#4fc3f7}}
-.light{{--bg:#f5f5f5;--fg:#222;--card:#fff;--border:#ddd;--accent:#0077cc}}
-@media(max-width:768px){{table{{font-size:.8em}}th,td{{padding:4px 6px}}img{{height:50px!important}}.bar{{flex-direction:column}}.x{{display:none}}}}
-table{{border-collapse:collapse;width:100%}}th,td{{padding:6px 10px;text-align:left;border-bottom:1px solid #333}}
-th{{background:#16213e;position:sticky;top:0}}tr:hover{{background:#16213e}}a{{color:#4fc3f7;text-decoration:none}}
-img{{border-radius:4px}}.x{{font-size:.8em;color:#aaa}}</style></head><body>
-<div style="display:flex;justify-content:space-between;align-items:center"><h2>🎯 Recommendations for {user}</h2>{render_user_bar(user, "recs", False)}</div>
-<p style="color:#888">Based on your taste profile{" 🎄 Holiday boost active!" if seasonal.get("christmas") else " 🎃 Spooky season boost!" if seasonal.get("halloween") else " 💕 Romance boost!" if seasonal.get("romance") else ""} — available on your streaming services in {WATCH_COUNTRY}</p>
-<details><summary style="cursor:pointer;color:#4fc3f7">Your taste profile</summary>
-<p><b>Top keywords:</b> {taste}</p><p><b>Top genres:</b> {genre_taste}</p></details>
-<br>
-<table><thead><tr><th></th><th>Title</th><th>Year</th><th>IMDB</th><th></th><th>Stream</th><th>Match</th><th>Keywords</th><th>Rate</th></tr></thead>
-<tbody>{rows}</tbody></table>
-<p style="margin-top:20px"><a href="{BASE}/">← Back to ratings</a></p></body></html>"""
+    cats, profile = get_5cat_recommendations(user, titles, n_per_cat=6)
+    watchlist = set(load_watchlist(user))
+    
+    top_kw = sorted(profile["keywords"].items(), key=lambda x: x[1], reverse=True)[:12]
+    top_g = sorted(profile["genres"].items(), key=lambda x: x[1], reverse=True)[:6]
+    top_d = sorted(profile["directors"].items(), key=lambda x: x[1], reverse=True)[:5]
+    
+    taste_kw = " ".join('<span style="background:#16213e;padding:2px 8px;border-radius:10px;font-size:.8em">' + k + '</span>' for k, v in top_kw)
+    taste_g = " ".join('<span style="background:#1a3a5e;padding:2px 8px;border-radius:10px;font-size:.8em">' + k + '</span>' for k, v in top_g)
+    taste_d = " ".join('<span style="background:#3a1a5e;padding:2px 8px;border-radius:10px;font-size:.8em">' + k + '</span>' for k, v in top_d)
+    
+    cat_meta = [
+        ("dna", "🧬 Deep Cuts for You", "Based on your keyword DNA — themes, moods, plot elements"),
+        ("cast", "🎬 The Director\'s Chair", "From creators and actors you love"),
+        ("community", "👥 Community Picks", "Loved by users with similar taste"),
+        ("overlap", "✅ Unanimous Hits", "Highly rated across IMDB, TMDB, and critics"),
+        ("rewatch", "💫 Blast from the Past", "Favorites you haven\'t seen in years"),
+    ]
+    
+    sections = ""
+    for cat_key, cat_title, cat_desc in cat_meta:
+        items = cats.get(cat_key, [])
+        if not items: continue
+        cards = ""
+        for iid, t, score in items:
+            poster = '<img src="' + t.get("poster","") + '" style="border-radius:6px;height:120px" loading="lazy">' if t.get("poster") else ""
+            provs = " ".join(PROVIDER_ICONS.get(p,"") for p in t.get("providers",[]) if p in get_user_active_providers(user))
+            wl = '<a href="' + BASE + '/watchlist/add/' + iid + '">🤍</a>' if iid not in watchlist else '<a href="' + BASE + '/watchlist/rm/' + iid + '">❤️</a>'
+            trailer = ' <a href="' + t.get("trailer","") + '" target="_blank">▶️</a>' if t.get("trailer") else ""
+            diverge = ' <span title="Score divergence detected" style="color:#d72">⚠</span>' if score_divergence(t) else ""
+            stars = "".join('<a href="' + BASE + '/rate/' + user + '/' + iid + '/' + str(s) + '" style="text-decoration:none;color:gold" title="' + str(s) + '">' + ("★" if s <= 5 else "☆") + '</a>' for s in range(1, 11))
+            tooltip = t.get("overview","")[:150]
+            cards += '<div style="background:var(--card,#16213e);border-radius:10px;padding:12px;display:flex;gap:12px;align-items:start">'
+            cards += poster
+            cards += '<div style="flex:1;min-width:0">'
+            cards += '<div style="display:flex;justify-content:space-between;align-items:center"><b><a href="https://www.imdb.com/title/' + iid + '/" target="_blank" title="' + tooltip + '">' + t.get("title","?") + '</a></b> ' + wl + trailer + diverge + '</div>'
+            cards += '<div style="color:#888;font-size:.85em">' + str(t.get("year","")) + ' · ' + provs + ' · IMDB ' + str(t.get("imdb_rating","?")) + ' · Match: ' + str(score) + '</div>'
+            cards += '<div style="font-size:.8em;color:#666;margin-top:4px">' + (t.get("genres",""))[:50] + '</div>'
+            cards += '<div style="margin-top:4px">' + stars + '</div>'
+            cards += '</div></div>'
+        sections += '<div style="margin-bottom:25px"><h3>' + cat_title + '</h3>'
+        sections += '<p style="color:#888;font-size:.85em;margin-top:-10px">' + cat_desc + '</p>'
+        sections += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(350px,1fr));gap:10px">' + cards + '</div></div>'
+    
+    user_bar = render_user_bar(user, "recs", False)
+    html = '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Recommendations for ' + user + '</title>'
+    html += '<meta name="viewport" content="width=device-width,initial-scale=1">'
+    html += '<style>body{font-family:-apple-system,sans-serif;margin:20px;background:var(--bg,#1a1a2e);color:var(--fg,#eee)}'
+    html += ':root{--bg:#1a1a2e;--fg:#eee;--card:#16213e}.light{--bg:#f5f5f5;--fg:#222;--card:#fff}'
+    html += 'a{color:#4fc3f7;text-decoration:none}h3{margin-bottom:5px}'
+    html += '@media(max-width:768px){div[style*="grid"]{grid-template-columns:1fr!important}}'
+    html += '</style><script>if(localStorage.getItem("theme")==="light")document.body.classList.add("light")</script></head><body>'
+    html += '<div style="display:flex;justify-content:space-between;align-items:center">'
+    html += '<h2>🎯 Recommendations for ' + user + '</h2>' + user_bar + '</div>'
+    html += '<details style="margin-bottom:20px"><summary style="cursor:pointer;color:#4fc3f7">Your taste profile</summary>'
+    html += '<p><b>Keywords:</b> ' + taste_kw + '</p>'
+    html += '<p><b>Genres:</b> ' + taste_g + '</p>'
+    html += '<p><b>Directors:</b> ' + taste_d + '</p></details>'
+    html += sections
+    html += '<p style="margin-top:20px"><a href="' + BASE + '/tonight/' + user + '">🎲 Pick one for tonight</a> · '
+    html += '<a href="' + BASE + '/u/' + user + '">← Ratings</a></p></body></html>'
+    return html
+
 
 def render_setup(user):
     has_trakt = load_user_trakt_token(user) is not None
