@@ -772,21 +772,38 @@ def trakt_sync_push(user, ratings, titles):
 
 # ── Recommendation engine ─────────────────────────────────────────────
 def build_taste_profile(user_ratings, titles):
-    """Build weighted keyword/genre profile from highly-rated titles (6+).
-    Weight scales linearly: 6→0.2, 7→0.4, 8→0.6, 9→0.8, 10→1.0"""
-    """Build weighted keyword/genre profile from highly-rated titles."""
-    keyword_scores = {}
-    genre_scores = {}
+    """Build weighted taste profile from highly-rated titles (6+)."""
+    keyword_scores, genre_scores, director_scores, actor_scores = {}, {}, {}, {}
     for iid, r in user_ratings.items():
         if r["rating"] < 6: continue
         t = titles.get(iid, {})
-        weight = (r["rating"] - 5) / 5.0  # 6=0.2, 7=0.4, 8=0.6, 9=0.8, 10=1.0
+        weight = (r["rating"] - 5) / 5.0
         for kw in t.get("keywords", []):
             keyword_scores[kw] = keyword_scores.get(kw, 0) + weight
         for g in (t.get("genres") or "").split(","):
             g = g.strip()
             if g: genre_scores[g] = genre_scores.get(g, 0) + weight
-    return {"keywords": keyword_scores, "genres": genre_scores}
+        for d in (t.get("directors") or "").split(","):
+            d = d.strip()
+            if d: director_scores[d] = director_scores.get(d, 0) + weight
+        for a in (t.get("cast") or "").split(","):
+            a = a.strip()
+            if a: actor_scores[a] = actor_scores.get(a, 0) + weight
+    return {"keywords": keyword_scores, "genres": genre_scores,
+            "directors": director_scores, "actors": actor_scores}
+
+def score_divergence(title):
+    """Detect suspicious score manipulation. Returns True if scores diverge >2.0."""
+    scores = []
+    if title.get("imdb_rating"): scores.append(title["imdb_rating"])
+    if title.get("tmdb_rating"): scores.append(title["tmdb_rating"])
+    rt = title.get("rotten_tomatoes", "")
+    if rt and "%" in str(rt):
+        try: scores.append(float(str(rt).replace("%","")) / 10)
+        except: pass
+    if title.get("metacritic"): scores.append(title["metacritic"] / 10)
+    if len(scores) < 2: return False
+    return (max(scores) - min(scores)) > 2.0
 
 def score_title(title, profile, seasonal=None):
     """Score a candidate title against user's taste profile.
@@ -829,7 +846,95 @@ def get_recommendations(user, titles, n=50, provider_filter=None):
         s = score_title(t, profile, seasonal_kw)
         if s > 0: candidates.append((iid, t, s))
     candidates.sort(key=lambda x: x[2], reverse=True)
-    return candidates[:n], profile, seasonal_kw
+    return candidates[:n], profile
+
+def get_5cat_recommendations(user, titles, n_per_cat=6):
+    """Get recommendations in 5 categories: DNA, Cast, Community, Overlap, Rewatch."""
+    import datetime
+    user_ratings = load_user_ratings(user)
+    rated_ids = set(user_ratings.keys())
+    profile = build_taste_profile(user_ratings, titles)
+    provs = get_user_active_providers(user)
+
+    seasonal = seasonal_keywords()
+    def _pool():
+        cands = []
+        for iid, t in titles.items():
+            if iid in rated_ids: continue
+            if not set(t.get("providers", [])) & provs: continue
+            s = score_title(t, profile, seasonal)
+            if s > 0: cands.append((iid, t, s))
+        cands.sort(key=lambda x: x[2], reverse=True)
+        return cands
+
+    base_pool = _pool()
+    dna = base_pool  # DNA is the default scoring
+
+    # Cast: re-rank by director/actor match
+    cast = []
+    for iid, t, s in base_pool:
+        dir_s = sum(profile["directors"].get(d.strip(), 0) for d in (t.get("directors") or "").split(",") if d.strip())
+        act_s = sum(profile["actors"].get(a.strip(), 0) for a in (t.get("cast") or "").split(",") if a.strip())
+        cast_score = dir_s * 3 + act_s * 1.5 + s * 0.3
+        if cast_score > 0: cast.append((iid, t, round(cast_score, 2)))
+    cast.sort(key=lambda x: x[2], reverse=True)
+
+    # Community: TMDB similar links from rated titles
+    community_ids = set()
+    for iid in list(rated_ids)[:100]:
+        for sim_id in titles.get(iid, {}).get("similar_tmdb", []):
+            for cid, ct in titles.items():
+                if ct.get("tmdb_id") == sim_id and cid not in rated_ids:
+                    community_ids.add(cid)
+                    break
+    community = [(i, titles[i], score_title(titles[i], profile, seasonal))
+                 for i in community_ids if i in titles and set(titles[i].get("providers",[])) & provs]
+    community.sort(key=lambda x: x[2], reverse=True)
+
+    # Overlap: multi-source agreement, no divergence
+    overlap = []
+    for iid, t in titles.items():
+        if iid in rated_ids or score_divergence(t): continue
+        if not set(t.get("providers", [])) & provs: continue
+        sc = [v for v in [t.get("imdb_rating"), t.get("tmdb_rating")] if v]
+        mc = t.get("metacritic")
+        if mc: sc.append(mc / 10)
+        if len(sc) >= 2 and all(s >= 7.0 for s in sc):
+            overlap.append((iid, t, round(sum(sc)/len(sc), 2)))
+    overlap.sort(key=lambda x: x[2], reverse=True)
+
+    # Rewatch: rated 8+, not watched in 2+ years
+    rewatch = []
+    for iid, r in user_ratings.items():
+        if r["rating"] < 8: continue
+        date = r.get("date", "")
+        if not date: continue
+        try:
+            days = (datetime.date.today() - datetime.date.fromisoformat(date)).days
+            if days > 730:
+                rewatch.append((iid, titles.get(iid, {}), round(r["rating"] * days / 365, 1)))
+        except: pass
+    rewatch.sort(key=lambda x: x[2], reverse=True)
+
+    # Deduplicate
+    seen = set()
+    def dedup(lst, n):
+        result = []
+        for item in lst:
+            if item[0] not in seen:
+                seen.add(item[0])
+                result.append(item)
+                if len(result) >= n: break
+        return result
+
+    return {
+        "dna": dedup(dna, n_per_cat),
+        "cast": dedup(cast, n_per_cat),
+        "community": dedup(community, n_per_cat),
+        "overlap": dedup(overlap, n_per_cat),
+        "rewatch": dedup(rewatch, n_per_cat),
+    }, profile
+
 
 def get_streaming_recs(user, titles, n=30):
     """Recommendations filtered to user's streaming subscriptions."""
@@ -1332,6 +1437,91 @@ def render_setup(user):
     html += '</div></body></html>'
     return html
 
+
+def render_stats(user):
+    titles = load_titles()
+    ratings = load_user_ratings(user)
+    if not ratings:
+        return '<html><body style="background:#1a1a2e;color:#eee;padding:40px;font-family:sans-serif"><h2>No ratings</h2></body></html>'
+    scores = [r["rating"] for r in ratings.values()]
+    avg = sum(scores) / len(scores)
+    genre_count, director_count = {}, {}
+    for iid, r in ratings.items():
+        t = titles.get(iid, {})
+        for g in (t.get("genres") or "").split(","):
+            g = g.strip()
+            if g: genre_count[g] = genre_count.get(g, 0) + 1
+        for d in (t.get("directors") or "").split(","):
+            d = d.strip()
+            if d: director_count[d] = director_count.get(d, 0) + 1
+    top_genres = sorted(genre_count.items(), key=lambda x: x[1], reverse=True)[:12]
+    top_dirs = sorted(director_count.items(), key=lambda x: x[1], reverse=True)[:10]
+    rating_dist = [sum(1 for s in scores if s == i) for i in range(1, 11)]
+    max_bar = max(rating_dist) or 1
+    dist_bars = "".join('<div style="display:flex;align-items:center;gap:8px;margin:2px 0"><span style="width:30px;text-align:right">' + str(i) + '</span><div style="background:#4fc3f7;height:18px;width:' + str(rating_dist[i-1]/max_bar*300) + 'px;border-radius:3px"></div><span style="color:#888;font-size:.85em">' + str(rating_dist[i-1]) + '</span></div>' for i in range(10, 0, -1))
+    genre_bars = "".join('<div style="display:flex;align-items:center;gap:8px;margin:2px 0"><span style="width:100px;text-align:right;font-size:.85em">' + g + '</span><div style="background:#4fc3f7;height:16px;width:' + str(c/top_genres[0][1]*250) + 'px;border-radius:3px"></div><span style="color:#888;font-size:.85em">' + str(c) + '</span></div>' for g, c in top_genres)
+    dir_list = "".join("<tr><td>" + d + "</td><td>" + str(c) + "</td></tr>" for d, c in top_dirs)
+    html = '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Stats</title>'
+    html += '<meta name="viewport" content="width=device-width,initial-scale=1">'
+    html += '<style>body{font-family:-apple-system,sans-serif;background:#1a1a2e;color:#eee;margin:20px}'
+    html += '.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:20px}'
+    html += '.card{background:#16213e;padding:20px;border-radius:12px}'
+    html += 'table{border-collapse:collapse;width:100%}td{padding:4px 8px;border-bottom:1px solid #333}'
+    html += 'a{color:#4fc3f7}</style></head><body>'
+    html += '<h2>📊 ' + user + " Stats</h2>"
+    html += '<div style="display:flex;gap:20px;margin-bottom:20px;flex-wrap:wrap">'
+    html += '<div class="card" style="text-align:center"><div style="font-size:3em">' + str(len(ratings)) + '</div>titles</div>'
+    html += '<div class="card" style="text-align:center"><div style="font-size:3em">' + f"{avg:.1f}" + '</div>average</div></div>'
+    html += '<div class="grid"><div class="card"><h3>Rating Distribution</h3>' + dist_bars + '</div>'
+    html += '<div class="card"><h3>Top Genres</h3>' + genre_bars + '</div>'
+    html += '<div class="card"><h3>Top Directors</h3><table>' + dir_list + '</table></div></div>'
+    html += '<p><a href="' + BASE + '/u/' + user + '">← Back</a></p></body></html>'
+    return html
+
+def render_compare(u1, u2):
+    titles = load_titles()
+    r1, r2 = load_user_ratings(u1), load_user_ratings(u2)
+    common = set(r1.keys()) & set(r2.keys())
+    agree = [(titles.get(i,{}).get("title","?"), r1[i]["rating"], r2[i]["rating"]) for i in common if abs(r1[i]["rating"]-r2[i]["rating"]) <= 1]
+    disagree = [(titles.get(i,{}).get("title","?"), r1[i]["rating"], r2[i]["rating"], abs(r1[i]["rating"]-r2[i]["rating"])) for i in common if abs(r1[i]["rating"]-r2[i]["rating"]) >= 3]
+    disagree.sort(key=lambda x: x[3], reverse=True)
+    agree_rows = "".join("<tr><td>" + t + "</td><td>" + str(a) + "</td><td>" + str(b) + "</td></tr>" for t,a,b in agree[:15])
+    disagree_rows = "".join("<tr><td>" + t + "</td><td>" + str(a) + "</td><td>" + str(b) + "</td><td>" + str(d) + "</td></tr>" for t,a,b,d in disagree[:15])
+    html = '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Compare</title>'
+    html += '<style>body{font-family:sans-serif;background:#1a1a2e;color:#eee;margin:20px}'
+    html += '.card{background:#16213e;padding:20px;border-radius:12px;display:inline-block;margin:5px;text-align:center}'
+    html += 'table{border-collapse:collapse;width:100%}td,th{padding:4px 8px;border-bottom:1px solid #333;text-align:left}'
+    html += 'a{color:#4fc3f7}</style></head><body>'
+    html += '<h2>' + u1 + ' vs ' + u2 + '</h2>'
+    html += '<div class="card"><div style="font-size:2em">' + str(len(common)) + '</div>both rated</div>'
+    html += '<div class="card"><div style="font-size:2em">' + str(len(agree)) + '</div>agree</div>'
+    html += '<div class="card"><div style="font-size:2em">' + str(len(disagree)) + '</div>disagree</div>'
+    html += '<h3>🤝 Agree</h3><table><tr><th>Title</th><th>' + u1 + '</th><th>' + u2 + '</th></tr>' + agree_rows + '</table>'
+    html += '<h3>🥊 Disagree</h3><table><tr><th>Title</th><th>' + u1 + '</th><th>' + u2 + '</th><th>Gap</th></tr>' + disagree_rows + '</table>'
+    html += '<p><a href="' + BASE + '/">← Back</a></p></body></html>'
+    return html
+
+def render_new_on_streaming():
+    if not os.path.exists(CATALOG_FILE) or not os.path.exists(CATALOG_PREV):
+        return '<html><body style="background:#1a1a2e;color:#eee;font-family:sans-serif;padding:40px"><h2>Need 2+ catalog refreshes</h2><a href="' + BASE + '/catalog/fetch" style="color:#4fc3f7">Refresh catalog</a></body></html>'
+    prev = {c["tmdb_id"] for c in json.load(open(CATALOG_PREV)).get("catalog", [])}
+    curr_data = json.load(open(CATALOG_FILE))
+    new_titles = [c for c in curr_data.get("catalog", []) if c["tmdb_id"] not in prev]
+    new_titles.sort(key=lambda x: x.get("tmdb_rating", 0), reverse=True)
+    rows = ""
+    for r in new_titles[:50]:
+        poster = '<img src="' + r.get("poster","") + '" height="60" loading="lazy">' if r.get("poster") else ""
+        provs = " ".join(PROVIDER_ICONS.get(p, "") for p in r.get("providers", []))
+        rows += "<tr><td>" + poster + "</td><td>" + r["title"] + "</td><td>" + r.get("year","") + "</td><td>" + str(r.get("tmdb_rating","")) + "</td><td>" + provs + "</td></tr>"
+    html = '<!DOCTYPE html><html><head><meta charset="utf-8"><title>New on Streaming</title>'
+    html += '<style>body{font-family:sans-serif;background:#1a1a2e;color:#eee;margin:20px}'
+    html += 'table{border-collapse:collapse;width:100%}th,td{padding:6px 10px;text-align:left;border-bottom:1px solid #333}'
+    html += 'th{background:#16213e}img{border-radius:4px}a{color:#4fc3f7}</style></head>'
+    html += '<body><h2>🆕 New on Streaming — ' + str(len(new_titles)) + ' titles</h2>'
+    html += '<table><thead><tr><th></th><th>Title</th><th>Year</th><th>TMDB</th><th>On</th></tr></thead>'
+    html += '<tbody>' + rows + '</tbody></table>'
+    html += '<p><a href="' + BASE + '/">← Back</a></p></body></html>'
+    return html
 
 def render_catalog():
     if not os.path.exists(CATALOG_FILE):
