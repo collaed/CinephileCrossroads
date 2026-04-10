@@ -1506,7 +1506,10 @@ def render_library(user):
             elif h >= 720: quality_dist["720p"] += 1
             elif h > 0: quality_dist["SD"] += 1
         c = info.get("video_codec", "")
-        if c: codec_dist[c] += 1
+        if c:
+            cmap = {"hevc": "x265/HEVC", "h265": "x265/HEVC", "h264": "x264/AVC", "avc": "x264/AVC",
+                    "mpeg2": "MPEG-2", "mpeg2video": "MPEG-2", "av1": "AV1", "vp9": "VP9", "vc1": "VC-1"}
+            codec_dist[cmap.get(c.lower(), c)] += 1
 
     # Find titles with multiple entries (potential duplicates)
     dupes = [(key, entries) for key, entries in by_title.items()]
@@ -1522,7 +1525,9 @@ def render_library(user):
         proper_title = t.get("title") or entries[0][1].get("title") or iid_key
         year = t.get("year") or entries[0][1].get("year", "")
         imdb_r = t.get("imdb_rating", "")
-        dupe_rows += '<tr style="background:#1a3a5e"><td colspan="9"><b>' + proper_title + '</b> (' + str(year) + ') — <a href="https://www.imdb.com/title/' + iid_key + '/" target="_blank">' + iid_key + '</a> — IMDB ' + str(imdb_r) + ' — <b>' + str(len(entries)) + ' copies</b></td></tr>'
+        runtime = t.get("runtime", "")
+        runtime_str = " — " + str(runtime) + " min" if runtime else ""
+        dupe_rows += '<tr style="background:#1a3a5e"><td colspan="9"><b>' + proper_title + '</b> (' + str(year) + ') — <a href="https://www.imdb.com/title/' + iid_key + '/" target="_blank">' + iid_key + '</a> — IMDB ' + str(imdb_r) + runtime_str + ' — <b>' + str(len(entries)) + ' copies</b></td></tr>\n' 
         # Find best entry (highest resolution)
         best_h = max(int(e[1].get("video_height", 0) or 0) if isinstance(e[1], dict) else 0 for e in entries)
         for iid, info in entries:
@@ -1554,14 +1559,24 @@ def render_library(user):
             else:
                 size_str = "—"
             # Duration
-            dur = info.get("runtime") or info.get("video_duration", 0) or 0
-            if dur:
-                dur_str = str(int(dur)) + " min" if int(dur) < 600 else str(int(dur)//60) + "h" + str(int(dur)%60) + "m"
+            dur = info.get("video_duration", 0) or 0
+            if dur and int(dur) > 3600:  # Kodi video_duration is in seconds
+                dur = int(dur) // 60
+            elif not dur:
+                dur = info.get("runtime", 0) or 0
+            dur = int(dur) if dur else 0
+            if dur > 0:
+                dur_str = str(dur // 60) + "h" + str(dur % 60).zfill(2) + "m" if dur >= 60 else str(dur) + "m"
             else:
                 dur_str = "—"
             dupe_rows += "<tr>"
             dupe_rows += "<td>" + str(h) + "p</td>"
-            dupe_rows += "<td>" + codec + "</td>"
+            codec_map = {"hevc": "x265/HEVC", "h265": "x265/HEVC", "x265": "x265/HEVC",
+                         "h264": "x264/AVC", "avc": "x264/AVC", "x264": "x264/AVC",
+                         "mpeg2": "MPEG-2", "mpeg-2": "MPEG-2", "mpeg2video": "MPEG-2",
+                         "av1": "AV1", "vp9": "VP9", "vc1": "VC-1", "vc-1": "VC-1"}
+            codec_display = codec_map.get(codec.lower(), codec)
+            dupe_rows += "<td>" + codec_display + "</td>"
             dupe_rows += "<td>" + size_str + "</td>"
             dupe_rows += "<td>" + dur_str + "</td>"
             dupe_rows += "<td>" + audio_str + "</td>"
