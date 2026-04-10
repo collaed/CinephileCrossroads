@@ -521,11 +521,7 @@ def main():
                         except Exception as e:
                             total_not_found += 1
                             print(f"\n    ! Size error: {short} - {e}")
-                        if args.hash:
-                            h = opensubtitles_hash(mapped)
-                            if h:
-                                info["file_hash"] = h
-                                total_hashed += 1
+                        # Hashing done separately for duplicates only
                     else:
                         total_not_found += 1
                         print(f"\n    ! Not found: {mapped[:70]}")
@@ -557,6 +553,50 @@ def main():
     # Phase 2: Thumbnails (only if --thumbnails flag)
     if args.thumbnails:
         generate_thumbnails(args, config, library, push_headers, url)
+
+    if args.hash:
+        hash_duplicates(args, config, library, push_headers, url)
+
+def hash_duplicates(args, config, library, headers, base_url):
+    """Hash only duplicate files for accurate comparison."""
+    try:
+        req = urllib.request.Request(
+            f"{args.server}/api/thumbnails/needed/{args.user}",
+            headers=headers)
+        needed = json.loads(urllib.request.urlopen(req, timeout=30).read())
+    except Exception as e:
+        print(f"Could not fetch duplicate list: {e}")
+        return
+
+    if not needed:
+        print("No duplicates to hash")
+        return
+
+    print(f"Hashing {len(needed)} duplicate titles...")
+    hashed = 0
+    for iid in needed:
+        val = library.get(iid)
+        entries = val if isinstance(val, list) else [val] if isinstance(val, dict) else []
+        for info in entries:
+            if not isinstance(info, dict): continue
+            path = info.get("local_path") or map_path(info.get("path", ""), config)
+            if os.name == "nt":
+                path = path.replace("/", "\\")
+            if not os.path.isfile(path): continue
+            h = opensubtitles_hash(path)
+            if h:
+                info["file_hash"] = h
+                info["file_size"] = os.path.getsize(path)
+                hashed += 1
+        if hashed % 10 == 0 and hashed > 0:
+            print(f"  {hashed} files hashed...")
+
+    # Push updated entries
+    to_push = {iid: library[iid] for iid in needed if iid in library}
+    if to_push:
+        req = urllib.request.Request(base_url, data=json.dumps({"library": to_push}).encode(), headers=headers)
+        urllib.request.urlopen(req, timeout=60)
+    print(f"Done: {hashed} files hashed and pushed")
 
 def generate_thumbnails(args, config, library, headers, base_url):
     """Phase 2: Ask server which titles need screenshots, generate and upload."""
