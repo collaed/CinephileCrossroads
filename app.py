@@ -2224,6 +2224,20 @@ button{{padding:10px 20px;background:#4fc3f7;border:none;border-radius:6px;curso
                 self._html(render_setup(u))
         elif p == "/jobs":
             self._json(get_jobs())
+        elif p.startswith("/thumbnails/"):
+            fname = parts[-1]
+            thumb_path = os.path.join(DATA_DIR, "thumbnails", fname)
+            if os.path.exists(thumb_path):
+                self.send_response(200)
+                self.send_header("Content-Type", "image/jpeg")
+                self.send_header("Cache-Control", "max-age=86400")
+                self.end_headers()
+                with open(thumb_path, "rb") as f:
+                    self.wfile.write(f.read())
+            else:
+                self.send_response(404)
+                self.end_headers()
+            return
         elif p == "/api":
             self._json({"titles": len(load_titles()), "users": {u: len(load_user_ratings(u)) for u in list_users()}})
         elif p.startswith("/u/"):
@@ -2297,6 +2311,25 @@ button{{padding:10px 20px;background:#4fc3f7;border:none;border-radius:6px;curso
                         start_job("letterboxd", lambda jid: import_letterboxd(user, text))
                     break
             self._redirect(f"{BASE}/u/{user}")
+            return
+        elif self.path.startswith("/api/thumbnail/"):
+            user = parts[-1]
+            data = json.loads(body.decode())
+            iid = data.get("imdb_id", "")
+            thumb_b64 = data.get("thumbnail", "")
+            if iid and thumb_b64:
+                import base64
+                thumb_dir = os.path.join(DATA_DIR, "thumbnails")
+                os.makedirs(thumb_dir, exist_ok=True)
+                thumb_path = os.path.join(thumb_dir, iid.replace("/","_") + ".jpg")
+                with open(thumb_path, "wb") as f:
+                    f.write(base64.b64decode(thumb_b64))
+                # Update library entry
+                library = load_user_tmm(user)
+                if iid in library and isinstance(library[iid], dict):
+                    library[iid]["thumbnail"] = "/thumbnails/" + iid.replace("/","_") + ".jpg"
+                    save_user_tmm(user, library)
+            self._json({"status": "ok"})
             return
         elif self.path.startswith("/api/library/"):
             user = parts[-1]

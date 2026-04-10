@@ -419,6 +419,7 @@ def main():
     parser = argparse.ArgumentParser(description="CinephileCrossroads LAN Agent")
     parser.add_argument("--server", required=True, help="CinephileCrossroads URL (e.g. https://tools.ecb.pm/imdb)")
     parser.add_argument("--user", required=True, help="Username to sync to")
+    parser.add_argument("--thumbnails", action="store_true", help="Phase 2: fetch thumbnail requests from server, generate and upload")
     args = parser.parse_args()
 
     if not os.path.exists(CONFIG_FILE):
@@ -462,51 +463,6 @@ def main():
                 sized += 1
             except: pass
     print(f"  {sized} files sized")
-
-    # Generate video thumbnails using ffmpeg
-    import shutil, subprocess
-    if shutil.which("ffmpeg"):
-        print("Generating thumbnails...")
-        thumb_count = 0
-        thumb_dir = os.path.join(os.path.dirname(os.path.abspath(CONFIG_FILE)), "thumbnails")
-        os.makedirs(thumb_dir, exist_ok=True)
-        for iid, info in library.items():
-            if not isinstance(info, dict): continue
-            path = info.get("local_path") or info.get("path", "")
-            if not path or not os.path.isfile(path): continue
-            thumb_path = os.path.join(thumb_dir, iid.replace("/","_") + ".jpg")
-            if os.path.exists(thumb_path):
-                info["thumbnail"] = thumb_path
-                thumb_count += 1
-                continue
-            try:
-                # Get duration, seek to 50%
-                dur_cmd = subprocess.run(
-                    ["ffmpeg", "-i", path, "-f", "null", "-"],
-                    capture_output=True, text=True, timeout=10)
-                # Extract duration from stderr
-                import re
-                dur_match = re.search(r"Duration: (\d+):(\d+):(\d+)", dur_cmd.stderr)
-                if dur_match:
-                    total_secs = int(dur_match.group(1))*3600 + int(dur_match.group(2))*60 + int(dur_match.group(3))
-                    seek = total_secs // 2
-                else:
-                    seek = 300  # default 5 min
-                subprocess.run([
-                    "ffmpeg", "-ss", str(seek), "-i", path,
-                    "-vframes", "1", "-vf", "scale=320:-1",
-                    "-q:v", "8", thumb_path, "-y"
-                ], capture_output=True, timeout=30)
-                if os.path.exists(thumb_path):
-                    info["thumbnail"] = thumb_path
-                    thumb_count += 1
-            except Exception as e:
-                pass  # Skip failures silently
-            if thumb_count % 100 == 0 and thumb_count > 0:
-                print(f"  {thumb_count} thumbnails generated...")
-        print(f"  {thumb_count} thumbnails ready")
-    else:
-        print("Skipping thumbnails (ffmpeg not found)")
 
     # Compute file hashes for subtitle matching
     print("Computing file hashes...")
@@ -560,6 +516,77 @@ def main():
             print(f"  Pushed {min(i+chunk_size, len(ep_items))}/{len(ep_items)} episodes...")
     result = {"count": total_pushed}
     print(f"Done — server has {result.get('count', '?')} titles in library")
+
+    # Phase 2: Thumbnails (only if --thumbnails flag)
+    if args.thumbnails:
+        generate_thumbnails(args, config, library, push_headers, url)
+
+def generate_thumbnails(args, config, library, headers, base_url):
+    """Phase 2: Ask server which titles need screenshots, generate and upload."""
+    import shutil, subprocess, base64, re
+    if not shutil.which("ffmpeg"):
+        print("ffmpeg not found — run setup-windows.ps1 to install")
+        return
+
+    # Ask server for titles needing thumbnails
+    try:
+        req = urllib.request.Request(
+            f"{args.server}/api/thumbnails/needed/{args.user}",
+            headers=headers)
+        resp = urllib.request.urlopen(req, timeout=30)
+        needed = json.loads(resp.read())
+    except Exception as e:
+        print(f"Could not fetch thumbnail requests: {e}")
+        return
+
+    if not needed:
+        print("No thumbnails needed")
+        return
+
+    print(f"Generating {len(needed)} thumbnails...")
+    for i, iid in enumerate(needed):
+        info = library.get(iid, {})
+        if not isinstance(info, dict): continue
+        path = info.get("local_path") or map_path(info.get("path", ""), config)
+        if not path or not os.path.isfile(path):
+            continue
+
+        try:
+            # Get duration
+            probe = subprocess.run(
+                ["ffmpeg", "-i", path],
+                capture_output=True, text=True, timeout=10)
+            dur_match = re.search(r"Duration: (\d+):(\d+):(\d+)", probe.stderr)
+            if dur_match:
+                seek = (int(dur_match.group(1))*3600 + int(dur_match.group(2))*60 + int(dur_match.group(3))) // 2
+            else:
+                seek = 300
+
+            # Generate thumbnail
+            thumb_file = os.path.join(os.environ.get("TEMP", "/tmp"), f"{iid.replace('/','_')}.jpg")
+            subprocess.run([
+                "ffmpeg", "-ss", str(seek), "-i", path,
+                "-vframes", "1", "-vf", "scale=320:-1",
+                "-q:v", "8", thumb_file, "-y"
+            ], capture_output=True, timeout=30)
+
+            if os.path.exists(thumb_file):
+                # Upload as base64
+                with open(thumb_file, "rb") as f:
+                    thumb_data = base64.b64encode(f.read()).decode()
+                payload = json.dumps({"imdb_id": iid, "thumbnail": thumb_data})
+                req = urllib.request.Request(
+                    f"{args.server}/api/thumbnail/{args.user}",
+                    data=payload.encode(), headers=headers)
+                urllib.request.urlopen(req, timeout=30)
+                os.remove(thumb_file)
+
+                if (i + 1) % 10 == 0:
+                    print(f"  {i+1}/{len(needed)} thumbnails uploaded")
+        except Exception as e:
+            pass  # Skip failures
+
+    print(f"Thumbnails done")
 
 if __name__ == "__main__":
     main()
