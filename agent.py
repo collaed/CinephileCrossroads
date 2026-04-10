@@ -373,9 +373,9 @@ def check_prerequisites():
         issues.append(("ffmpeg", "Optional - needed for video thumbnails"))
 
     if issues:
-        print("\n⚠ Missing components:")
+        print("\n!! Missing components:")
         for name, reason in issues:
-            print(f"  ✗ {name} - {reason}")
+            print(f"  FAIL {name} - {reason}")
         if os.name == "nt":
             print("\nRun the setup script (it will request admin privileges automatically):")
             print("  powershell -ExecutionPolicy Bypass -File setup-windows.ps1")
@@ -387,45 +387,58 @@ def check_prerequisites():
         print("")
 
 def check_path_access(config, library):
-    """Check if file paths are accessible. Prompt for path mappings if not."""
-    # Sample a few paths
-    sample_paths = []
-    for iid, info in list(library.items())[:20]:
-        if isinstance(info, dict) and info.get("path"):
-            sample_paths.append(info["path"])
-    if not sample_paths:
+    """Check file paths by discovering unique roots and testing each."""
+    roots = {}
+    for iid, val in list(library.items()):
+        if iid == "_episodes": continue
+        entries = val if isinstance(val, list) else [val] if isinstance(val, dict) else []
+        for info in entries:
+            if not isinstance(info, dict): continue
+            path = info.get("path", "")
+            if not path: continue
+            parts = path.replace("\\", "/").split("/")
+            root = "/".join(parts[:4]) if len(parts) >= 4 else path
+            if root not in roots:
+                roots[root] = []
+            if len(roots[root]) < 2:
+                roots[root].append(path)
+    if not roots:
         return
-
-    accessible = sum(1 for p in sample_paths if os.path.exists(map_path(p, config)))
-    total = len(sample_paths)
-
-    if accessible == total:
-        print(f"  Path check: {accessible}/{total} files accessible ✓")
+    print(f"  Path roots found: {len(roots)}")
+    all_ok = True
+    for root, samples in roots.items():
+        ok = 0
+        for s in samples:
+            mapped = map_path(s, config)
+            if os.name == "nt":
+                mapped = mapped.replace("/", "\\")
+            if os.path.exists(mapped):
+                ok += 1
+        icon = "+" if ok == len(samples) else "-"
+        mapped_root = map_path(root, config)
+        print(f"    {icon} {root} -> {mapped_root} ({ok}/{len(samples)} accessible)")
+        if ok < len(samples):
+            all_ok = False
+            for s in samples:
+                mapped = map_path(s, config)
+                if os.name == "nt":
+                    mapped = mapped.replace("/", "\\")
+                print(f"      {s[:70]}")
+                print(f"      -> {mapped[:70]} (exists: {os.path.exists(mapped)})")
+    if all_ok:
+        print("  All roots accessible")
         return
-
-    print(f"\n⚠ Only {accessible}/{total} sampled files are accessible.")
-    print(f"  Example path from Kodi: {sample_paths[0]}")
-    mapped = map_path(sample_paths[0], config)
-    if mapped != sample_paths[0]:
-        print(f"  Mapped to:              {mapped}")
-    print(f"  Exists: {os.path.exists(mapped)}")
-
-    current_mappings = config.get("_path_mappings", {})
-    if current_mappings:
-        print(f"  Current mappings: {json.dumps(current_mappings)}")
-
-    resp = input("\nWould you like to add/fix a path mapping? [y/N] ").strip().lower()
-    if resp == "y":
-        remote = input("  Kodi path prefix (e.g. /Movies): ").strip()
-        local = input("  Local path prefix (e.g. \\\\zeus\\Movies or Z:\\Movies): ").strip()
+    resp = input("  Fix a path mapping? [y/N] ").strip().lower()
+    while resp == "y":
+        remote = input("    Kodi path prefix: ").strip()
+        local = input("    Local path prefix: ").strip()
         if remote and local:
-            current_mappings[remote] = local
-            config["_path_mappings"] = current_mappings
+            mappings = config.get("_path_mappings", {})
+            mappings[remote] = local
+            config["_path_mappings"] = mappings
             json.dump(config, open(CONFIG_FILE, "w"), indent=2)
-            print(f"  Saved mapping: {remote} → {local}")
-            # Re-test
-            test_path = map_path(sample_paths[0], config)
-            print(f"  Test: {sample_paths[0]} → {test_path} (exists: {os.path.exists(test_path)})")
+            print(f"    Saved: {remote} -> {local}")
+        resp = input("  Fix another? [y/N] ").strip().lower()
     print("")
 
 def main():
