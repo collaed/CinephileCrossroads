@@ -1474,14 +1474,22 @@ def render_library(user):
     if not library:
         return '<html><body style="background:#1a1a2e;color:#eee;font-family:sans-serif;padding:40px"><h2>No local library synced</h2><a href="' + BASE + '/setup/' + user + '" style="color:#4fc3f7">Setup media servers</a></body></html>'
 
-    # Find duplicates by IMDB ID (multiple files for same title)
-    # Group by title name (case-insensitive) to catch different versions
+    # Find duplicates: multiple files with the same IMDB ID = true duplicates
+    # One IMDB ID can have multiple paths (different quality versions)
     from collections import defaultdict
-    by_title = defaultdict(list)
+    by_iid = defaultdict(list)
     for iid, info in library.items():
         if not isinstance(info, dict): continue
-        name = (info.get("title") or titles.get(iid, {}).get("title") or iid).lower().strip()
-        by_title[name].append((iid, info))
+        path = info.get("path", "")
+        if not path: continue
+        by_iid[iid].append(info)
+    # Also detect multiple paths within a single entry (shouldn't happen but check)
+    # The real duplicates are IDs with multiple distinct paths
+    by_title = defaultdict(list)
+    for iid, entries in by_iid.items():
+        if len(entries) <= 1: continue
+        for info in entries:
+            by_title[iid].append((iid, info))
 
     # Also detect same IMDB ID with different paths (true duplicates)
     # For now, focus on quality comparison of all titles
@@ -1505,18 +1513,19 @@ def render_library(user):
         if c: codec_dist[c] += 1
 
     # Find titles with multiple entries (potential duplicates)
-    dupes = [(name, entries) for name, entries in by_title.items() if len(entries) > 1]
+    dupes = [(iid, entries) for iid, entries in by_title.items()]
     dupes.sort(key=lambda x: len(x[1]), reverse=True)
 
     # Build duplicate rows grouped by title
     dupe_rows = ""
     for name, entries in dupes[:100]:
         # Get proper title from first entry
-        first_iid = entries[0][0]
-        proper_title = entries[0][1].get("title") or titles.get(first_iid, {}).get("title") or name
-        year = entries[0][1].get("year") or titles.get(first_iid, {}).get("year", "")
-        # Header row for this group
-        dupe_rows += '<tr style="background:#1a3a5e"><td colspan="9"><b>' + proper_title + '</b> (' + str(year) + ') — ' + first_iid + ' — <b>' + str(len(entries)) + ' copies</b></td></tr>'
+        iid_key = entries[0][0]
+        t = titles.get(iid_key, {})
+        proper_title = t.get("title") or entries[0][1].get("title") or iid_key
+        year = t.get("year") or entries[0][1].get("year", "")
+        imdb_r = t.get("imdb_rating", "")
+        dupe_rows += '<tr style="background:#1a3a5e"><td colspan="9"><b>' + proper_title + '</b> (' + str(year) + ') — <a href="https://www.imdb.com/title/' + iid_key + '/" target="_blank">' + iid_key + '</a> — IMDB ' + str(imdb_r) + ' — <b>' + str(len(entries)) + ' copies</b></td></tr>'
         # Find best entry (highest resolution)
         best_h = max(int(e[1].get("video_height", 0) or 0) if isinstance(e[1], dict) else 0 for e in entries)
         for iid, info in entries:
@@ -1533,9 +1542,31 @@ def render_library(user):
             # Windows explorer link (file:/// protocol)
             folder = path.rsplit("/", 1)[0] if "/" in path else path.rsplit("\\", 1)[0] if "\\" in path else path
             open_btn = '<a href="file:///' + folder.replace("\\", "/") + '" title="Open folder">📂</a>' if path else ""
+            # Filesize
+            raw_size = info.get("file_size", 0) or 0
+            if not raw_size:
+                p = info.get("path", "")
+                # Try to parse size from path or estimate
+                raw_size = 0
+            if raw_size > 1073741824:
+                size_str = str(round(raw_size / 1073741824, 1)) + " GB"
+            elif raw_size > 1048576:
+                size_str = str(round(raw_size / 1048576)) + " MB"
+            elif raw_size:
+                size_str = str(raw_size)
+            else:
+                size_str = "—"
+            # Duration
+            dur = info.get("runtime") or info.get("video_duration", 0) or 0
+            if dur:
+                dur_str = str(int(dur)) + " min" if int(dur) < 600 else str(int(dur)//60) + "h" + str(int(dur)%60) + "m"
+            else:
+                dur_str = "—"
             dupe_rows += "<tr>"
             dupe_rows += "<td>" + str(h) + "p</td>"
             dupe_rows += "<td>" + codec + "</td>"
+            dupe_rows += "<td>" + size_str + "</td>"
+            dupe_rows += "<td>" + dur_str + "</td>"
             dupe_rows += "<td>" + audio_str + "</td>"
             dupe_rows += "<td>" + sub_str + "</td>"
             dupe_rows += '<td style="' + keep_style + '">' + keep + "</td>"
@@ -1581,7 +1612,7 @@ def render_library(user):
     if dupes:
         html += '<h3>🔍 Potential Duplicates (' + str(len(dupes)) + ' titles)</h3>'
         html += '<p style="color:#888;font-size:.85em">✅ = suggested keep (highest resolution) · ❌ = candidate for removal</p>'
-        html += '<table><thead><tr><th>Resolution</th><th>Codec</th><th>Audio</th><th>Subtitles</th><th>Suggestion</th><th></th><th>Path</th></tr></thead>'
+        html += '<table><thead><tr><th>Res</th><th>Codec</th><th>Size</th><th>Duration</th><th>Audio</th><th>Subs</th><th>Suggestion</th><th></th><th>Path</th></tr></thead>'
         html += '<tbody>' + dupe_rows + '</tbody></table>'
 
     html += '<p style="margin-top:20px"><a href="' + BASE + '/u/' + user + '">← Ratings</a> · <a href="' + BASE + '/setup/' + user + '">⚙ Setup</a></p>'
