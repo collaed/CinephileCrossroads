@@ -74,7 +74,7 @@ def fetch_jellyfin(cfg):
 def fetch_kodi(cfg):
     lib = {}
     payload = {"jsonrpc": "2.0", "method": "VideoLibrary.GetMovies", "id": 1,
-               "params": {"properties": ["imdbnumber", "file", "streamdetails", "runtime", "title", "year"]}}
+               "params": {"properties": ["imdbnumber", "file", "streamdetails", "runtime", "title", "year", "playcount", "lastplayed"]}}
     headers = {"Content-Type": "application/json"}
     if cfg.get("user") and cfg.get("password"):
         import base64
@@ -102,6 +102,8 @@ def fetch_kodi(cfg):
                 "video_height": v.get("height", 0),
                 "audio": [{"codec": a.get("codec",""), "channels": a.get("channels",0), "language": a.get("language","")} for a in aus],
                 "subtitles": [{"language": s.get("language","")} for s in subs],
+                "playcount": m.get("playcount", 0),
+                "lastplayed": m.get("lastplayed", ""),
             }
     except Exception as e:
         print(f"  Kodi movies error: {e}")
