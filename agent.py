@@ -565,7 +565,7 @@ def daemon_mode(args, config):
             _last_activity["errors"] = 0
             time.sleep(15)  # Check every 15s
     
-    log(f"Agent daemon — server: {base_url}, user: {args.user}")
+    log(f"Agent daemon - server: {base_url}, user: {args.user}")
     log(f"  Sync thread: every 30 min")
     log(f"  Task thread: every 15 sec")
     
