@@ -608,12 +608,21 @@ def save_watchlist(user, wl):
     json.dump(wl, open(user_dir(user) + "/watchlist.json", "w"))
 
 # ── TasteDive ─────────────────────────────────────────────────────────
-def tastedive_similar(title):
-    """Get similar titles from TasteDive (free, no key)."""
+def tastedive_similar(imdb_id, title):
+    """Get similar titles from TasteDive. Cached in title store."""
+    titles = load_titles()
+    t = titles.get(imdb_id, {})
+    if t.get("_tastedive"):
+        return t["_tastedive"]
     q = urllib.parse.quote(title)
     data = api_get(f"https://tastedive.com/api/similar?q={q}&type=movie&limit=5&info=1")
     if not data: return []
-    return [{"title": r.get("Name",""), "type": r.get("Type",""), "description": r.get("wTeaser","")} for r in data.get("Similar",{}).get("Results",[])]
+    results = [{"title": r.get("Name",""), "type": r.get("Type",""), "description": r.get("wTeaser","")} for r in data.get("Similar",{}).get("Results",[])]
+    # Cache
+    if imdb_id in titles:
+        titles[imdb_id]["_tastedive"] = results
+        save_titles(titles)
+    return results
 
 # ── IMDB Bulk Datasets ────────────────────────────────────────────────
 IMDB_DATASET_DIR = f"{DATA_DIR}/imdb_datasets"
@@ -963,10 +972,17 @@ def enrich_titles(jid=None):
     never = [(k, v) for k, v in titles.items() if not v.get("_enriched")]
     partial = sorted([(k, v) for k, v in titles.items() if v.get("_enriched") and _richness(v) < 5],
                      key=lambda x: _richness(x[1]))
-    todo = never + partial
+    # FIFO: re-enrich oldest titles (enriched_ts > 30 days ago), limited batch
+    import datetime
+    stale_cutoff = (datetime.datetime.now() - datetime.timedelta(days=30)).isoformat()
+    stale = sorted([(k, v) for k, v in titles.items()
+                    if v.get("_enriched") and v.get("_enriched_ts", "") < stale_cutoff and _richness(v) >= 5],
+                   key=lambda x: x[1].get("_enriched_ts", ""))[:50]  # Max 50 stale per run
+    todo = never + partial + stale
     total = len(todo)
     count = 0
     cache = load_imdb_cache()
+    omdb_calls = 0
     for iid, t in todo:
         # Fill basics from IMDB dataset (free, no API call)
         ds = cache.get(iid, {})
@@ -976,8 +992,9 @@ def enrich_titles(jid=None):
         if TMDB_KEY:
             for k, v in tmdb_enrich(iid).items():
                 if v: t[k] = v
-        if OMDB_KEY:
+        if OMDB_KEY and omdb_calls < 500:
             o = omdb_enrich(iid)
+            omdb_calls += 1
             for k in ("rotten_tomatoes", "metacritic", "plot", "awards"):
                 if o.get(k): t[k] = o[k]
             if o.get("poster") and not t.get("poster"): t["poster"] = o["poster"]
@@ -985,6 +1002,7 @@ def enrich_titles(jid=None):
             for k, v in tvdb_enrich(iid).items():
                 if v: t[k] = v
         t["_enriched"] = True
+        t["_enriched_ts"] = time.strftime("%Y-%m-%dT%H:%M")
         count += 1
         if jid and count % 5 == 0:
             job_progress(jid, count, total, f"Enriching {t.get('title',iid)}")
@@ -1746,12 +1764,9 @@ th,td{{padding:6px 10px;text-align:left;border-bottom:1px solid #333}}th{{backgr
                 iid, t, score = random.choice(recs[:10])
                 provs = " ".join(PROVIDER_ICONS.get(p,"") for p in t.get("providers",[]) if p in get_user_active_providers(u))
                 trailer = ""
-                if t.get("tmdb_id") and TMDB_KEY:
-                    kind = "tv" if t.get("type") == "tv" else "movie"
-                    vids = api_get(f"https://api.themoviedb.org/3/{kind}/{t['tmdb_id']}/videos?api_key={TMDB_KEY}")
-                    if vids:
-                        yt = next((v for v in vids.get("results",[]) if v.get("site")=="YouTube" and v.get("type")=="Trailer"), None)
-                        if yt: trailer = f'<iframe width="560" height="315" src="https://www.youtube.com/embed/{yt["key"]}" frameborder="0" allowfullscreen style="border-radius:8px;margin-top:15px"></iframe>'
+                if t.get("trailer"):
+                    yt_id = t["trailer"].split("v=")[-1] if "v=" in t.get("trailer","") else ""
+                    if yt_id: trailer = f'<iframe width="560" height="315" src="https://www.youtube.com/embed/{yt_id}" frameborder="0" allowfullscreen style="border-radius:8px;margin-top:15px"></iframe>'
                 poster = f'<img src="{t["poster"]}" style="border-radius:8px;max-height:400px">' if t.get("poster") else ""
                 self._html(f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>Tonight</title>
 <meta property="og:title" content="🎬 Tonight: {t.get('title','?')}">
@@ -1797,7 +1812,7 @@ button{{padding:12px 30px;background:#4fc3f7;border:none;border-radius:8px;curso
             iid = parts[-1]
             titles = load_titles()
             t = titles.get(iid, {})
-            results = tastedive_similar(t.get("title", ""))
+            results = tastedive_similar(imdb_id, t.get("title", ""))
             rows = "".join("<tr><td><b>" + r["title"] + "</b></td><td>" + r.get("description","")[:200] + "</td></tr>" for r in results)
             self._html(f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>Similar</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
