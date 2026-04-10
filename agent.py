@@ -16,7 +16,7 @@ DEFAULT_CONFIG = {
     "plex": {"enabled": False, "url": "http://192.168.1.x:32400", "token": ""},
     "jellyfin": {"enabled": False, "url": "http://192.168.1.x:8096", "token": ""},
     "emby": {"enabled": False, "url": "http://192.168.1.x:8096", "token": ""},
-    "kodi": {"enabled": False, "url": "http://192.168.1.x:8080/jsonrpc"},
+    "kodi": {"enabled": False, "url": "http://192.168.1.x:8080/jsonrpc", "user": "kodi", "password": ""},
     "radarr": {"enabled": False, "url": "http://192.168.1.x:7878", "token": ""},
     "sonarr": {"enabled": False, "url": "http://192.168.1.x:8989", "token": ""},
     "_agent_token": "paste-your-token-here",
@@ -70,8 +70,12 @@ def fetch_kodi(cfg):
     lib = {}
     payload = {"jsonrpc": "2.0", "method": "VideoLibrary.GetMovies", "id": 1,
                "params": {"properties": ["imdbnumber", "file"]}}
-    req = urllib.request.Request(cfg["url"], data=json.dumps(payload).encode(),
-        headers={"Content-Type": "application/json"})
+    headers = {"Content-Type": "application/json"}
+    if cfg.get("user") and cfg.get("password"):
+        import base64
+        cred = base64.b64encode((cfg["user"] + ":" + cfg["password"]).encode()).decode()
+        headers["Authorization"] = "Basic " + cred
+    req = urllib.request.Request(cfg["url"], data=json.dumps(payload).encode(), headers=headers)
     try:
         data = json.loads(urllib.request.urlopen(req, timeout=10).read())
         for m in data.get("result", {}).get("movies", []):
