@@ -35,20 +35,20 @@ if ($ffmpegPath) {
         winget install --id Gyan.FFmpeg -e --accept-package-agreements --accept-source-agreements
     } else {
         Write-Host "  Downloading ffmpeg..."
-        $url = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
-        $zip = Join-Path $env:TEMP "ffmpeg.zip"
-        $dest = "C:\ffmpeg"
-        Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing
-        Expand-Archive -Path $zip -DestinationPath $dest -Force
-        $bin = Get-ChildItem -Path $dest -Recurse -Filter "ffmpeg.exe" | Select-Object -First 1
-        if ($bin) {
-            $binDir = $bin.DirectoryName
-            $userPath = [Environment]::GetEnvironmentVariable("PATH", "User")
-            [Environment]::SetEnvironmentVariable("PATH", "$userPath;$binDir", "User")
-            $env:PATH = "$env:PATH;$binDir"
-            Write-Host "  ffmpeg installed to $binDir" -ForegroundColor Green
+        $ffUrl = 'https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip'
+        $ffZip = Join-Path $env:TEMP 'ffmpeg.zip'
+        $ffDest = Join-Path $env:ProgramFiles 'ffmpeg'
+        Invoke-WebRequest -Uri $ffUrl -OutFile $ffZip -UseBasicParsing
+        Expand-Archive -Path $ffZip -DestinationPath $ffDest -Force
+        $ffBin = Get-ChildItem -Path $ffDest -Recurse -Filter 'ffmpeg.exe' | Select-Object -First 1
+        if ($ffBin) {
+            $ffBinDir = $ffBin.DirectoryName
+            $currentPath = [Environment]::GetEnvironmentVariable('PATH', 'User')
+            [Environment]::SetEnvironmentVariable('PATH', ($currentPath + ';' + $ffBinDir), 'User')
+            $env:PATH = $env:PATH + ';' + $ffBinDir
+            Write-Host ('  ffmpeg installed to ' + $ffBinDir) -ForegroundColor Green
         }
-        Remove-Item $zip -Force -ErrorAction SilentlyContinue
+        Remove-Item $ffZip -Force -ErrorAction SilentlyContinue
     }
 }
 
@@ -58,7 +58,7 @@ Write-Host "Verification:" -ForegroundColor Cyan
 
 $python = Get-Command python -ErrorAction SilentlyContinue
 if ($python) { Write-Host "  Python: OK" -ForegroundColor Green }
-else { Write-Host "  Python: NOT FOUND — install from https://python.org" -ForegroundColor Red }
+else { Write-Host "  Python: NOT FOUND - install from https://python.org" -ForegroundColor Red }
 
 $ff = Get-Command ffmpeg -ErrorAction SilentlyContinue
 if ($ff) { Write-Host "  ffmpeg: OK" -ForegroundColor Green }
@@ -66,4 +66,4 @@ else { Write-Host "  ffmpeg: not in PATH yet (open a new terminal)" -ForegroundC
 
 Write-Host ""
 Write-Host "Done! Press any key to close..." -ForegroundColor Green
-$null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+$null = $Host.UI.RawUI.ReadKey('NoEcho,IncludeKeyDown')
