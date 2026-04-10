@@ -116,6 +116,29 @@ python agent.py --server https://your-domain.com/imdb --user yourname
 schtasks /create /tn "CineCross Sync" /tr "python C:\path\to\agent.py --server https://your-domain.com/imdb --user yourname" /sc hourly
 ```
 
+#### Windows Prerequisites (optional)
+
+For file sizes, hashes, and video thumbnails, run the setup script as Administrator:
+```powershell
+powershell -ExecutionPolicy Bypass -File setup-windows.ps1
+```
+This installs:
+- **NFS client** — access NFS shares from Windows (optional if using SMB)
+- **ffmpeg** — video thumbnails for library curation
+
+#### Path Mapping (NFS/SMB)
+
+If your media server (Kodi) uses NFS paths but your Windows machine accesses them via SMB, configure path mappings in `agent.json`:
+```json
+{
+    "_path_mappings": {
+        "nfs://192.168.0.235/volume1/Movies": "//zeus/Movies",
+        "nfs://192.168.0.235/volume1/TVShows": "//zeus/TVShows"
+    }
+}
+```
+The agent auto-converts forward slashes to backslashes on Windows. On first run, it checks if paths are accessible and prompts to set up mappings interactively.
+
 The agent supports: Plex, Jellyfin, Emby, Kodi, Radarr, Sonarr, and tinyMediaManager. It computes OpenSubtitles file hashes for sync-accurate subtitle matching.
 
 ## Quick Start
