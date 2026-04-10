@@ -493,7 +493,6 @@ def main():
     total_hashed = 0
     total_not_found = 0
 
-    batch_start_count = 0
     for batch_start in range(0, len(items), batch_size):
         batch = dict(items[batch_start:batch_start + batch_size])
         batch_num = batch_start // batch_size + 1
@@ -512,22 +511,22 @@ def main():
                         info["local_path"] = mapped
                     if os.name == "nt":
                         mapped = mapped.replace("/", "\\")
+                    short = os.path.basename(mapped)[:40]
+                    print(f"    [{total_sized+total_not_found+1}] {short}...", end="\r")
                     if os.path.isfile(mapped):
                         try:
                             info["file_size"] = os.path.getsize(mapped)
                             total_sized += 1
-                        except:
+                        except Exception as e:
                             total_not_found += 1
+                            print(f"\n    ! Size error: {short} - {e}")
                         h = opensubtitles_hash(mapped)
                         if h:
                             info["file_hash"] = h
                             total_hashed += 1
-                    elif path:
+                    else:
                         total_not_found += 1
-                batch_done = total_sized + total_not_found
-                if batch_done % 50 == 0:
-                    print(f"    {batch_done - batch_start_count} files processed in this batch...", end="\r")
-        batch_start_count = total_sized + total_not_found
+                        print(f"\n    ! Not found: {mapped[:70]}")
 
         print(f"  Sized: {total_sized} | Hashed: {total_hashed} | Not found: {total_not_found}")
 
