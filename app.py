@@ -1508,22 +1508,41 @@ def render_library(user):
     dupes = [(name, entries) for name, entries in by_title.items() if len(entries) > 1]
     dupes.sort(key=lambda x: len(x[1]), reverse=True)
 
-    # Build duplicate rows
+    # Build duplicate rows grouped by title
     dupe_rows = ""
-    for name, entries in dupes[:50]:
+    for name, entries in dupes[:100]:
+        # Get proper title from first entry
+        first_iid = entries[0][0]
+        proper_title = entries[0][1].get("title") or titles.get(first_iid, {}).get("title") or name
+        year = entries[0][1].get("year") or titles.get(first_iid, {}).get("year", "")
+        # Header row for this group
+        dupe_rows += '<tr style="background:#1a3a5e"><td colspan="9"><b>' + proper_title + '</b> (' + str(year) + ') — ' + first_iid + ' — <b>' + str(len(entries)) + ' copies</b></td></tr>'
+        # Find best entry (highest resolution)
+        best_h = max(int(e[1].get("video_height", 0) or 0) if isinstance(e[1], dict) else 0 for e in entries)
         for iid, info in entries:
             h = info.get("video_height") or info.get("quality", "")
             codec = info.get("video_codec", "")
             audio = info.get("audio", [])
-            audio_str = ", ".join(a.get("codec","") + " " + str(a.get("channels","")) + "ch " + a.get("language","") for a in audio[:3]) if audio else "?"
+            audio_str = " | ".join(a.get("codec","") + " " + str(a.get("channels","")) + "ch " + a.get("language","") for a in audio[:4]) if audio else "—"
             subs = info.get("subtitles", [])
-            sub_str = ", ".join(s.get("language","") for s in subs[:5]) if subs else "none"
+            sub_str = ", ".join(s.get("language","") for s in subs[:6]) if subs else "none"
             path = info.get("path", "")
-            # Suggest: keep highest resolution
-            best = max(entries, key=lambda x: int(x[1].get("video_height", 0) or 0) if isinstance(x[1], dict) else 0)
-            is_best = "✅" if (iid, info) == best else "❌"
-            dupe_rows += "<tr><td>" + name[:40] + "</td><td>" + iid + "</td><td>" + str(h) + "</td><td>" + codec + "</td><td>" + audio_str + "</td><td>" + sub_str + "</td><td>" + is_best + "</td><td style='font-size:.7em;color:#666'>" + path[-60:] + "</td></tr>"
-        dupe_rows += '<tr><td colspan="8" style="border-bottom:2px solid #4fc3f7"></td></tr>'
+            is_best = int(h or 0) == best_h and best_h > 0
+            keep = "✅ keep" if is_best else "❌"
+            keep_style = "color:#2d7" if is_best else "color:#d72"
+            # Windows explorer link (file:/// protocol)
+            folder = path.rsplit("/", 1)[0] if "/" in path else path.rsplit("\\", 1)[0] if "\\" in path else path
+            open_btn = '<a href="file:///' + folder.replace("\\", "/") + '" title="Open folder">📂</a>' if path else ""
+            dupe_rows += "<tr>"
+            dupe_rows += "<td>" + str(h) + "p</td>"
+            dupe_rows += "<td>" + codec + "</td>"
+            dupe_rows += "<td>" + audio_str + "</td>"
+            dupe_rows += "<td>" + sub_str + "</td>"
+            dupe_rows += '<td style="' + keep_style + '">' + keep + "</td>"
+            dupe_rows += "<td>" + open_btn + "</td>"
+            dupe_rows += '<td style="font-size:.7em;color:#888;max-width:400px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + path + '">' + path[-70:] + "</td>"
+            dupe_rows += "</tr>"
+        dupe_rows += '<tr><td colspan="9" style="border-bottom:2px solid #333;height:8px"></td></tr>\n' 
 
     # Quality bars
     q_bars = ""
@@ -1562,7 +1581,7 @@ def render_library(user):
     if dupes:
         html += '<h3>🔍 Potential Duplicates (' + str(len(dupes)) + ' titles)</h3>'
         html += '<p style="color:#888;font-size:.85em">✅ = suggested keep (highest resolution) · ❌ = candidate for removal</p>'
-        html += '<table><thead><tr><th>Title</th><th>IMDB</th><th>Res</th><th>Codec</th><th>Audio</th><th>Subs</th><th>Keep?</th><th>Path</th></tr></thead>'
+        html += '<table><thead><tr><th>Resolution</th><th>Codec</th><th>Audio</th><th>Subtitles</th><th>Suggestion</th><th></th><th>Path</th></tr></thead>'
         html += '<tbody>' + dupe_rows + '</tbody></table>'
 
     html += '<p style="margin-top:20px"><a href="' + BASE + '/u/' + user + '">← Ratings</a> · <a href="' + BASE + '/setup/' + user + '">⚙ Setup</a></p>'
