@@ -2822,6 +2822,17 @@ button{{padding:10px 20px;background:#4fc3f7;border:none;border-radius:6px;curso
                 self.send_response(404)
                 self.end_headers()
             return
+        elif p.startswith("/api/agent_status"):
+            # Agent reports status via GET with base64-encoded JSON in query
+            import base64
+            encoded = qs.get("s", [""])[0]
+            if encoded:
+                try:
+                    status = json.loads(base64.b64decode(encoded).decode())
+                    save_agent_status(status)
+                except: pass
+            self._json({"status": "ok"})
+            return
         elif p == "/api/tasks":
             # Agent polls this for pending tasks
             self._json({"tasks": get_pending_tasks()})

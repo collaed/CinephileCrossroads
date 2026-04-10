@@ -515,15 +515,16 @@ def daemon_mode(args, config):
             try:
                 # Handshake: report status via separate call, then fetch tasks
                 try:
+                    import base64
                     status = json.dumps({
                         "agent_version": AGENT_VERSION,
                         "last_activity": _last_activity,
                         "recent_logs": get_recent_logs(10),
                         "uptime": int(time.time() - _start_time),
                         "consecutive_errors": consecutive_errors,
-                    }).encode()
-                    sreq = urllib.request.Request(f"{base_url}/api/agent_status",
-                        data=status, headers={**headers, "Content-Type": "application/json"})
+                    })
+                    encoded = base64.b64encode(status.encode()).decode()
+                    sreq = urllib.request.Request(f"{base_url}/api/agent_status?s={encoded}", headers=headers)
                     urllib.request.urlopen(sreq, timeout=5)
                 except: pass
                 # Fetch tasks via GET
