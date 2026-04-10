@@ -202,6 +202,7 @@ def _apply_task_result(task, result):
     params = task.get("params", {})
     data = result.get("data", {})
     if not data: return
+    print(f"[tasks] Applying {ttype}: {len(data)} items")
     # Find which user this is for (check all users)
     for user in list_users():
         library = load_user_tmm(user)
@@ -230,6 +231,7 @@ def _apply_task_result(task, result):
                         updated = True
         if updated:
             save_user_tmm(user, library)
+            print(f"[tasks] Updated {user} library")
             break
 
 # ── Background jobs ───────────────────────────────────────────────────
@@ -2046,6 +2048,13 @@ def render_tvshows(user):
     html += '</body></html>'
     return html
 
+def render_library_nav(user, active="library"):
+    return sub_nav([
+        ("library", "📚 Library", f"{BASE}/library/{user}"),
+        ("tvshows", "📺 TV Shows", f"{BASE}/tvshows/{user}"),
+        ("scraper", "🔍 Scraper", f"{BASE}/scraper/{user}"),
+    ], active)
+
 def render_library(user):
     """Library curation: duplicates, quality comparison, cleanup suggestions."""
     library = load_user_tmm(user)
@@ -2214,6 +2223,50 @@ def render_library(user):
 
     html += '<p style="margin-top:20px"><a href="' + BASE + '/u/' + user + '">← Ratings</a> · <a href="' + BASE + '/setup/' + user + '">⚙ Setup</a></p>'
     html += '</body></html>'
+    return html
+
+def render_scraper(user):
+    """Movie scraper: show unmatched files, allow manual matching."""
+    library = load_user_tmm(user)
+    titles = load_titles()
+    
+    # Find unmatched: in library but not in titles store, or no poster
+    unmatched = []
+    matched_count = 0
+    for iid, info in library.items():
+        if iid.startswith("_") or not isinstance(info, dict): continue
+        if iid in titles and titles[iid].get("poster"):
+            matched_count += 1
+            continue
+        parsed = parse_movie_filename(info.get("path", "")) if info.get("path") else {"title": "", "year": ""}
+        unmatched.append((iid, info, parsed))
+    
+    rows = ""
+    for iid, info, parsed in unmatched[:100]:
+        path = info.get("path", "")
+        short_path = path.split("/")[-1] if "/" in path else path.split("\\")[-1] if "\\" in path else path
+        title_guess = parsed.get("title", "")
+        year_guess = parsed.get("year", "")
+        quality = parsed.get("quality", "")
+        is_3d = parsed.get("is_3d", "")
+        search_q = urllib.parse.quote(f"{title_guess} {year_guess}".strip())
+        rows += f'<tr><td class="x" style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="{path}">{short_path}</td>'
+        rows += f'<td>{title_guess}</td><td>{year_guess}</td><td>{quality} {is_3d or ""}</td>'
+        rows += f'<td><form method="GET" action="{BASE}/scraper-match/{user}/{iid}" style="display:flex;gap:4px"><input name="q" value="{title_guess}" style="width:150px;padding:4px"><button type="submit" class="btn">🔍</button></form></td></tr>'
+    
+    html = page_head(f"Scraper - {user}")
+    html += nav_bar("library", user)
+    html += sub_nav([
+        ("library", "📚 Library", f"{BASE}/library/{user}"),
+        ("tvshows", "📺 TV Shows", f"{BASE}/tvshows/{user}"),
+        ("scraper", "🔍 Scraper", f"{BASE}/scraper/{user}"),
+    ], "scraper")
+    html += '<div class="page">'
+    html += f'<div class="grid"><div class="card card-stat"><div class="num">{matched_count}</div>matched</div>'
+    html += f'<div class="card card-stat"><div class="num" style="color:var(--warn)">{len(unmatched)}</div>unmatched</div></div>'
+    html += '<table><thead><tr><th>File</th><th>Title (guess)</th><th>Year</th><th>Quality</th><th>Match</th></tr></thead>'
+    html += '<tbody>' + rows + '</tbody></table>'
+    html += '</div>' + page_foot()
     return html
 
 def render_stats(user):
@@ -2532,6 +2585,58 @@ td{{padding:8px;border-bottom:1px solid #333}}a{{color:#4fc3f7;text-decoration:n
 <p style="color:#888">Titles from your watchlist now available on your streaming services</p>
 <table>{rows if rows else "<tr><td>No watchlisted titles currently available</td></tr>"}</table>
 <p style="margin-top:15px"><a href="{BASE}/u/{u}">← Back</a></p></body></html>""")
+            return
+        elif p.startswith("/scraper/"):
+            u = parts[-1]
+            self._page(render_scraper(u), "library", u)
+            return
+        elif p.startswith("/scraper-match/"):
+            # /scraper-match/<user>/<imdb_id>?q=search+term
+            u = parts[-2] if len(parts) >= 3 else self._user(parts)
+            iid = parts[-1]
+            query = qs.get("q", [""])[0]
+            if query and TMDB_KEY:
+                results = api_get(f"https://api.themoviedb.org/3/search/multi?api_key={TMDB_KEY}&query={urllib.parse.quote(query)}")
+                matches = []
+                for r in (results or {}).get("results", [])[:8]:
+                    title = r.get("title") or r.get("name", "")
+                    year = (r.get("release_date") or r.get("first_air_date") or "")[:4]
+                    poster = f"https://image.tmdb.org/t/p/w92{r['poster_path']}" if r.get("poster_path") else ""
+                    matches.append(f'<a href="{BASE}/scraper-apply/{u}/{iid}/{r["id"]}/{r.get("media_type","movie")}" style="display:flex;gap:8px;align-items:center;padding:8px;background:var(--card);border-radius:6px;margin:4px 0;text-decoration:none;color:var(--fg)"><img src="{poster}" height="60">{title} ({year})</a>')
+                self._page(page_head("Match") + nav_bar("library", u) + '<div class="page"><h3>Select match</h3>' + "".join(matches) + f'<p><a href="{BASE}/scraper/{u}">← Back</a></p></div>' + page_foot(), "library", u)
+            else:
+                self._redirect(f"{BASE}/scraper/{u}")
+            return
+        elif p.startswith("/scraper-apply/"):
+            # /scraper-apply/<user>/<library_imdb_id>/<tmdb_id>/<type>
+            u = parts[-4]
+            old_iid = parts[-3]
+            tmdb_id = int(parts[-2])
+            kind = parts[-1]
+            # Look up IMDB ID from TMDB
+            ext = api_get(f"https://api.themoviedb.org/3/{kind}/{tmdb_id}/external_ids?api_key={TMDB_KEY}")
+            if ext and ext.get("imdb_id"):
+                new_iid = ext["imdb_id"]
+                library = load_user_tmm(u)
+                if old_iid in library:
+                    info = library.pop(old_iid)
+                    info["matched"] = True
+                    info["tmdb_id"] = tmdb_id
+                    library[new_iid] = info
+                    save_user_tmm(u, library)
+                    # Also add to titles store
+                    titles = load_titles()
+                    if new_iid not in titles:
+                        detail = api_get(f"https://api.themoviedb.org/3/{kind}/{tmdb_id}?api_key={TMDB_KEY}")
+                        if detail:
+                            genres = ", ".join(g["name"] for g in detail.get("genres", []))
+                            titles[new_iid] = {"title": detail.get("title") or detail.get("name",""),
+                                "year": (detail.get("release_date") or detail.get("first_air_date",""))[:4],
+                                "tmdb_id": tmdb_id, "genres": genres, "type": kind,
+                                "overview": detail.get("overview",""),
+                                "poster": f"https://image.tmdb.org/t/p/w185{detail['poster_path']}" if detail.get("poster_path") else ""}
+                            save_titles(titles)
+            self._redirect(f"{BASE}/scraper/{u}")
             return
         elif p.startswith("/stats/"):
             u = parts[-1]
