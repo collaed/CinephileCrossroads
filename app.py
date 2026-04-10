@@ -634,6 +634,91 @@ def tastedive_similar(title):
     if not data: return []
     return [{"title": r.get("Name",""), "type": r.get("Type",""), "description": r.get("wTeaser","")} for r in data.get("Similar",{}).get("Results",[])]
 
+# ── IMDB Bulk Datasets ────────────────────────────────────────────────
+IMDB_DATASET_DIR = f"{DATA_DIR}/imdb_datasets"
+IMDB_BASICS = f"{IMDB_DATASET_DIR}/title.basics.tsv"
+IMDB_RATINGS_DS = f"{IMDB_DATASET_DIR}/title.ratings.tsv"
+_imdb_cache = {}  # {imdb_id: (title, year, type, genres, runtime, imdb_rating, votes)}
+
+def download_imdb_datasets(jid=None):
+    """Download IMDB bulk data files. ~220MB compressed, updated daily."""
+    import gzip, shutil
+    os.makedirs(IMDB_DATASET_DIR, exist_ok=True)
+    for fname in ["title.basics.tsv.gz", "title.ratings.tsv.gz"]:
+        url = f"https://datasets.imdbws.com/{fname}"
+        dest_gz = f"{IMDB_DATASET_DIR}/{fname}"
+        dest = dest_gz.replace(".gz", "")
+        if jid: job_progress(jid, 0, 2, f"Downloading {fname}...")
+        print(f"Downloading {url}...")
+        req = urllib.request.Request(url, headers={"User-Agent": "CinephileCrossroads/1.0"})
+        with urllib.request.urlopen(req, timeout=300) as resp, open(dest_gz, "wb") as f:
+            shutil.copyfileobj(resp, f)
+        with gzip.open(dest_gz, "rb") as gz, open(dest, "wb") as out:
+            shutil.copyfileobj(gz, out)
+        os.remove(dest_gz)
+        print(f"  Extracted {dest}")
+    load_imdb_cache()
+    if jid: job_progress(jid, 2, 2, "Done")
+
+def load_imdb_cache(min_votes=100):
+    """Load IMDB datasets into memory. Filters to movies/TV with min_votes."""
+    global _imdb_cache
+    if _imdb_cache: return _imdb_cache
+    if not os.path.exists(IMDB_BASICS) or not os.path.exists(IMDB_RATINGS_DS):
+        return {}
+    import csv
+    # Load ratings first
+    rated = {}
+    with open(IMDB_RATINGS_DS) as f:
+        reader = csv.reader(f, delimiter="\t")
+        next(reader)
+        for row in reader:
+            try:
+                votes = int(row[2])
+                if votes >= min_votes:
+                    rated[row[0]] = (float(row[1]), votes)
+            except: pass
+    # Load basics for rated titles
+    keep = {"movie", "tvSeries", "tvMiniSeries", "tvMovie"}
+    with open(IMDB_BASICS) as f:
+        reader = csv.reader(f, delimiter="\t")
+        next(reader)
+        for row in reader:
+            if row[0] in rated and row[1] in keep and row[4] == "0":
+                r = rated[row[0]]
+                n = lambda v: "" if v == "\\N" else v
+                _imdb_cache[row[0]] = {
+                    "title": row[2], "year": n(row[5]), "type": row[1],
+                    "genres": n(row[8]).replace(",", ", "),
+                    "runtime": n(row[7]),
+                    "imdb_rating": r[0], "votes": r[1],
+                }
+    print(f"IMDB cache: {len(_imdb_cache)} titles loaded")
+    return _imdb_cache
+
+def imdb_lookup(imdb_id):
+    """Look up a title from the IMDB dataset cache."""
+    if not _imdb_cache: load_imdb_cache()
+    return _imdb_cache.get(imdb_id, {})
+
+def seed_from_imdb_dataset(jid=None):
+    """Seed titles.json with IMDB dataset data for titles missing basic info."""
+    cache = load_imdb_cache()
+    if not cache: return
+    titles = load_titles()
+    updated = 0
+    for iid, t in titles.items():
+        if t.get("genres") and t.get("imdb_rating"): continue
+        ds = cache.get(iid)
+        if not ds: continue
+        for k in ("title", "year", "type", "genres", "runtime", "imdb_rating", "votes"):
+            if ds.get(k) and not t.get(k):
+                t[k] = ds[k]
+        updated += 1
+    save_titles(titles)
+    print(f"Seeded {updated} titles from IMDB dataset")
+
+
 # ── Trakt ─────────────────────────────────────────────────────────────
 def trakt_headers(user):
     token = load_user_trakt_token(user)
@@ -795,7 +880,12 @@ def enrich_titles(jid=None):
     todo = never + partial
     total = len(todo)
     count = 0
+    cache = load_imdb_cache()
     for iid, t in todo:
+        # Fill basics from IMDB dataset (free, no API call)
+        ds = cache.get(iid, {})
+        for k in ("title", "year", "type", "genres", "runtime", "imdb_rating", "votes"):
+            if ds.get(k) and not t.get(k): t[k] = ds[k]
         t.pop("_enriched", None)
         if TMDB_KEY:
             for k, v in tmdb_enrich(iid).items():
@@ -1014,6 +1104,14 @@ def import_csv(user, text):
             "type": row.get("Title Type",""), "imdb_rating": imdb_r, "votes": votes,
             "genres": row.get("Genres",""), "directors": row.get("Directors","")}.items() if v})
         ratings[iid] = {"rating": int(row.get("Your Rating", 0)), "date": row.get("Date Rated", "")}
+    # Fill missing data from IMDB dataset
+    cache = load_imdb_cache()
+    if cache:
+        for iid, t in titles.items():
+            ds = cache.get(iid)
+            if not ds: continue
+            for k in ("genres", "runtime", "imdb_rating", "votes"):
+                if ds.get(k) and not t.get(k): t[k] = ds[k]
     save_titles(titles); save_user_ratings(user, ratings)
     print(f"Imported {len(ratings)} ratings for {user}, {len(titles)} titles total")
 
@@ -1260,6 +1358,10 @@ async function syncFromBrowser(){{
 <input type="file" name="tmm" accept=".csv,.txt"><button type="submit">Upload</button></form><hr>
 <h3>My Streaming Services</h3>
 {_render_provider_config(user)}
+<h3>IMDB Dataset</h3>
+<p>Download IMDB bulk data (200K+ titles, ~220MB). Eliminates most API calls for basic metadata.</p>
+<a href="{BASE}/datasets/download" style="display:inline-block;padding:8px 16px;background:#16213e;border:1px solid #4fc3f7;border-radius:6px;color:#4fc3f7;text-decoration:none">⬇ Download IMDB Datasets</a>
+<hr>
 <h3>Streaming Region</h3>
 <p>Region: <b>{WATCH_COUNTRY}</b> | <a href="{BASE}/catalog">Browse catalog</a></p>
 </div></body></html>"""
@@ -1741,6 +1843,11 @@ td{{padding:8px;border-bottom:1px solid #333}}a{{color:#4fc3f7}}</style></head>
                 save_user_ratings(u, ratings)
             self._redirect(self.headers.get("Referer", f"{BASE}/u/{u}"))
             return
+        elif p == "/datasets/download":
+            if not active_job()[1]:
+                start_job("imdb_datasets", lambda jid: (download_imdb_datasets(jid), seed_from_imdb_dataset(jid)))
+            self._redirect(f"{BASE}/")
+            return
         elif p.startswith("/media/sync/"):
             u = parts[-1]
             if not active_job()[1]:
@@ -1911,6 +2018,7 @@ if __name__ == "__main__":
     migrate_old_data()
     users = list_users()
     titles = load_titles()
+    load_imdb_cache()
     print(f"CinephileCrossroads — {len(titles)} titles, users: {users}")
     print(f"  TMDB:{'✓' if TMDB_KEY else '✗'} OMDB:{'✓' if OMDB_KEY else '✗'} TVDB:{'✓' if TVDB_KEY else '✗'} Trakt:{'✓' if TRAKT_ID else '✗'} Region:{WATCH_COUNTRY}")
     threading.Thread(target=_scheduler, daemon=True).start()
