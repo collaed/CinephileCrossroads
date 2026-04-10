@@ -1538,12 +1538,48 @@ def render_library(user):
             subs = info.get("subtitles", [])
             sub_str = ", ".join(s.get("language","") for s in subs[:6]) if subs else "none"
             path = info.get("path", "")
-            is_best = int(h or 0) == best_h and best_h > 0
-            keep = "✅ keep" if is_best else "❌"
-            keep_style = "color:#2d7" if is_best else "color:#d72"
+            # Smart suggestion: resolution first, then codec efficiency
+            h_val = int(h or 0)
+            is_best_res = h_val == best_h and best_h > 0
+            # Compare x265 vs x264: x265 at <75% filesize = clear winner
+            my_size = info.get("file_size", 0) or 0
+            my_codec = codec.lower()
+            dominated = False  # another entry clearly beats this one
+            for _, other in entries:
+                if other is info: continue
+                o_h = int(other.get("video_height", 0) or 0)
+                o_size = other.get("file_size", 0) or 0
+                o_codec = (other.get("video_codec") or "").lower()
+                # Same or better resolution, x265 at <75% size of this x264
+                if o_h >= h_val and o_codec in ("hevc","h265","x265") and my_codec in ("h264","avc","x264"):
+                    if o_size and my_size and o_size < my_size * 0.75:
+                        dominated = True
+                # Same codec, same res, smaller file
+                if o_h >= h_val and o_codec == my_codec and o_size and my_size and o_size < my_size * 0.9:
+                    dominated = True
+            if is_best_res and not dominated:
+                keep = "✅ keep"
+                keep_style = "color:#2d7"
+            elif dominated:
+                keep = "❌ remove"
+                keep_style = "color:#d72"
+            else:
+                keep = "⚖️"
+                keep_style = "color:#f90"
             # Windows explorer link (file:/// protocol)
-            folder = path.rsplit("/", 1)[0] if "/" in path else path.rsplit("\\", 1)[0] if "\\" in path else path
-            open_btn = '<a href="file:///' + folder.replace("\\", "/") + '" title="Open folder">📂</a>' if path else ""
+            # Get parent directory, convert to SMB path for Windows
+            if "/" in path:
+                folder = path.rsplit("/", 1)[0]
+            elif "\\" in path:
+                folder = path.rsplit("\\", 1)[0]
+            else:
+                folder = path
+            # Convert NFS-style paths to SMB: /Movies/... -> \\server\Movies\...
+            # Keep SMB paths as-is, convert forward slashes for Windows
+            smb_path = folder.replace("/", "\\")
+            if not smb_path.startswith("\\\\"):
+                smb_path = "\\\\" + smb_path.lstrip("\\")
+            open_btn = '<a href="file:///' + folder.replace("\\", "/") + '" title="Open in Explorer: ' + smb_path + '">📂</a>' if path else ""
             # Filesize
             raw_size = info.get("file_size", 0) or 0
             if not raw_size:
