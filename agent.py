@@ -489,7 +489,7 @@ def main():
 
     episodes = library.pop("_episodes", {})
     items = list(library.items())
-    batch_size = 500
+    batch_size = 50
     total_sized = 0
     total_hashed = 0
     total_not_found = 0
