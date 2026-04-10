@@ -1654,112 +1654,79 @@ def render_library(user):
     dupes.sort(key=lambda x: len(x[1]), reverse=True)
     dupes.sort(key=lambda x: len(x[1]), reverse=True)
 
-    # Build duplicate rows grouped by title
-    dupe_rows = ""
-    for name, entries in dupes[:100]:
-        # Get proper title from first entry
+    # Build duplicate cards (column layout)
+    dupe_cards = ""
+    codec_map = {"hevc": "x265/HEVC", "h265": "x265/HEVC", "h264": "x264/AVC", "avc": "x264/AVC",
+                 "mpeg2": "MPEG-2", "mpeg2video": "MPEG-2", "av1": "AV1", "vp9": "VP9", "vc1": "VC-1"}
+    for name, entries in dupes[:50]:
         iid_key = entries[0][0]
         t = titles.get(iid_key, {})
         proper_title = t.get("title") or entries[0][1].get("title") or iid_key
         year = t.get("year") or entries[0][1].get("year", "")
         imdb_r = t.get("imdb_rating", "")
         runtime = t.get("runtime", "")
-        runtime_str = " — " + str(runtime) + " min" if runtime else ""
-        dupe_rows += '<tr style="background:#1a3a5e"><td colspan="9"><b>' + proper_title + '</b> (' + str(year) + ') — <a href="https://www.imdb.com/title/' + iid_key + '/" target="_blank">' + iid_key + '</a> — IMDB ' + str(imdb_r) + runtime_str + ' — <b>' + str(len(entries)) + ' copies</b></td></tr>\n' 
-        # Find best entry (highest resolution)
+        runtime_str = str(runtime) + " min" if runtime else ""
         best_h = max(int(e[1].get("video_height", 0) or 0) if isinstance(e[1], dict) else 0 for e in entries)
+
+        # Group header
+        dupe_cards += '<div style="background:#16213e;border-radius:10px;padding:15px;margin-bottom:15px">'
+        dupe_cards += '<h4 style="margin:0 0 10px 0"><a href="https://www.imdb.com/title/' + iid_key + '/" target="_blank">' + proper_title + '</a> (' + str(year) + ') — IMDB ' + str(imdb_r) + ' — ' + runtime_str + ' — ' + str(len(entries)) + ' copies</h4>'
+
+        # Columns for each copy
+        dupe_cards += '<div style="display:grid;grid-template-columns:repeat(' + str(min(len(entries), 4)) + ',1fr);gap:12px">'
         for iid, info in entries:
             h = info.get("video_height") or info.get("quality", "")
             codec = info.get("video_codec", "")
+            codec_display = codec_map.get(codec.lower(), codec) if codec else ""
             audio = info.get("audio", [])
-            audio_str = " | ".join(a.get("codec","") + " " + str(a.get("channels","")) + "ch " + a.get("language","") for a in audio[:4]) if audio else "—"
+            audio_str = "<br>".join(a.get("codec","") + " " + str(a.get("channels","")) + "ch " + a.get("language","") for a in audio[:3]) if audio else "—"
             subs = info.get("subtitles", [])
-            sub_str = ", ".join(s.get("language","") for s in subs[:6]) if subs else "none"
+            sub_str = ", ".join(s.get("language","") for s in subs[:5]) if subs else "none"
             path = info.get("path", "")
-            # Smart suggestion: resolution first, then codec efficiency
+            raw_size = info.get("file_size", 0) or 0
+            if raw_size > 1073741824: size_str = str(round(raw_size / 1073741824, 1)) + " GB"
+            elif raw_size > 1048576: size_str = str(round(raw_size / 1048576)) + " MB"
+            elif raw_size: size_str = str(raw_size)
+            else: size_str = "—"
+
+            # Thumbnail
+            thumb = info.get("thumbnail", "")
+            thumb_html = '<img src="' + BASE + thumb + '" style="width:100%;border-radius:4px;margin-bottom:8px">' if thumb else '<div style="background:#333;height:80px;border-radius:4px;margin-bottom:8px;display:flex;align-items:center;justify-content:center;color:#666">no preview</div>'
+
+            # Keep suggestion
             h_val = int(h or 0)
-            is_best_res = h_val == best_h and best_h > 0
-            # Compare x265 vs x264: x265 at <75% filesize = clear winner
-            my_size = info.get("file_size", 0) or 0
+            my_size = raw_size
             my_codec = codec.lower()
-            dominated = False  # another entry clearly beats this one
+            dominated = False
             for _, other in entries:
                 if other is info: continue
                 o_h = int(other.get("video_height", 0) or 0)
                 o_size = other.get("file_size", 0) or 0
                 o_codec = (other.get("video_codec") or "").lower()
-                # Same or better resolution, x265 at <75% size of this x264
                 if o_h >= h_val and o_codec in ("hevc","h265","x265") and my_codec in ("h264","avc","x264"):
-                    if o_size and my_size and o_size < my_size * 0.75:
-                        dominated = True
-                # Same codec, same res, smaller file
-                if o_h >= h_val and o_codec == my_codec and o_size and my_size and o_size < my_size * 0.9:
-                    dominated = True
-            if is_best_res and not dominated:
-                keep = "✅ keep"
-                keep_style = "color:#2d7"
-            elif dominated:
-                keep = "❌ remove"
-                keep_style = "color:#d72"
-            else:
-                keep = "⚖️"
-                keep_style = "color:#f90"
-            # Windows explorer link (file:/// protocol)
-            # Get parent directory, convert to SMB path for Windows
-            if "/" in path:
-                folder = path.rsplit("/", 1)[0]
-            elif "\\" in path:
-                folder = path.rsplit("\\", 1)[0]
-            else:
-                folder = path
-            # Convert NFS-style paths to SMB: /Movies/... -> \\server\Movies\...
-            # Keep SMB paths as-is, convert forward slashes for Windows
-            smb_path = folder.replace("/", "\\")
-            if not smb_path.startswith("\\\\"):
-                smb_path = "\\\\" + smb_path.lstrip("\\")
-            open_btn = '<a href="file:///' + folder.replace("\\", "/") + '" title="Open in Explorer: ' + smb_path + '">📂</a>' if path else ""
-            # Filesize
-            raw_size = info.get("file_size", 0) or 0
-            if not raw_size:
-                p = info.get("path", "")
-                # Try to parse size from path or estimate
-                raw_size = 0
-            if raw_size > 1073741824:
-                size_str = str(round(raw_size / 1073741824, 1)) + " GB"
-            elif raw_size > 1048576:
-                size_str = str(round(raw_size / 1048576)) + " MB"
-            elif raw_size:
-                size_str = str(raw_size)
-            else:
-                size_str = "—"
-            # Duration
-            dur = info.get("video_duration", 0) or 0
-            if dur and int(dur) > 3600:  # Kodi video_duration is in seconds
-                dur = int(dur) // 60
-            elif not dur:
-                dur = info.get("runtime", 0) or 0
-            dur = int(dur) if dur else 0
-            if dur > 0:
-                dur_str = str(dur // 60) + "h" + str(dur % 60).zfill(2) + "m" if dur >= 60 else str(dur) + "m"
-            else:
-                dur_str = "—"
-            dupe_rows += "<tr>"
-            dupe_rows += "<td>" + str(h) + "p</td>"
-            codec_map = {"hevc": "x265/HEVC", "h265": "x265/HEVC", "x265": "x265/HEVC",
-                         "h264": "x264/AVC", "avc": "x264/AVC", "x264": "x264/AVC",
-                         "mpeg2": "MPEG-2", "mpeg-2": "MPEG-2", "mpeg2video": "MPEG-2",
-                         "av1": "AV1", "vp9": "VP9", "vc1": "VC-1", "vc-1": "VC-1"}
-            codec_display = codec_map.get(codec.lower(), codec)
-            dupe_rows += "<td>" + codec_display + "</td>"
-            dupe_rows += "<td>" + size_str + "</td>"
-            dupe_rows += "<td>" + dur_str + "</td>"
-            dupe_rows += "<td>" + audio_str + "</td>"
-            dupe_rows += "<td>" + sub_str + "</td>"
-            dupe_rows += '<td style="' + keep_style + '">' + keep + "</td>"
-            dupe_rows += "<td>" + open_btn + "</td>"
-            dupe_rows += '<td style="font-size:.7em;color:#888;max-width:400px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + path + '">' + path[-70:] + "</td>"
-            dupe_rows += "</tr>"
-        dupe_rows += '<tr><td colspan="9" style="border-bottom:2px solid #333;height:8px"></td></tr>\n' 
+                    if o_size and my_size and o_size < my_size * 0.75: dominated = True
+                if o_h >= h_val and o_codec == my_codec and o_size and my_size and o_size < my_size * 0.9: dominated = True
+            is_best = h_val == best_h and best_h > 0 and not dominated
+            border = "2px solid #2d7" if is_best else "2px solid #d72" if dominated else "1px solid #444"
+            badge = '<div style="color:#2d7;font-weight:bold">✅ KEEP</div>' if is_best else '<div style="color:#d72;font-weight:bold">❌ REMOVE</div>' if dominated else '<div style="color:#f90">⚖️ REVIEW</div>'
+
+            # Folder link
+            folder = path.rsplit("/", 1)[0] if "/" in path else path
+            smb_path = folder.replace("nfs://192.168.0.235/volume1", "//zeus")
+            open_btn = '<a href="file:///' + smb_path.replace("\\", "/") + '" style="font-size:.8em">📂 Open folder</a>' if path else ""
+
+            dupe_cards += '<div style="background:#1a1a2e;border-radius:8px;padding:10px;border:' + border + '">'
+            dupe_cards += thumb_html
+            dupe_cards += '<div style="font-size:1.2em;font-weight:bold;margin-bottom:4px">' + str(h) + 'p ' + codec_display + '</div>'
+            dupe_cards += '<div style="font-size:.9em;color:#aaa">Size: ' + size_str + '</div>'
+            dupe_cards += '<div style="font-size:.85em;color:#888;margin:4px 0">Audio: ' + audio_str + '</div>'
+            dupe_cards += '<div style="font-size:.85em;color:#888">Subs: ' + sub_str + '</div>'
+            dupe_cards += badge
+            dupe_cards += '<div style="margin-top:6px">' + open_btn + '</div>'
+            dupe_cards += '<div style="font-size:.65em;color:#555;margin-top:4px;word-break:break-all">' + path[-60:] + '</div>'
+            dupe_cards += '</div>'
+
+        dupe_cards += '</div></div>'
 
     # Quality bars
     q_bars = ""
@@ -1797,9 +1764,8 @@ def render_library(user):
     # Duplicates table
     if dupes:
         html += '<h3>🔍 Potential Duplicates (' + str(len(dupes)) + ' titles)</h3>'
-        html += '<p style="color:#888;font-size:.85em">✅ = suggested keep (highest resolution) · ❌ = candidate for removal</p>'
-        html += '<table><thead><tr><th>Res</th><th>Codec</th><th>Size</th><th>Duration</th><th>Audio</th><th>Subs</th><th>Suggestion</th><th></th><th>Path</th></tr></thead>'
-        html += '<tbody>' + dupe_rows + '</tbody></table>'
+        html += '<p style="color:#888;font-size:.85em">✅ KEEP = best quality · ❌ REMOVE = dominated · ⚖️ REVIEW = manual decision</p>'
+        html += dupe_cards
 
     html += '<p style="margin-top:20px"><a href="' + BASE + '/u/' + user + '">← Ratings</a> · <a href="' + BASE + '/setup/' + user + '">⚙ Setup</a></p>'
     html += '</body></html>'
