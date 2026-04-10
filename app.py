@@ -2511,6 +2511,34 @@ class H(BaseHTTPRequestHandler):
         p = "/" + "/".join(parts)
         user = self._user(parts)
 
+        # API routes first (agent communication)
+        if p.startswith('/api/agent_status'):
+            import base64
+            encoded = qs.get('s', [''])[0]
+            if encoded:
+                try: save_agent_status(json.loads(base64.b64decode(encoded).decode()))
+                except: pass
+            self._json({'status': 'ok'})
+            return
+        if p.startswith('/api/tasks/complete/'):
+            import base64
+            task_id = parts[-1]
+            encoded = qs.get('r', [''])[0]
+            result = None
+            if encoded:
+                try: result = json.loads(base64.b64decode(encoded).decode())
+                except: pass
+            complete_task(task_id, result)
+            self._json({'status': 'ok'})
+            return
+        if p == '/api/tasks':
+            self._json({'tasks': get_pending_tasks()})
+            return
+        if p == '/api':
+            self._json({'titles': len(load_titles()), 'users': {u: len(load_user_ratings(u)) for u in list_users()}})
+            return
+
+
         if p.startswith("/trakt/auth/"):
             u = parts[-1]
             # Store user in state for callback
