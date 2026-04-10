@@ -59,6 +59,70 @@ def load_task_queue():
 def save_task_queue(queue):
     json.dump(queue, open(TASK_QUEUE_FILE, "w"))
 
+
+# ── Auto-task generation ──────────────────────────────────────────────
+def generate_tasks_for_library(user):
+    """Analyze library and enqueue tasks for the agent. Priority: 0=dupes, 1=quality, 2=subs."""
+    library = load_user_tmm(user)
+    if not library: return 0
+    
+    # Clear old pending tasks
+    queue = load_task_queue()
+    queue = [t for t in queue if t["status"] != "pending"]
+    save_task_queue(queue)
+    
+    count = 0
+    
+    # 1. Files without size — need sizing (priority 1)
+    needs_size = [iid for iid, info in library.items()
+                  if info.get("path") and not info.get("file_size") and not info.get("size")]
+    if needs_size:
+        # Batch into groups of 50
+        for i in range(0, len(needs_size), 50):
+            batch = needs_size[i:i+50]
+            paths = [library[iid]["path"] for iid in batch]
+            enqueue_task("size_files", {"paths": paths, "imdb_ids": batch}, priority=1)
+            count += 1
+    
+    # 2. Potential duplicates — same title, need hash to confirm (priority 0)
+    from collections import defaultdict
+    by_size = defaultdict(list)
+    for iid, info in library.items():
+        s = info.get("file_size") or info.get("size")
+        if s and info.get("path"):
+            by_size[str(s)].append({"iid": iid, "path": info["path"]})
+    dupes_needing_hash = []
+    for size, items in by_size.items():
+        if len(items) > 1:
+            for item in items:
+                if not library[item["iid"]].get("file_hash"):
+                    dupes_needing_hash.append(item["path"])
+    if dupes_needing_hash:
+        for i in range(0, len(dupes_needing_hash), 50):
+            enqueue_task("hash_files", {"paths": dupes_needing_hash[i:i+50]}, priority=0)
+            count += 1
+    
+    # 3. Files without subtitles — need sub search (priority 2)
+    needs_subs = [(iid, info) for iid, info in library.items()
+                  if info.get("path") and not info.get("subtitles") and not info.get("suggested_sub")]
+    for iid, info in needs_subs[:20]:  # Cap at 20 to avoid API spam
+        enqueue_task("download_subs", {
+            "imdb_id": iid, "path": info["path"],
+            "language": "en"
+        }, priority=2)
+        count += 1
+    
+    # 4. Files without quality info (priority 1)
+    needs_quality = [info["path"] for iid, info in library.items()
+                     if info.get("path") and not info.get("video_codec") and not info.get("quality")]
+    if needs_quality:
+        for i in range(0, len(needs_quality), 50):
+            enqueue_task("check_quality", {"paths": needs_quality[i:i+50]}, priority=1)
+            count += 1
+    
+    print(f"Generated {count} tasks for {user}: {len(needs_size)} sizing, {len(dupes_needing_hash)} hashing, {min(len(needs_subs),20)} subs, {len(needs_quality)} quality")
+    return count
+
 def enqueue_task(task_type, params=None, priority=0):
     """Add a task for the agent. Priority: 0=high, 1=medium, 2=low.
     Types: find_duplicates, check_quality, download_subs, scrape_movie, rename_file"""
@@ -81,17 +145,58 @@ def get_pending_tasks(limit=10):
     return pending[:limit]
 
 def complete_task(task_id, result=None):
-    """Mark a task as complete."""
+    """Mark a task as complete and feed results back into library."""
     queue = load_task_queue()
+    task = None
     for t in queue:
         if t["id"] == task_id:
             t["status"] = "done"
             t["result"] = result
             t["completed"] = time.strftime("%Y-%m-%d %H:%M:%S")
+            task = t
+    # Feed results back into library data
+    if task and result and not result.get("error"):
+        _apply_task_result(task, result)
     # Keep only last 100 completed
     done = [t for t in queue if t["status"] == "done"]
     pending = [t for t in queue if t["status"] != "done"]
     save_task_queue(pending + done[-100:])
+
+def _apply_task_result(task, result):
+    """Update library with task results."""
+    ttype = task["type"]
+    params = task.get("params", {})
+    data = result.get("data", {})
+    if not data: return
+    # Find which user this is for (check all users)
+    for user in list_users():
+        library = load_user_tmm(user)
+        updated = False
+        if ttype == "size_files":
+            imdb_ids = params.get("imdb_ids", [])
+            paths = params.get("paths", [])
+            for i, path in enumerate(paths):
+                if path in data:
+                    iid = imdb_ids[i] if i < len(imdb_ids) else None
+                    if iid and iid in library:
+                        library[iid]["file_size"] = data[path]
+                        updated = True
+        elif ttype == "hash_files":
+            for path, info in data.items():
+                for iid, lib_info in library.items():
+                    if lib_info.get("path") == path:
+                        lib_info["file_hash"] = info.get("hash")
+                        lib_info["file_size"] = info.get("size")
+                        updated = True
+        elif ttype == "check_quality":
+            for path, info in data.items():
+                for iid, lib_info in library.items():
+                    if lib_info.get("path") == path:
+                        lib_info.update({k: v for k, v in info.items() if v})
+                        updated = True
+        if updated:
+            save_user_tmm(user, library)
+            break
 
 # ── Background jobs ───────────────────────────────────────────────────
 _jobs = {}
@@ -2690,7 +2795,9 @@ button{{padding:10px 20px;background:#4fc3f7;border:none;border-radius:6px;curso
                 else:
                     library[iid] = info
             save_user_tmm(user, library)
-            self._json({"status": "ok", "count": len(library)})
+            # Auto-generate tasks for the agent
+            task_count = generate_tasks_for_library(user)
+            self._json({"status": "ok", "count": len(library), "tasks_generated": task_count})
             return
         elif self.path.startswith("/keys"):
             params = urllib.parse.parse_qs(body.decode())
