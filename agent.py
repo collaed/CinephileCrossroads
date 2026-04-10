@@ -463,6 +463,51 @@ def main():
             except: pass
     print(f"  {sized} files sized")
 
+    # Generate video thumbnails using ffmpeg
+    import shutil, subprocess
+    if shutil.which("ffmpeg"):
+        print("Generating thumbnails...")
+        thumb_count = 0
+        thumb_dir = os.path.join(os.path.dirname(os.path.abspath(CONFIG_FILE)), "thumbnails")
+        os.makedirs(thumb_dir, exist_ok=True)
+        for iid, info in library.items():
+            if not isinstance(info, dict): continue
+            path = info.get("local_path") or info.get("path", "")
+            if not path or not os.path.isfile(path): continue
+            thumb_path = os.path.join(thumb_dir, iid.replace("/","_") + ".jpg")
+            if os.path.exists(thumb_path):
+                info["thumbnail"] = thumb_path
+                thumb_count += 1
+                continue
+            try:
+                # Get duration, seek to 50%
+                dur_cmd = subprocess.run(
+                    ["ffmpeg", "-i", path, "-f", "null", "-"],
+                    capture_output=True, text=True, timeout=10)
+                # Extract duration from stderr
+                import re
+                dur_match = re.search(r"Duration: (\d+):(\d+):(\d+)", dur_cmd.stderr)
+                if dur_match:
+                    total_secs = int(dur_match.group(1))*3600 + int(dur_match.group(2))*60 + int(dur_match.group(3))
+                    seek = total_secs // 2
+                else:
+                    seek = 300  # default 5 min
+                subprocess.run([
+                    "ffmpeg", "-ss", str(seek), "-i", path,
+                    "-vframes", "1", "-vf", "scale=320:-1",
+                    "-q:v", "8", thumb_path, "-y"
+                ], capture_output=True, timeout=30)
+                if os.path.exists(thumb_path):
+                    info["thumbnail"] = thumb_path
+                    thumb_count += 1
+            except Exception as e:
+                pass  # Skip failures silently
+            if thumb_count % 100 == 0 and thumb_count > 0:
+                print(f"  {thumb_count} thumbnails generated...")
+        print(f"  {thumb_count} thumbnails ready")
+    else:
+        print("Skipping thumbnails (ffmpeg not found)")
+
     # Compute file hashes for subtitle matching
     print("Computing file hashes...")
     library = compute_hashes(library)
@@ -488,19 +533,32 @@ def main():
     library = multi_lib
     # Separate episodes from main library
     episodes = library.pop("_episodes", {})
-    print(f"Pushing {len(library)} titles + {len(episodes)} episodes to {args.server}...")
     token = config.get("_agent_token", "")
     url = f"{args.server}/api/library/{args.user}"
-    headers = {"X-Agent-Token": token} if token else {}
-    req = urllib.request.Request(url, data=json.dumps({"library": library}).encode(),
-        headers={"Content-Type": "application/json", "User-Agent": "CinephileAgent/1.0", **headers})
-    result = json.loads(urllib.request.urlopen(req, timeout=30).read())
-    # Push episodes separately within the same library
+    push_headers = {"Content-Type": "application/json", "User-Agent": "CinephileAgent/1.0"}
+    if token:
+        push_headers["X-Agent-Token"] = token
+
+    # Push in chunks of 500 titles
+    items = list(library.items())
+    chunk_size = 500
+    total_pushed = 0
+    for i in range(0, len(items), chunk_size):
+        chunk = dict(items[i:i+chunk_size])
+        req = urllib.request.Request(url, data=json.dumps({"library": chunk}).encode(), headers=push_headers)
+        result = json.loads(urllib.request.urlopen(req, timeout=60).read())
+        total_pushed += len(chunk)
+        print(f"  Pushed {total_pushed}/{len(library)} titles...")
+
+    # Push episodes in chunks too
     if episodes:
-        ep_payload = {"library": {"_episodes": episodes}}
-        ep_req = urllib.request.Request(url, data=json.dumps(ep_payload).encode(),
-            headers={"Content-Type": "application/json", "User-Agent": "CinephileAgent/1.0", **headers})
-        urllib.request.urlopen(ep_req, timeout=60)
+        ep_items = list(episodes.items())
+        for i in range(0, len(ep_items), chunk_size):
+            chunk = dict(ep_items[i:i+chunk_size])
+            req = urllib.request.Request(url, data=json.dumps({"library": {"_episodes": chunk}}).encode(), headers=push_headers)
+            urllib.request.urlopen(req, timeout=60)
+            print(f"  Pushed {min(i+chunk_size, len(ep_items))}/{len(ep_items)} episodes...")
+    result = {"count": total_pushed}
     print(f"Done — server has {result.get('count', '?')} titles in library")
 
 if __name__ == "__main__":
