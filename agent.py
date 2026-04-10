@@ -158,21 +158,56 @@ def fetch_tmm(cfg):
                         lib[iid] = {"path": root, "source": "tmm"}
                 except: pass
         return lib
-    # Mode 2: TMM HTTP API — trigger update, then export
+    # Mode 2: TMM HTTP API — export to temp dir on same machine, then read
     url = cfg.get("url", "").rstrip("/")
     key = cfg.get("token", "")
     if not url or not key:
         print("  TMM: set either 'path' (NFO scan) or 'url'+'token' (HTTP API)")
         return lib
+    import tempfile, time, csv, glob, shutil
+    export_path = cfg.get("export_path", os.path.join(tempfile.gettempdir(), "tmm_export"))
+    os.makedirs(export_path, exist_ok=True)
     headers = {"Content-Type": "application/json", "api-key": key}
-    # Just trigger an update — the actual library data comes from NFO scan
-    payload = json.dumps([{"action": "update", "scope": {"name": "all"}}]).encode()
-    try:
-        req = urllib.request.Request(url + "/api/movie", data=payload, headers=headers)
-        urllib.request.urlopen(req, timeout=60)
-        print("  TMM: update triggered via API")
-    except Exception as e:
-        print(f"  TMM API error: {e}")
+    for kind, endpoint, template in [
+        ("movie", "/api/movie", "MovieListCSV"),
+        ("tvshow", "/api/tvshow", "TvShowListCSV"),
+    ]:
+        payload = json.dumps([
+            {"action": "update", "scope": {"name": "all"}},
+            {"action": "export", "scope": {"name": "all"},
+             "args": {"template": template, "exportPath": export_path}}
+        ]).encode()
+        try:
+            req = urllib.request.Request(url + endpoint, data=payload, headers=headers)
+            urllib.request.urlopen(req, timeout=120)
+            print(f"  TMM {kind}: export triggered, waiting...")
+            time.sleep(10)  # Wait for TMM to finish
+        except Exception as e:
+            print(f"  TMM {kind} error: {e}")
+    # Read exported CSV files
+    for csvfile in glob.glob(os.path.join(export_path, "*.csv")) + glob.glob(os.path.join(export_path, "*.html")):
+        try:
+            with open(csvfile, encoding="utf-8", errors="ignore") as f:
+                content = f.read()
+                # Try CSV first
+                for row in csv.DictReader(content.splitlines()):
+                    iid = ""
+                    for col in ("IMDb Id", "imdbId", "IMDB ID", "imdb_id"):
+                        if row.get(col): iid = row[col]; break
+                    if iid:
+                        lib[iid] = {"path": row.get("Path", row.get("path", "")),
+                                    "quality": row.get("Video Resolution", ""), "source": "tmm"}
+        except: pass
+    # Also scan for IMDB IDs in any text/html export
+    import re
+    for f in glob.glob(os.path.join(export_path, "*")):
+        try:
+            content = open(f, encoding="utf-8", errors="ignore").read()
+            for iid in re.findall(r"(tt\d{7,})", content):
+                if iid not in lib:
+                    lib[iid] = {"source": "tmm"}
+        except: pass
+    shutil.rmtree(export_path, ignore_errors=True)
     return lib
 
 FETCHERS = {"plex": fetch_plex, "jellyfin": fetch_jellyfin, "emby": fetch_jellyfin,
