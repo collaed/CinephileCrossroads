@@ -451,6 +451,7 @@ def main():
     parser = argparse.ArgumentParser(description="CinephileCrossroads LAN Agent")
     parser.add_argument("--server", required=True, help="CinephileCrossroads URL (e.g. https://tools.ecb.pm/imdb)")
     parser.add_argument("--user", required=True, help="Username to sync to")
+    parser.add_argument("--hash", action="store_true", help="Compute file hashes for subtitle matching (slow over network)")
     parser.add_argument("--thumbnails", action="store_true", help="Phase 2: fetch thumbnail requests from server, generate and upload")
     args = parser.parse_args()
 
@@ -520,10 +521,11 @@ def main():
                         except Exception as e:
                             total_not_found += 1
                             print(f"\n    ! Size error: {short} - {e}")
-                        h = opensubtitles_hash(mapped)
-                        if h:
-                            info["file_hash"] = h
-                            total_hashed += 1
+                        if args.hash:
+                            h = opensubtitles_hash(mapped)
+                            if h:
+                                info["file_hash"] = h
+                                total_hashed += 1
                     else:
                         total_not_found += 1
                         print(f"\n    ! Not found: {mapped[:70]}")
