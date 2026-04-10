@@ -344,6 +344,77 @@ def map_path(path, config):
 FETCHERS = {"plex": fetch_plex, "jellyfin": fetch_jellyfin, "emby": fetch_jellyfin,
             "kodi": fetch_kodi, "radarr": fetch_radarr, "sonarr": fetch_sonarr, "tmm": fetch_tmm}
 
+def check_prerequisites():
+    """Check system prerequisites and guide user through setup."""
+    import shutil
+    issues = []
+
+    # Check ffmpeg
+    if not shutil.which("ffmpeg"):
+        issues.append(("ffmpeg", "Required for video thumbnails"))
+
+    # Check NFS on Windows
+    if os.name == "nt":
+        nfs = shutil.which("mount")
+        if not nfs:
+            issues.append(("NFS client", "Required for NFS share access"))
+
+    if issues:
+        print("\n⚠ Missing components:")
+        for name, reason in issues:
+            print(f"  ✗ {name} — {reason}")
+        if os.name == "nt":
+            print("\nRun setup-windows.ps1 as Administrator to install them:")
+            print("  powershell -ExecutionPolicy Bypass -File setup-windows.ps1")
+            resp = input("\nContinue without them? [y/N] ").strip().lower()
+            if resp != "y":
+                sys.exit(0)
+        else:
+            print("\nInstall with: sudo apt install ffmpeg nfs-common  (or equivalent)")
+        print("")
+
+def check_path_access(config, library):
+    """Check if file paths are accessible. Prompt for path mappings if not."""
+    # Sample a few paths
+    sample_paths = []
+    for iid, info in list(library.items())[:20]:
+        if isinstance(info, dict) and info.get("path"):
+            sample_paths.append(info["path"])
+    if not sample_paths:
+        return
+
+    accessible = sum(1 for p in sample_paths if os.path.exists(map_path(p, config)))
+    total = len(sample_paths)
+
+    if accessible == total:
+        print(f"  Path check: {accessible}/{total} files accessible ✓")
+        return
+
+    print(f"\n⚠ Only {accessible}/{total} sampled files are accessible.")
+    print(f"  Example path from Kodi: {sample_paths[0]}")
+    mapped = map_path(sample_paths[0], config)
+    if mapped != sample_paths[0]:
+        print(f"  Mapped to:              {mapped}")
+    print(f"  Exists: {os.path.exists(mapped)}")
+
+    current_mappings = config.get("_path_mappings", {})
+    if current_mappings:
+        print(f"  Current mappings: {json.dumps(current_mappings)}")
+
+    resp = input("\nWould you like to add/fix a path mapping? [y/N] ").strip().lower()
+    if resp == "y":
+        remote = input("  Kodi path prefix (e.g. /Movies): ").strip()
+        local = input("  Local path prefix (e.g. \\\\zeus\\Movies or Z:\\Movies): ").strip()
+        if remote and local:
+            current_mappings[remote] = local
+            config["_path_mappings"] = current_mappings
+            json.dump(config, open(CONFIG_FILE, "w"), indent=2)
+            print(f"  Saved mapping: {remote} → {local}")
+            # Re-test
+            test_path = map_path(sample_paths[0], config)
+            print(f"  Test: {sample_paths[0]} → {test_path} (exists: {os.path.exists(test_path)})")
+    print("")
+
 def main():
     parser = argparse.ArgumentParser(description="CinephileCrossroads LAN Agent")
     parser.add_argument("--server", required=True, help="CinephileCrossroads URL (e.g. https://tools.ecb.pm/imdb)")
@@ -355,6 +426,7 @@ def main():
         print(f"Created {CONFIG_FILE} — edit it with your server details, then run again.")
         sys.exit(0)
 
+    check_prerequisites()
     config = json.load(open(CONFIG_FILE))
     library = {}
     for name, cfg in config.items():
@@ -370,6 +442,8 @@ def main():
     if not library:
         print("No titles found. Check agent.json config.")
         sys.exit(1)
+
+    check_path_access(config, library)
 
     # Map paths and get file sizes
     print("Mapping paths and getting file sizes...")
