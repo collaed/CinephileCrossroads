@@ -1328,7 +1328,7 @@ rows.sort((a,b)=>{{let x=a.cells[n].textContent,y=b.cells[n].textContent;return(
 <select id="mr" onchange="f()"><option value="">Min ★</option>{''.join(f'<option value="{i}">{i}+</option>' for i in range(10,0,-1))}</select>
 <select id="dec" onchange="f()"><option value="">All decades</option><option value="2020">2020s</option><option value="2010">2010s</option><option value="2000">2000s</option><option value="1990">1990s</option><option value="1980">1980s</option><option value="1970">1970s</option><option value="1960">1960s</option><option value="1950">1950s</option></select>
 <select id="st" onchange="f()"><option value="">All streams</option>{"".join('<option value="' + p + '">' + PROVIDER_ICONS.get(p,"▪") + " " + p + '</option>' for p in sorted(user_provs))}</select>
-<a href="{BASE}/tonight/{user}" class="btn">🎲 Tonight</a><a href="{BASE}/recs/{user}" class="btn">🎯 Recs</a><a href="{BASE}/catalog" class="btn">📺 Catalog</a><a href="{BASE}/library/{user}" class="btn">📚 Library</a><a href="{BASE}/stats/{user}" class="btn">📊 Stats</a><a href="{BASE}/new" class="btn">🆕 New</a><a href="{BASE}/random/{user}" class="btn">🎰 Random</a><a href="{BASE}/compare/" class="btn">👥 Compare</a><a href="{BASE}/enrich" class="btn">⚡ Enrich</a><a href="{BASE}/export/{user}" class="btn">⬇ Export</a><a href="{BASE}/rss/{user}" class="btn">📡 RSS</a><a href="{BASE}/setup/{user}" class="btn">⚙ Setup</a>
+<a href="{BASE}/tonight/{user}" class="btn">🎲 Tonight</a><a href="{BASE}/recs/{user}" class="btn">🎯 Recs</a><a href="{BASE}/catalog" class="btn">📺 Catalog</a><a href="{BASE}/library/{user}" class="btn">📚 Library</a><a href="{BASE}/tvshows/{user}" class="btn">📺 TV Shows</a><a href="{BASE}/stats/{user}" class="btn">📊 Stats</a><a href="{BASE}/new" class="btn">🆕 New</a><a href="{BASE}/random/{user}" class="btn">🎰 Random</a><a href="{BASE}/compare/" class="btn">👥 Compare</a><a href="{BASE}/enrich" class="btn">⚡ Enrich</a><a href="{BASE}/export/{user}" class="btn">⬇ Export</a><a href="{BASE}/rss/{user}" class="btn">📡 RSS</a><a href="{BASE}/setup/{user}" class="btn">⚙ Setup</a>
 {f'<a href="{BASE}/trakt/sync/{user}">↕ Trakt</a>' if has_trakt else ""}
 <button onclick="document.body.classList.toggle('light');localStorage.setItem('theme',document.body.classList.contains('light')?'light':'dark')" style="background:none;border:1px solid #444;border-radius:4px;cursor:pointer;padding:2px 8px;color:var(--fg)" title="Toggle dark/light theme">🌓</button> <span style="color:#666;font-size:.8em">{" ".join(services)}</span></div>
 <div style="margin-bottom:10px;font-size:1.2em">Mood: <a href="{BASE}/mood/{user}/light" title="Light" style="text-decoration:none">☀️</a><a href="{BASE}/mood/{user}/intense" title="Intense" style="text-decoration:none">🔥</a><a href="{BASE}/mood/{user}/funny" title="Funny" style="text-decoration:none">😂</a><a href="{BASE}/mood/{user}/mind-bending" title="Mind-Bending" style="text-decoration:none">🌀</a><a href="{BASE}/mood/{user}/dark" title="Dark" style="text-decoration:none">🌑</a><a href="{BASE}/mood/{user}/epic" title="Epic" style="text-decoration:none">⚔️</a><a href="{BASE}/mood/{user}/romantic" title="Romantic" style="text-decoration:none">💕</a><a href="{BASE}/mood/{user}/scary" title="Scary" style="text-decoration:none">👻</a><a href="{BASE}/mood/{user}/inspiring" title="Inspiring" style="text-decoration:none">✨</a></div>
@@ -1466,6 +1466,144 @@ def render_setup(user):
     html += '</div></body></html>'
     return html
 
+
+def render_tvshows(user):
+    """TV Shows screen: episodes grouped by show/season, quality, duplicates."""
+    library = load_user_tmm(user)
+    episodes = library.get("_episodes", {})
+    if not episodes:
+        return '<html><body style="background:#1a1a2e;color:#eee;font-family:sans-serif;padding:40px"><h2>No TV episodes synced</h2><p>Re-run the agent to fetch episodes from Kodi</p><a href="' + BASE + '/u/' + user + '" style="color:#4fc3f7">← Back</a></body></html>'
+
+    from collections import defaultdict
+    # Group by show -> season -> episode
+    shows = defaultdict(lambda: defaultdict(list))
+    for key, ep in episodes.items():
+        if not isinstance(ep, dict): continue
+        show = ep.get("showtitle", "Unknown")
+        season = ep.get("season", 0)
+        shows[show][season].append(ep)
+
+    # Stats
+    total_eps = len(episodes)
+    total_shows = len(shows)
+    watched = sum(1 for ep in episodes.values() if isinstance(ep, dict) and ep.get("playcount", 0) > 0)
+    no_subs = sum(1 for ep in episodes.values() if isinstance(ep, dict) and not ep.get("subtitles"))
+
+    # Quality breakdown
+    codec_map = {"hevc": "x265", "h265": "x265", "h264": "x264", "avc": "x264", "mpeg2": "MPEG-2"}
+    quality_dist = defaultdict(int)
+    codec_dist = defaultdict(int)
+    for ep in episodes.values():
+        if not isinstance(ep, dict): continue
+        h = ep.get("video_height", 0) or 0
+        if h >= 2160: quality_dist["4K"] += 1
+        elif h >= 1080: quality_dist["1080p"] += 1
+        elif h >= 720: quality_dist["720p"] += 1
+        elif h > 0: quality_dist["SD"] += 1
+        c = ep.get("video_codec", "")
+        if c: codec_dist[codec_map.get(c.lower(), c)] += 1
+
+    # Detect duplicate episodes (same show+season+episode, multiple files)
+    ep_groups = defaultdict(list)
+    for key, ep in episodes.items():
+        if not isinstance(ep, dict): continue
+        gkey = ep.get("showtitle","") + "|" + str(ep.get("season",0)) + "|" + str(ep.get("episode",0))
+        ep_groups[gkey].append(ep)
+    dupes = {k: v for k, v in ep_groups.items() if len(v) > 1}
+
+    # Build show list
+    show_rows = ""
+    for show_name in sorted(shows.keys()):
+        seasons = shows[show_name]
+        total_s = len(seasons)
+        total_e = sum(len(eps) for eps in seasons.values())
+        watched_e = sum(1 for eps in seasons.values() for ep in eps if ep.get("playcount", 0) > 0)
+        # Quality summary for this show
+        codecs = defaultdict(int)
+        for eps in seasons.values():
+            for ep in eps:
+                c = ep.get("video_codec", "")
+                if c: codecs[codec_map.get(c.lower(), c)] += 1
+        codec_str = ", ".join(c + ":" + str(n) for c, n in sorted(codecs.items(), key=lambda x: x[1], reverse=True))
+        res = set()
+        for eps in seasons.values():
+            for ep in eps:
+                h = ep.get("video_height", 0)
+                if h: res.add(str(h) + "p")
+        res_str = "/".join(sorted(res, reverse=True))
+        pct = round(watched_e / total_e * 100) if total_e else 0
+        bar_color = "#2d7" if pct == 100 else "#f90" if pct > 0 else "#d72"
+        show_rows += '<tr>'
+        show_rows += '<td><b>' + show_name + '</b></td>'
+        show_rows += '<td>' + str(total_s) + '</td>'
+        show_rows += '<td>' + str(total_e) + '</td>'
+        show_rows += '<td><div style="display:flex;align-items:center;gap:6px"><div style="background:#333;border-radius:3px;width:80px;height:12px"><div style="background:' + bar_color + ';height:12px;width:' + str(pct * 0.8) + 'px;border-radius:3px"></div></div>' + str(pct) + '%</div></td>'
+        show_rows += '<td>' + res_str + '</td>'
+        show_rows += '<td style="font-size:.85em">' + codec_str + '</td>'
+        show_rows += '</tr>'
+
+    # Quality bars
+    max_q = max(quality_dist.values()) if quality_dist else 1
+    q_bars = ""
+    for q in ["4K", "1080p", "720p", "SD"]:
+        c = quality_dist.get(q, 0)
+        if c: q_bars += '<div style="display:flex;align-items:center;gap:8px;margin:2px 0"><span style="width:50px;text-align:right">' + q + '</span><div style="background:#4fc3f7;height:18px;width:' + str(min(c/max_q*300, 300)) + 'px;border-radius:3px"></div><span style="color:#888">' + str(c) + '</span></div>'
+
+    html = '<!DOCTYPE html><html><head><meta charset="utf-8"><title>TV Shows</title>'
+    html += '<meta name="viewport" content="width=device-width,initial-scale=1">'
+    html += '<style>body{font-family:-apple-system,sans-serif;background:#1a1a2e;color:#eee;margin:20px}'
+    html += '.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:15px}'
+    html += '.card{background:#16213e;padding:15px;border-radius:10px;text-align:center}'
+    html += 'table{border-collapse:collapse;width:100%}th,td{padding:6px 10px;text-align:left;border-bottom:1px solid #333}'
+    html += 'th{background:#16213e;position:sticky;top:0}a{color:#4fc3f7;text-decoration:none}'
+    html += 'input{padding:6px;border-radius:4px;border:1px solid #444;background:#16213e;color:#eee;width:250px}'
+    html += '</style>'
+    html += '<script>function f(){const q=document.getElementById("s").value.toLowerCase();document.querySelectorAll("tbody tr").forEach(r=>r.style.display=r.textContent.toLowerCase().includes(q)?"":"none")}</script>'
+    html += '</head><body>'
+    html += '<h2>📺 TV Shows — ' + user + '</h2>'
+
+    # Stats
+    html += '<div class="grid" style="margin-bottom:20px">'
+    html += '<div class="card"><div style="font-size:2.5em">' + str(total_shows) + '</div>shows</div>'
+    html += '<div class="card"><div style="font-size:2.5em">' + str(total_eps) + '</div>episodes</div>'
+    html += '<div class="card"><div style="font-size:2.5em">' + str(watched) + '</div>watched</div>'
+    html += '<div class="card"><div style="font-size:2.5em;color:#d72">' + str(no_subs) + '</div>no subs</div>'
+    html += '<div class="card"><div style="font-size:2.5em;color:#f90">' + str(len(dupes)) + '</div>duplicate eps</div>'
+    html += '</div>'
+
+    # Quality breakdown
+    html += '<div class="grid" style="margin-bottom:20px">'
+    html += '<div class="card"><h3>Resolution</h3>' + q_bars + '</div>'
+    html += '</div>'
+
+    # Show list
+    html += '<div style="margin-bottom:10px"><input id="s" onkeyup="f()" placeholder="Search shows..."></div>'
+    html += '<table><thead><tr><th>Show</th><th>Seasons</th><th>Episodes</th><th>Watched</th><th>Quality</th><th>Codecs</th></tr></thead>'
+    html += '<tbody>' + show_rows + '</tbody></table>'
+
+    # Duplicate episodes
+    if dupes:
+        dupe_rows = ""
+        for gkey, eps in sorted(dupes.items()):
+            show, season, episode = gkey.split("|")
+            dupe_rows += '<tr style="background:#1a3a5e"><td colspan="7"><b>' + show + '</b> S' + season.zfill(2) + 'E' + episode.zfill(2) + ' — ' + str(len(eps)) + ' copies</td></tr>'
+            for ep in eps:
+                h = ep.get("video_height", "")
+                codec = ep.get("video_codec", "")
+                codec_display = codec_map.get(codec.lower(), codec) if codec else ""
+                audio = ep.get("audio", [])
+                audio_str = ", ".join(a.get("codec","") + " " + str(a.get("channels","")) + "ch" for a in audio[:3]) if audio else "—"
+                subs = ep.get("subtitles", [])
+                sub_str = ", ".join(s.get("language","") for s in subs[:4]) if subs else "none"
+                path = ep.get("path", "")
+                dupe_rows += '<tr><td>' + str(h) + 'p</td><td>' + codec_display + '</td><td>' + audio_str + '</td><td>' + sub_str + '</td><td style="font-size:.7em;color:#888">' + path[-60:] + '</td></tr>'
+        html += '<h3 style="margin-top:20px">🔍 Duplicate Episodes (' + str(len(dupes)) + ')</h3>'
+        html += '<table><thead><tr><th>Res</th><th>Codec</th><th>Audio</th><th>Subs</th><th>Path</th></tr></thead>'
+        html += '<tbody>' + dupe_rows + '</tbody></table>'
+
+    html += '<p style="margin-top:20px"><a href="' + BASE + '/u/' + user + '">← Ratings</a> · <a href="' + BASE + '/library/' + user + '">📚 Library</a></p>'
+    html += '</body></html>'
+    return html
 
 def render_library(user):
     """Library curation: duplicates, quality comparison, cleanup suggestions."""
@@ -2044,6 +2182,10 @@ td{{padding:8px;border-bottom:1px solid #333}}a{{color:#4fc3f7}}</style></head>
             if not active_job()[1]:
                 start_job("imdb_datasets", lambda jid: (download_imdb_datasets(jid), seed_from_imdb_dataset(jid)))
             self._redirect(f"{BASE}/")
+            return
+        elif p.startswith("/tvshows/"):
+            u = parts[-1] if len(parts) > 1 else self._user(parts)
+            self._html(render_tvshows(u))
             return
         elif p.startswith("/library/"):
             u = parts[-1] if len(parts) > 1 else self._user(parts)

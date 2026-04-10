@@ -112,6 +112,46 @@ def fetch_kodi(cfg):
                 lib[iid] = {"source": "kodi", "title": s.get("title",""), "year": s.get("year",""), "type": "tvshow"}
     except Exception as e:
         print(f"  Kodi tvshows error: {e}")
+    # Episodes with full details
+    payload3 = {"jsonrpc": "2.0", "method": "VideoLibrary.GetEpisodes", "id": 3,
+                "params": {"properties": ["showtitle", "season", "episode", "title", "file",
+                           "streamdetails", "runtime", "playcount", "lastplayed", "uniqueid"]}}
+    req3 = urllib.request.Request(cfg["url"], data=json.dumps(payload3).encode(), headers=headers)
+    try:
+        data3 = json.loads(urllib.request.urlopen(req3, timeout=60).read())
+        episodes = data3.get("result", {}).get("episodes", [])
+        ep_lib = {}
+        for ep in episodes:
+            sd = ep.get("streamdetails", {})
+            vs = sd.get("video", [])
+            aus = sd.get("audio", [])
+            subs = sd.get("subtitle", [])
+            v = vs[0] if vs else {}
+            uid = ep.get("uniqueid", {})
+            ep_key = ep.get("showtitle", "") + "|S" + str(ep.get("season", 0)).zfill(2) + "E" + str(ep.get("episode", 0)).zfill(2)
+            ep_lib[ep_key] = {
+                "source": "kodi", "type": "episode",
+                "showtitle": ep.get("showtitle", ""),
+                "season": ep.get("season", 0),
+                "episode": ep.get("episode", 0),
+                "title": ep.get("title", ""),
+                "path": ep.get("file", ""),
+                "runtime": ep.get("runtime", 0),
+                "playcount": ep.get("playcount", 0),
+                "lastplayed": ep.get("lastplayed", ""),
+                "quality": str(v.get("height", "")),
+                "video_codec": v.get("codec", ""),
+                "video_height": v.get("height", 0),
+                "audio": [{"codec": a.get("codec",""), "channels": a.get("channels",0), "language": a.get("language","")} for a in aus],
+                "subtitles": [{"language": s.get("language","")} for s in subs],
+                "imdb_id": uid.get("imdb", ""),
+                "tvdb_id": uid.get("tvdb", ""),
+            }
+        # Push episodes separately
+        print(f"  Kodi episodes: {len(ep_lib)}")
+        library["_episodes"] = ep_lib
+    except Exception as e:
+        print(f"  Kodi episodes error: {e}")
     return lib
 
 def fetch_radarr(cfg):
