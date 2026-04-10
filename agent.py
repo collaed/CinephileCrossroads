@@ -399,6 +399,9 @@ def check_path_access(config, library):
             if not isinstance(info, dict): continue
             path = info.get("path", "")
             if not path: continue
+            # Strip stack:// prefix
+            if path.startswith("stack://"):
+                path = path.replace("stack://", "").split(" , ")[0].strip()
             parts = path.replace("\\", "/").split("/")
             root = "/".join(parts[:4]) if len(parts) >= 4 else path
             if root not in roots:
