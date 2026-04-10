@@ -493,6 +493,7 @@ def main():
     total_hashed = 0
     total_not_found = 0
 
+    batch_start_count = 0
     for batch_start in range(0, len(items), batch_size):
         batch = dict(items[batch_start:batch_start + batch_size])
         batch_num = batch_start // batch_size + 1
@@ -517,13 +518,16 @@ def main():
                             total_sized += 1
                         except:
                             total_not_found += 1
-                        # Hash
                         h = opensubtitles_hash(mapped)
                         if h:
                             info["file_hash"] = h
                             total_hashed += 1
                     elif path:
                         total_not_found += 1
+                batch_done = total_sized + total_not_found
+                if batch_done % 50 == 0:
+                    print(f"    {batch_done - batch_start_count} files processed in this batch...", end="\r")
+        batch_start_count = total_sized + total_not_found
 
         print(f"  Sized: {total_sized} | Hashed: {total_hashed} | Not found: {total_not_found}")
 
