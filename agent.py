@@ -149,7 +149,7 @@ def fetch_kodi(cfg):
             }
         # Push episodes separately
         print(f"  Kodi episodes: {len(ep_lib)}")
-        library["_episodes"] = ep_lib
+        lib["_episodes"] = ep_lib
     except Exception as e:
         print(f"  Kodi episodes error: {e}")
     return lib
