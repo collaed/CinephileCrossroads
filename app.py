@@ -2075,7 +2075,11 @@ button{{padding:10px 20px;background:#4fc3f7;border:none;border-radius:6px;curso
             return
         elif self.path.startswith("/keys"):
             params = urllib.parse.parse_qs(body.decode())
-            keys = {k: params.get(k, [""])[0] for k in ("tmdb", "omdb", "tvdb", "opensubs", "agent_token")}
+            existing = json.load(open(KEYS_FILE)) if os.path.exists(KEYS_FILE) else {}
+            for k in ("tmdb", "omdb", "tvdb", "opensubs", "agent_token"):
+                v = params.get(k, [""])[0]
+                if v: existing[k] = v
+            keys = existing
             json.dump(keys, open(KEYS_FILE, "w"))
             TMDB_KEY, OMDB_KEY, TVDB_KEY = keys["tmdb"], keys["omdb"], keys["tvdb"]
             AGENT_TOKEN = keys.get("agent_token", "")
