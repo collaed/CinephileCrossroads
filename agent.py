@@ -20,7 +20,7 @@ DEFAULT_CONFIG = {
     "radarr": {"enabled": False, "url": "http://192.168.1.x:7878", "token": ""},
     "sonarr": {"enabled": False, "url": "http://192.168.1.x:8989", "token": ""},
     "_agent_token": "paste-your-token-here",
-    "tmm": {"enabled": False, "url": "http://192.168.1.x:7878", "token": "your-tmm-api-key"},
+    "tmm": {"enabled": False, "path": "/path/to/tmm/movies", "url": "http://192.168.1.x:7878", "token": ""},
 }
 
 def api_get(url):
@@ -136,45 +136,43 @@ def find_missing_subs(library):
             if not info.get("subtitles") and info.get("path")]
 
 def fetch_tmm(cfg):
-    """Fetch library from tinyMediaManager via HTTP API export."""
-    import tempfile
+    """Fetch library from tinyMediaManager. Two modes:
+    - 'path' mode: scan NFO files in TMM's data directory (no API needed)
+    - 'url' mode: use TMM HTTP API to trigger update (API key required)
+    """
+    import re
     lib = {}
-    url = cfg["url"].rstrip("/")
+    # Mode 1: scan local NFO files (preferred — works offline)
+    scan_path = cfg.get("path", "")
+    if scan_path and os.path.isdir(scan_path):
+        print(f"  Scanning NFO files in {scan_path}...")
+        for root, dirs, files in os.walk(scan_path):
+            for f in files:
+                if not f.endswith(".nfo"): continue
+                try:
+                    content = open(os.path.join(root, f), encoding="utf-8", errors="ignore").read()
+                    # Extract IMDB ID from NFO
+                    match = re.search(r"(tt\d{7,})", content)
+                    if match:
+                        iid = match.group(1)
+                        lib[iid] = {"path": root, "source": "tmm"}
+                except: pass
+        return lib
+    # Mode 2: TMM HTTP API — trigger update, then export
+    url = cfg.get("url", "").rstrip("/")
     key = cfg.get("token", "")
+    if not url or not key:
+        print("  TMM: set either 'path' (NFO scan) or 'url'+'token' (HTTP API)")
+        return lib
     headers = {"Content-Type": "application/json", "api-key": key}
-    # Trigger export to a temp path
-    export_path = tempfile.mkdtemp()
-    for kind, endpoint in [("movie", "/api/movie"), ("tvshow", "/api/tvshow")]:
-        payload = json.dumps([
-            {"action": "update", "scope": {"name": "all"}},
-            {"action": "export", "scope": {"name": "all"},
-             "args": {"template": "MovieListCSV" if kind == "movie" else "TvShowListCSV",
-                      "exportPath": export_path}}
-        ]).encode()
-        req = urllib.request.Request(url + endpoint, data=payload, headers=headers)
-        try:
-            urllib.request.urlopen(req, timeout=60)
-            # Wait for export to complete
-            import time; time.sleep(5)
-        except Exception as e:
-            print(f"  TMM {kind} export error: {e}")
-            continue
-    # Parse any CSV files in the export path
-    import csv, glob
-    for csvfile in glob.glob(export_path + "/*.csv"):
-        try:
-            with open(csvfile) as f:
-                for row in csv.DictReader(f):
-                    iid = row.get("IMDb Id", row.get("imdbId", row.get("IMDB ID", "")))
-                    if not iid: continue
-                    lib[iid] = {
-                        "path": row.get("Path", row.get("path", "")),
-                        "quality": row.get("Video Resolution", ""),
-                        "source": "tmm",
-                    }
-        except: pass
-    # Cleanup
-    import shutil; shutil.rmtree(export_path, ignore_errors=True)
+    # Just trigger an update — the actual library data comes from NFO scan
+    payload = json.dumps([{"action": "update", "scope": {"name": "all"}}]).encode()
+    try:
+        req = urllib.request.Request(url + "/api/movie", data=payload, headers=headers)
+        urllib.request.urlopen(req, timeout=60)
+        print("  TMM: update triggered via API")
+    except Exception as e:
+        print(f"  TMM API error: {e}")
     return lib
 
 FETCHERS = {"plex": fetch_plex, "jellyfin": fetch_jellyfin, "emby": fetch_jellyfin,
