@@ -312,6 +312,19 @@ def main():
         print("No titles found. Check agent.json config.")
         sys.exit(1)
 
+    # Get file sizes for library entries
+    print("Getting file sizes...")
+    sized = 0
+    for iid, info in library.items():
+        if not isinstance(info, dict): continue
+        path = info.get("path", "")
+        if path and os.path.isfile(path):
+            try:
+                info["file_size"] = os.path.getsize(path)
+                sized += 1
+            except: pass
+    print(f"  {sized} files sized")
+
     # Compute file hashes for subtitle matching
     print("Computing file hashes...")
     library = compute_hashes(library)
