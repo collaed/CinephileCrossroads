@@ -13,6 +13,11 @@ import json, os, sys, urllib.request, urllib.parse, argparse
 CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "agent.json")
 
 DEFAULT_CONFIG = {
+    "_path_mappings": {
+        "/Movies": "\\\\zeus\\Movies",
+        "/TVShows": "\\\\zeus\\TVShows"
+    },
+
     "plex": {"enabled": False, "url": "http://192.168.1.x:32400", "token": ""},
     "jellyfin": {"enabled": False, "url": "http://192.168.1.x:8096", "token": ""},
     "emby": {"enabled": False, "url": "http://192.168.1.x:8096", "token": ""},
@@ -322,6 +327,20 @@ def fetch_tmm(cfg):
     shutil.rmtree(export_path, ignore_errors=True)
     return lib
 
+def map_path(path, config):
+    """Map remote paths (e.g. Kodi NFS) to local paths (e.g. Windows SMB)."""
+    mappings = config.get("_path_mappings", {})
+    for remote, local in mappings.items():
+        if path.startswith(remote):
+            mapped = local + path[len(remote):]
+            # Fix separators for current OS
+            if os.name == "nt":
+                mapped = mapped.replace("/", "\\")
+            else:
+                mapped = mapped.replace("\\", "/")
+            return mapped
+    return path
+
 FETCHERS = {"plex": fetch_plex, "jellyfin": fetch_jellyfin, "emby": fetch_jellyfin,
             "kodi": fetch_kodi, "radarr": fetch_radarr, "sonarr": fetch_sonarr, "tmm": fetch_tmm}
 
@@ -352,12 +371,17 @@ def main():
         print("No titles found. Check agent.json config.")
         sys.exit(1)
 
-    # Get file sizes for library entries
-    print("Getting file sizes...")
+    # Map paths and get file sizes
+    print("Mapping paths and getting file sizes...")
     sized = 0
     for iid, info in library.items():
         if not isinstance(info, dict): continue
         path = info.get("path", "")
+        if path:
+            mapped = map_path(path, config)
+            if mapped != path:
+                info["local_path"] = mapped
+            path = mapped
         if path and os.path.isfile(path):
             try:
                 info["file_size"] = os.path.getsize(path)
