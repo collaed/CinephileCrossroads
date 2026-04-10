@@ -513,16 +513,21 @@ def daemon_mode(args, config):
         """Poll server for tasks and execute them."""
         while True:
             try:
-                # Handshake: send status with every poll
-                status_payload = json.dumps({
-                    "agent_version": AGENT_VERSION,
-                    "last_activity": _last_activity,
-                    "recent_logs": get_recent_logs(10),
-                    "uptime": int(time.time() - _start_time),
-                    "consecutive_errors": consecutive_errors,
-                }).encode()
-                req = urllib.request.Request(f"{base_url}/api/tasks", data=status_payload, 
-                    headers={**headers, "Content-Type": "application/json"}, method="POST")
+                # Handshake: report status via separate call, then fetch tasks
+                try:
+                    status = json.dumps({
+                        "agent_version": AGENT_VERSION,
+                        "last_activity": _last_activity,
+                        "recent_logs": get_recent_logs(10),
+                        "uptime": int(time.time() - _start_time),
+                        "consecutive_errors": consecutive_errors,
+                    }).encode()
+                    sreq = urllib.request.Request(f"{base_url}/api/agent_status",
+                        data=status, headers={**headers, "Content-Type": "application/json"})
+                    urllib.request.urlopen(sreq, timeout=5)
+                except: pass
+                # Fetch tasks via GET
+                req = urllib.request.Request(f"{base_url}/api/tasks", headers=headers)
                 resp = urllib.request.urlopen(req, timeout=10)
                 tasks = json.loads(resp.read()).get("tasks", [])
                 

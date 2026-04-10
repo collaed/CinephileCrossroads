@@ -27,6 +27,7 @@ Zero external Python dependencies — pure stdlib + Docker.
 import csv, json, os, io, time, urllib.request, urllib.parse, threading, math
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
+
 # ── Config ────────────────────────────────────────────────────────────
 TMDB_KEY = os.environ.get("TMDB_KEY", "")
 OMDB_KEY = os.environ.get("OMDB_KEY", "")
@@ -2838,9 +2839,27 @@ button{{padding:10px 20px;background:#4fc3f7;border:none;border-radius:6px;curso
 
     def do_POST(self):
         global TMDB_KEY, OMDB_KEY, TVDB_KEY, AGENT_TOKEN
-        cl = int(self.headers.get("Content-Length", 0))
-        body = self.rfile.read(cl)
+        print(f"[POST] {self.path}")
+        try:
+            cl = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(cl) if cl > 0 else b""
+        except Exception as e:
+            print(f"[POST] body read error: {e}")
+            body = b""
         parts = [p for p in self.path.split("?")[0].split("/") if p]
+        # API endpoints first (before multipart parsing)
+        if self.path == "/api/tasks":
+            if body:
+                try: save_agent_status(json.loads(body.decode()))
+                except: pass
+            self._json({"tasks": get_pending_tasks()})
+            return
+        if self.path.startswith("/api/tasks/complete/"):
+            task_id = parts[-1]
+            data = json.loads(body.decode()) if body else {}
+            complete_task(task_id, data.get("result"))
+            self._json({"status": "ok"})
+            return
         if self.path.startswith("/upload/"):
             user = parts[-1]
             boundary = self.headers["Content-Type"].split("boundary=")[1].encode()
@@ -2921,12 +2940,11 @@ button{{padding:10px 20px;background:#4fc3f7;border:none;border-radius:6px;curso
                     save_user_tmm(user, library)
             self._json({"status": "ok"})
             return
-        elif self.path == "/api/tasks":
-            # Agent handshake: POST status, receive tasks
+        elif self.path.startswith("/api/agent_status"):
             if body:
                 try: save_agent_status(json.loads(body.decode()))
                 except: pass
-            self._json({"tasks": get_pending_tasks()})
+            self._json({"status": "ok"})
             return
         elif self.path.startswith("/api/tasks/complete/"):
             task_id = parts[-1]
@@ -2992,6 +3010,9 @@ button{{padding:10px 20px;background:#4fc3f7;border:none;border-radius:6px;curso
             TMDB_KEY, OMDB_KEY, TVDB_KEY = keys["tmdb"], keys["omdb"], keys["tvdb"]
             AGENT_TOKEN = keys.get("agent_token", "")
             self._redirect(f"{BASE}/")
+        else:
+            self.send_response(404)
+            self.end_headers()
 
     def _page(self, body, section="ratings", user=""):
         self._html(wrap_page(body, section, user))
@@ -3012,7 +3033,11 @@ button{{padding:10px 20px;background:#4fc3f7;border:none;border-radius:6px;curso
         self.end_headers()
     def _redirect(self, url):
         self.send_response(302); self.send_header("Location", url); self.end_headers()
-    def log_message(self, *a): pass
+    def log_message(self, format, *args):
+        if args and "error" in str(args).lower():
+            print(f"[http] {format % args}")
+    def log_error(self, format, *args):
+        print(f"[http-error] {format % args}")
 
 # ── Main ──────────────────────────────────────────────────────────────
 def _discover_highly_rated():
