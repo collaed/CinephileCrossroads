@@ -476,95 +476,75 @@ def main():
     check_path_access(config, library)
 
     # Map paths and get file sizes
-    print("Mapping paths and getting file sizes...")
-    sized = 0
-    not_found = 0
-    total_entries = sum(len(v) if isinstance(v, list) else 1 for k, v in library.items() if k != "_episodes" and (isinstance(v, dict) or isinstance(v, list)))
-    processed = 0
-    for iid, val in library.items():
-        if iid == "_episodes": continue
-        entries = val if isinstance(val, list) else [val] if isinstance(val, dict) else []
-        for info in entries:
-            if not isinstance(info, dict): continue
-            path = info.get("path", "")
-            if path:
-                mapped = map_path(path, config)
-                if mapped != path:
-                    info["local_path"] = mapped
-                if os.name == "nt":
-                    mapped = mapped.replace("/", "\\")
-                path = mapped
-            if path and os.path.isfile(path):
-                try:
-                    info["file_size"] = os.path.getsize(path)
-                    sized += 1
-                except:
-                    not_found += 1
-            elif path:
-                not_found += 1
-            processed += 1
-            if processed % 500 == 0:
-                print(f"  Progress: {processed}/{total_entries} - {sized} sized, {not_found} not accessible")
-    print(f"  Done: {sized} sized, {not_found} not accessible out of {total_entries}")
-
-    # Compute file hashes for subtitle matching
-    print("Computing file hashes...")
-    hash_processed = 0
-    library = compute_hashes(library)
-    hashed = 0
-    for k, val in library.items():
-        if k == "_episodes": continue
-        entries = val if isinstance(val, list) else [val] if isinstance(val, dict) else []
-        for info in entries:
-            if isinstance(info, dict) and info.get("file_hash"): hashed += 1
-    print(f"  {hashed} files hashed")
-
-    # Report titles missing subtitles
-    missing_subs = find_missing_subs(library)
-    if missing_subs:
-        print(f"  {len(missing_subs)} titles have no subtitles")
-
-    # Convert to list format for duplicates
-    multi_lib = {}
-    for iid, info in library.items():
-        if not isinstance(info, dict): continue
-        if iid in multi_lib:
-            if isinstance(multi_lib[iid], list):
-                multi_lib[iid].append(info)
-            else:
-                multi_lib[iid] = [multi_lib[iid], info]
-        else:
-            multi_lib[iid] = info
-    library = multi_lib
-    # Separate episodes from main library
-    episodes = library.pop("_episodes", {})
+    # Size, hash, and push in batches of 500
     token = config.get("_agent_token", "")
     url = f"{args.server}/api/library/{args.user}"
     push_headers = {"Content-Type": "application/json", "User-Agent": "CinephileAgent/1.0"}
     if token:
         push_headers["X-Agent-Token"] = token
 
-    # Push in chunks of 500 titles
+    episodes = library.pop("_episodes", {})
     items = list(library.items())
-    chunk_size = 500
-    total_pushed = 0
-    for i in range(0, len(items), chunk_size):
-        chunk = dict(items[i:i+chunk_size])
-        req = urllib.request.Request(url, data=json.dumps({"library": chunk}).encode(), headers=push_headers)
-        result = json.loads(urllib.request.urlopen(req, timeout=60).read())
-        total_pushed += len(chunk)
-        print(f"  Pushed {total_pushed}/{len(library)} titles...")
+    batch_size = 500
+    total_sized = 0
+    total_hashed = 0
+    total_not_found = 0
 
-    # Push episodes in chunks too
+    for batch_start in range(0, len(items), batch_size):
+        batch = dict(items[batch_start:batch_start + batch_size])
+        batch_num = batch_start // batch_size + 1
+        total_batches = (len(items) + batch_size - 1) // batch_size
+        print(f"\nBatch {batch_num}/{total_batches} ({len(batch)} titles)")
+
+        # Size files in this batch
+        for iid, val in batch.items():
+            entries = val if isinstance(val, list) else [val] if isinstance(val, dict) else []
+            for info in entries:
+                if not isinstance(info, dict): continue
+                path = info.get("path", "")
+                if path:
+                    mapped = map_path(path, config)
+                    if mapped != path:
+                        info["local_path"] = mapped
+                    if os.name == "nt":
+                        mapped = mapped.replace("/", "\\")
+                    if os.path.isfile(mapped):
+                        try:
+                            info["file_size"] = os.path.getsize(mapped)
+                            total_sized += 1
+                        except:
+                            total_not_found += 1
+                        # Hash
+                        h = opensubtitles_hash(mapped)
+                        if h:
+                            info["file_hash"] = h
+                            total_hashed += 1
+                    elif path:
+                        total_not_found += 1
+
+        print(f"  Sized: {total_sized} | Hashed: {total_hashed} | Not found: {total_not_found}")
+
+        # Push this batch
+        try:
+            req = urllib.request.Request(url, data=json.dumps({"library": batch}).encode(), headers=push_headers)
+            result = json.loads(urllib.request.urlopen(req, timeout=60).read())
+            print(f"  Pushed -> server has {result.get('count', '?')} titles")
+        except Exception as e:
+            print(f"  Push error: {e}")
+
+    # Push episodes in batches
     if episodes:
         ep_items = list(episodes.items())
-        for i in range(0, len(ep_items), chunk_size):
-            chunk = dict(ep_items[i:i+chunk_size])
-            req = urllib.request.Request(url, data=json.dumps({"library": {"_episodes": chunk}}).encode(), headers=push_headers)
-            urllib.request.urlopen(req, timeout=60)
-            print(f"  Pushed {min(i+chunk_size, len(ep_items))}/{len(ep_items)} episodes...")
-    result = {"count": total_pushed}
-    print(f"Done - server has {result.get('count', '?')} titles in library")
+        for i in range(0, len(ep_items), batch_size):
+            chunk = dict(ep_items[i:i + batch_size])
+            try:
+                req = urllib.request.Request(url, data=json.dumps({"library": {"_episodes": chunk}}).encode(), headers=push_headers)
+                urllib.request.urlopen(req, timeout=60)
+                print(f"  Episodes: pushed {min(i + batch_size, len(ep_items))}/{len(ep_items)}")
+            except Exception as e:
+                print(f"  Episode push error: {e}")
+
+    result = {"count": len(items)}
 
     # Phase 2: Thumbnails (only if --thumbnails flag)
     if args.thumbnails:
