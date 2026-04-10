@@ -133,33 +133,7 @@ def list_users():
     if os.path.exists(d): return [u for u in os.listdir(d) if os.path.isdir(f"{d}/{u}")]
     return []
 
-def _render_provider_config(user):
-    all_provs = get_all_providers()
-    active = get_user_active_providers(user)
-    if not all_provs:
-        return '<p style="color:#888">Add a TMDB API key to see available providers</p>'
-    checks = ""
-    for p in all_provs:
-        name = p["name"]
-        checked = "checked" if name in active else ""
-        icon = PROVIDER_ICONS.get(name, "")
-        checks += '<label style="display:inline-block;margin:3px 8px;cursor:pointer"><input type="checkbox" name="prov" value="' + name + '" ' + checked + '> ' + icon + ' ' + name + '</label>'
-    return '<form method="POST" action="' + BASE + '/providers/' + user + '"><div style="max-height:200px;overflow-y:auto;background:#1a1a2e;padding:8px;border-radius:6px">' + checks + '</div><button type="submit" style="margin-top:8px;padding:6px 16px;background:#4fc3f7;border:none;border-radius:6px;cursor:pointer">Save subscriptions</button></form>'
 
-def _render_media_servers(user):
-    config = load_user_media_config(user)
-    html = ""
-    for stype, sinfo in MEDIA_SERVERS.items():
-        sc = config.get(stype, {})
-        status = '<span style="color:#2d7">connected</span>' if sc.get("enabled") else ""
-        fields = ""
-        for fname in sinfo["fields"]:
-            val = sc.get(fname, "")
-            placeholder = "http://192.168.1.x:" + {"plex":"32400","jellyfin":"8096","emby":"8096","kodi":"8080","radarr":"7878","sonarr":"8989"}.get(stype,"8080") if fname == "url" else "API token"
-            fields += '<input name="' + fname + '" value="' + val + '" placeholder="' + placeholder + '" style="width:45%;display:inline-block;margin-right:4px">'
-        html += '<div style="margin:8px 0"><b>' + sinfo["name"] + '</b> ' + status + '<form method="POST" action="' + BASE + '/media/' + user + '" style="display:inline"><input type="hidden" name="type" value="' + stype + '">' + fields + '<button type="submit" style="padding:4px 10px;background:#4fc3f7;border:none;border-radius:4px;cursor:pointer;font-size:.85em">Save</button></form></div>'
-    sync_btn = '<a href="' + BASE + '/media/sync/' + user + '" style="display:inline-block;margin-top:8px;padding:6px 16px;background:#16213e;border:1px solid #4fc3f7;border-radius:6px;color:#4fc3f7;text-decoration:none">🔄 Sync all servers</a>' if config else ""
-    return html + sync_btn
 
 def render_user_bar(current, page="u", show_create=True):
     pills = ""
@@ -1116,6 +1090,34 @@ def import_csv(user, text):
     print(f"Imported {len(ratings)} ratings for {user}, {len(titles)} titles total")
 
 # ── HTML rendering ────────────────────────────────────────────────────
+def _render_provider_config(user):
+    all_provs = get_all_providers()
+    active = get_user_active_providers(user)
+    if not all_provs:
+        return '<p style="color:#888">Add a TMDB API key to see available providers</p>'
+    checks = ""
+    for p in all_provs:
+        name = p["name"]
+        checked = "checked" if name in active else ""
+        icon = PROVIDER_ICONS.get(name, "")
+        checks += '<label style="display:inline-block;margin:3px 8px;cursor:pointer"><input type="checkbox" name="prov" value="' + name + '" ' + checked + '> ' + icon + ' ' + name + '</label>'
+    return '<form method="POST" action="' + BASE + '/providers/' + user + '"><div style="max-height:200px;overflow-y:auto;background:#1a1a2e;padding:8px;border-radius:6px">' + checks + '</div><button type="submit" style="margin-top:8px;padding:6px 16px;background:#4fc3f7;border:none;border-radius:6px;cursor:pointer">Save subscriptions</button></form>'
+
+def _render_media_servers(user):
+    config = load_user_media_config(user)
+    html = ""
+    for stype, sinfo in MEDIA_SERVERS.items():
+        sc = config.get(stype, {})
+        status = '<span style="color:#2d7">connected</span>' if sc.get("enabled") else ""
+        fields = ""
+        for fname in sinfo["fields"]:
+            val = sc.get(fname, "")
+            placeholder = "http://192.168.1.x:" + {"plex":"32400","jellyfin":"8096","emby":"8096","kodi":"8080","radarr":"7878","sonarr":"8989"}.get(stype,"8080") if fname == "url" else "API token"
+            fields += '<input name="' + fname + '" value="' + val + '" placeholder="' + placeholder + '" style="width:45%;display:inline-block;margin-right:4px">'
+        html += '<div style="margin:8px 0"><b>' + sinfo["name"] + '</b> ' + status + '<form method="POST" action="' + BASE + '/media/' + user + '" style="display:inline"><input type="hidden" name="type" value="' + stype + '">' + fields + '<button type="submit" style="padding:4px 10px;background:#4fc3f7;border:none;border-radius:4px;cursor:pointer;font-size:.85em">Save</button></form></div>'
+    sync_btn = '<a href="' + BASE + '/media/sync/' + user + '" style="display:inline-block;margin-top:8px;padding:6px 16px;background:#16213e;border:1px solid #4fc3f7;border-radius:6px;color:#4fc3f7;text-decoration:none">🔄 Sync all servers</a>' if config else ""
+    return html + sync_btn
+
 def render_ratings(user):
     titles = load_titles(); ratings = load_user_ratings(user)
     if not ratings: return render_setup(user)
@@ -1163,6 +1165,9 @@ def render_ratings(user):
         sub_icon = "🗨" if has_subs else ("💬" if has_suggested else ('<a href="' + BASE + '/subs/' + iid + '" title="Find subtitles">🔤</a>' if iid in tmm else ""))
         local = ('💾 ' + local_src + " " + sub_icon) if iid in tmm else ""
         tooltip = f' title="{t.get("overview","")[:200]}"' if t.get("overview") else ""
+        awards_badge = " 🏆" if t.get("awards") and ("Oscar" in t.get("awards","") or "Won" in t.get("awards","")) else ""
+        trailer_link = (' <a href="' + t.get("trailer","") + '" target="_blank" title="Trailer">▶️</a>') if t.get("trailer") else ""
+        similar_link = ' <a href="' + BASE + '/similar/' + iid + '" title="Similar">🔗</a>'
         rows += f'<tr data-g="{t.get("genres","")}" data-r="{r["rating"]}" data-s="{" ".join(provs)}" data-d="{str(t.get("year",""))[:3]}0"><td>{poster}</td><td><a href="https://www.imdb.com/title/{iid}/" target="_blank"{tooltip}>{t.get("title",iid)}</a>{awards_badge}{trailer_link}{similar_link}</td><td>{t.get("year","")}</td><td style="font-weight:bold;color:{c}">{r["rating"]}</td><td>{imdb}</td><td class="x">{" ".join(scores)}</td><td>{stream}</td><td class="x">{t.get("genres","")}</td><td class="x">{r.get("date","")}</td><td>{local}</td></tr>'
     jb = active_job()[1]
     job_banner = f'<div id="jb" style="background:#1a3a1a;padding:8px 15px;border-radius:6px;margin-bottom:10px"><span id="jm">⏳ {jb["name"]}: {jb["message"]}</span> <progress id="jp" max="100" value="{jb["progress"]/max(jb["total"],1)*100 if jb else 0}" style="vertical-align:middle"></progress></div><script>setInterval(()=>fetch("{BASE}/jobs").then(r=>r.json()).then(d=>{{let a=Object.values(d).find(j=>j.status=="running");if(a){{document.getElementById("jb").style.display="block";document.getElementById("jm").textContent="⏳ "+a.name+": "+a.message;document.getElementById("jp").value=a.total?a.progress/a.total*100:0}}else{{document.getElementById("jb").style.display="none"}}}}),3000)</script>' if jb else ""
@@ -1216,10 +1221,13 @@ def render_recs(user):
     for iid, t, score in recs:
         wl_icon = '<a href="' + BASE + '/watchlist/rm/' + iid + '" title="Remove from watchlist">❤️</a>' if iid in watchlist else '<a href="' + BASE + '/watchlist/add/' + iid + '" title="Add to watchlist">🤍</a>'
         poster = f'<img src="{t["poster"]}" height="70" loading="lazy">' if t.get("poster") else ""
-        provs = " ".join(PROVIDER_ICONS.get(p, "▪") for p in t.get("providers", []) if p in MY_PROVIDERS)
+        provs = " ".join(PROVIDER_ICONS.get(p, "▪") for p in t.get("providers", []) if p in get_user_active_providers(user))
         imdb = f'{t.get("imdb_rating","")}' if t.get("imdb_rating") else ""
         kws = ", ".join(t.get("keywords", [])[:5])
         tooltip = f' title="{t.get("overview","")[:200]}"' if t.get("overview") else ""
+        awards_badge = " 🏆" if t.get("awards") and ("Oscar" in t.get("awards","") or "Won" in t.get("awards","")) else ""
+        trailer_link = (' <a href="' + t.get("trailer","") + '" target="_blank" title="Trailer">▶️</a>') if t.get("trailer") else ""
+        similar_link = ' <a href="' + BASE + '/similar/' + iid + '" title="Similar">🔗</a>'
         stars = "".join('<a href="' + BASE + '/rate/' + user + '/' + iid + '/' + str(s) + '" style="text-decoration:none;color:gold" title="' + str(s) + '">' + ("★" if s <= 5 else "☆") + '</a>' for s in range(1, 11))
         rows += f'<tr><td>{poster}</td><td><a href="https://www.imdb.com/title/{iid}/" target="_blank"{tooltip}>{t.get("title",iid)}</a>{awards_badge}{trailer_link}{similar_link}</td><td>{t.get("year","")}</td><td>{imdb}</td><td>{provs}</td><td>{wl_icon}</td><td style="color:#2d7;font-weight:bold">{score}</td><td class="x">{kws}</td><td>{stars}</td></tr>'
     return f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>Recommendations for {user}</title>
@@ -1241,313 +1249,64 @@ img{{border-radius:4px}}.x{{font-size:.8em;color:#aaa}}</style></head><body>
 
 def render_setup(user):
     has_trakt = load_user_trakt_token(user) is not None
-    users = list_users()
-    user_links = " ".join(f'<a href="{BASE}/u/{u}">{u}</a>' for u in users) if users else "none"
-    return f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>Setup — {user}</title>
-<style>body{{font-family:sans-serif;background:#1a1a2e;color:#eee;display:flex;justify-content:center;padding-top:30px}}
-.box{{background:#16213e;padding:30px;border-radius:12px;max-width:600px;width:100%}}
-a{{color:#4fc3f7}}input,textarea{{width:100%;padding:8px;border-radius:4px;border:1px solid #444;background:#1a1a2e;color:#eee;margin:8px 0;box-sizing:border-box}}
-button{{padding:10px 30px;background:#4fc3f7;border:none;border-radius:6px;cursor:pointer;font-size:1em;margin-top:10px}}
-hr{{border-color:#333;margin:20px 0}}</style></head>
-<body><div class="box"><div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap"><h2>⚙ Setup — {user}</h2>{render_user_bar(user, "setup")}</div>
+    user_bar = render_user_bar(user, "setup")
+    media_servers = _render_media_servers(user)
+    provider_config = _render_provider_config(user)
+    trakt_section = '<span style="color:#2d7">✓ Connected</span> <a href="' + BASE + '/trakt/auth/' + user + '">(reconnect)</a>' if has_trakt else ('<a href="' + BASE + '/trakt/auth/' + user + '"><button>Connect Trakt</button></a>' if TRAKT_ID else '')
+    
+    # Build page with concatenation (avoids f-string issues with JS braces)
+    html = '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Setup</title>'
+    html += '<meta name="viewport" content="width=device-width,initial-scale=1">'
+    html += '<style>body{font-family:sans-serif;background:#1a1a2e;color:#eee;display:flex;justify-content:center;padding-top:30px}'
+    html += '.box{background:#16213e;padding:30px;border-radius:12px;max-width:600px;width:100%}'
+    html += 'a{color:#4fc3f7}input,textarea{width:100%;padding:8px;border-radius:4px;border:1px solid #444;background:#1a1a2e;color:#eee;margin:8px 0;box-sizing:border-box}'
+    html += 'button{padding:10px 30px;background:#4fc3f7;border:none;border-radius:6px;cursor:pointer;font-size:1em;margin-top:10px}'
+    html += 'hr{border-color:#333;margin:20px 0}</style></head>'
+    html += '<body><div class="box">'
+    html += '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap">'
+    html += '<h2>Setup — ' + user + '</h2>' + user_bar + '</div>'
+    
+    # Upload CSV
+    html += '<h3>Upload IMDB CSV</h3>'
+    html += '<form method="POST" action="' + BASE + '/upload/' + user + '" enctype="multipart/form-data">'
+    html += '<input type="file" name="csv" accept=".csv"><button type="submit">Upload</button></form><hr>'
+    
+    # API Keys
+    html += '<h3>API Keys</h3>'
+    html += '<form method="POST" action="' + BASE + '/keys">'
+    html += '<label>TMDB</label><input name="tmdb" value="' + TMDB_KEY + '">'
+    html += '<label>OMDB</label><input name="omdb" value="' + OMDB_KEY + '">'
+    html += '<label>TVDB</label><input name="tvdb" value="' + TVDB_KEY + '">'
+    html += '<label>OpenSubtitles (<a href="https://www.opensubtitles.com/consumers" target="_blank">get key</a>)</label>'
+    html += '<input name="opensubs" placeholder="OpenSubtitles API key">'
+    html += '<button type="submit">Save</button></form><hr>'
+    
+    # Trakt
+    html += '<h3>Trakt</h3>' + trakt_section + '<hr>'
+    
+    # Media Servers + LAN Scanner
+    html += '<h3>Media Servers</h3>' + media_servers + '<hr>'
+    
+    # Local Library
+    html += '<h3>Local Library (TMM / file upload)</h3>'
+    html += '<form method="POST" action="' + BASE + '/tmm/' + user + '" enctype="multipart/form-data">'
+    html += '<input type="file" name="tmm" accept=".csv,.txt"><button type="submit">Upload</button></form><hr>'
+    
+    # Streaming Providers
+    html += '<h3>My Streaming Services</h3>' + provider_config + '<hr>'
+    
+    # IMDB Dataset
+    html += '<h3>IMDB Dataset</h3>'
+    html += '<p>Download IMDB bulk data (200K+ titles, ~220MB). Eliminates most API calls.</p>'
+    html += '<a href="' + BASE + '/datasets/download" style="display:inline-block;padding:8px 16px;background:#1a1a2e;border:1px solid #4fc3f7;border-radius:6px;color:#4fc3f7;text-decoration:none">Download IMDB Datasets</a><hr>'
+    
+    # Streaming Region
+    html += '<h3>Streaming Region</h3>'
+    html += '<p>Region: <b>' + WATCH_COUNTRY + '</b> | <a href="' + BASE + '/catalog">Browse catalog</a></p>'
+    
+    html += '</div></body></html>'
+    return html
 
-<h3>Upload IMDB CSV</h3>
-<form method="POST" action="{BASE}/upload/{user}" enctype="multipart/form-data">
-<input type="file" name="csv" accept=".csv"><button type="submit">Upload</button></form><hr>
-<h3>API Keys</h3>
-<form method="POST" action="{BASE}/keys">
-<label>TMDB</label><input name="tmdb" value="{TMDB_KEY}">
-<label>OMDB</label><input name="omdb" value="{OMDB_KEY}">
-<label>TVDB</label><input name="tvdb" value="{TVDB_KEY}">
-<label>OpenSubtitles (<a href="https://www.opensubtitles.com/consumers" target="_blank">get key</a>)</label><input name="opensubs" placeholder="OpenSubtitles API key">
-<button type="submit">Save</button></form><hr>
-<h3>Trakt</h3>
-{'<span style="color:#2d7">✓ Connected</span> <a href="'+BASE+'/trakt/auth/'+user+'">(reconnect)</a>' if has_trakt else f'<a href="{BASE}/trakt/auth/{user}"><button>Connect Trakt</button></a>' if TRAKT_ID else ''}<hr>
-<h3>Media Servers</h3>
-
-<div style="margin-top:12px;padding:12px;background:#1a1a2e;border-radius:8px">
-<b>Browser LAN Scan</b>
-<div id="scan-log" style="margin:8px 0;color:#888;max-height:150px;overflow-y:auto;font-size:.85em"></div>
-<button onclick="scanLAN()" id="scan-btn" style="padding:6px 16px;background:#4fc3f7;border:none;border-radius:6px;cursor:pointer">Scan LAN</button>
-<button onclick="syncFromBrowser()" id="sync-btn" style="padding:6px 16px;background:#16213e;border:1px solid #4fc3f7;border-radius:6px;cursor:pointer;color:#4fc3f7;display:none">Sync found servers</button>
-<script>
-var foundServers={{}};
-function log(msg){{document.getElementById("scan-log").innerHTML+=msg+"<br>"}}
-async function probe(ip,port,path,name){{
-  try{{
-    const r=await fetch("http://"+ip+":"+port+path,{{signal:AbortSignal.timeout(1200),mode:"cors"}});
-    if(r.ok){{foundServers[name]=foundServers[name]||[];foundServers[name].push({{ip,port}});return true}}
-  }}catch(e){{}}
-  return false
-}}
-async function scanLAN(){{
-  document.getElementById("scan-log").innerHTML="";
-  foundServers={{}};
-  log("Scanning common LAN ranges...");
-  const tests=[
-    {{name:"Plex",port:32400,path:"/identity"}},
-    {{name:"Jellyfin",port:8096,path:"/System/Info/Public"}},
-    {{name:"Kodi",port:8080,path:"/jsonrpc"}},
-    {{name:"Radarr",port:7878,path:"/ping"}},
-    {{name:"Sonarr",port:8989,path:"/ping"}},
-  ];
-  for(const base of["192.168.1","192.168.0","10.0.0"]){{
-    log("Trying "+base+".x ...");
-    const batch=[];
-    for(let i=1;i<=254;i++){{
-      const ip=base+"."+i;
-      for(const t of tests) batch.push(probe(ip,t.port,t.path,t.name).then(ok=>ok?log("Found <b>"+t.name+"</b> at "+ip+":"+t.port):null));
-    }}
-    await Promise.all(batch);
-    if(Object.keys(foundServers).length>0)break;
-  }}
-  if(Object.keys(foundServers).length===0){{log("No servers found. CORS may be blocking — try the LAN agent.")}}
-  else{{document.getElementById("sync-btn").style.display="inline";log("<b>Click Sync to pull libraries</b>")}}
-}}
-async function syncFromBrowser(){{
-  const user="{user}";
-  for(const[name,hosts]of Object.entries(foundServers)){{
-    const h=hosts[0];
-    const url="http://"+h.ip+":"+h.port;
-    log("Fetching "+name+" library from "+url+"...");
-    let library={{}};
-    try{{
-      if(name==="Plex"){{
-        const tok=prompt("Plex token for "+url+":");
-        if(!tok)continue;
-        const secs=await(await fetch(url+"/library/sections?X-Plex-Token="+tok)).json();
-        for(const d of(secs.MediaContainer?.Directory||[])){{
-          if(!["movie","show"].includes(d.type))continue;
-          const items=await(await fetch(url+"/library/sections/"+d.key+"/all?X-Plex-Token="+tok)).json();
-          for(const it of(items.MediaContainer?.Metadata||[])){{
-            const g=(it.Guid||[]).find(x=>x.id?.startsWith("imdb://"));
-            if(g)library[g.id.replace("imdb://","")]={{source:"plex",quality:it.Media?.[0]?.videoResolution||""}}
-          }}
-        }}
-      }}else if(name==="Jellyfin"){{
-        const tok=prompt("Jellyfin API key for "+url+":");
-        if(!tok)continue;
-        const users=await(await fetch(url+"/Users?api_key="+tok)).json();
-        const uid=users[0]?.Id;
-        const items=await(await fetch(url+"/Users/"+uid+"/Items?api_key="+tok+"&Recursive=true&IncludeItemTypes=Movie,Series&Fields=ProviderIds")).json();
-        for(const it of(items.Items||[])){{const iid=it.ProviderIds?.Imdb;if(iid)library[iid]={{source:"jellyfin"}}}}
-      }}else if(name==="Radarr"||name==="Sonarr"){{
-        const tok=prompt(name+" API key for "+url+":");
-        if(!tok)continue;
-        const ep=name==="Radarr"?"/api/v3/movie":"/api/v3/series";
-        const items=await(await fetch(url+ep+"?apiKey="+tok)).json();
-        for(const m of items){{if(m.imdbId)library[m.imdbId]={{source:name.toLowerCase(),downloaded:m.hasFile||false}}}}
-      }}
-      const resp=await fetch(location.pathname.replace(/\/setup\/.*$/,"/api/library/")+user,{{
-        method:"POST",headers:{{"Content-Type":"application/json"}},body:JSON.stringify({{library}})}});
-      const result=await resp.json();
-      log(name+": synced "+Object.keys(library).length+" titles (total: "+result.count+")");
-    }}catch(e){{log(name+" error: "+e.message)}}
-  }}
-}}
-</script></div>
-
-{_render_media_servers(user)}
-<hr>
-<h3>Letterboxd Import</h3>
-<p>Export from <a href="https://letterboxd.com/settings/data/" target="_blank">Letterboxd</a> (ratings.csv):</p>
-<form method="POST" action="{BASE}/letterboxd/{user}" enctype="multipart/form-data">
-<input type="file" name="csv" accept=".csv"><button type="submit">Import</button></form><hr>
-<h3>Local Library (TMM / file upload)</h3>
-<form method="POST" action="{BASE}/tmm/{user}" enctype="multipart/form-data">
-<input type="file" name="tmm" accept=".csv,.txt"><button type="submit">Upload</button></form><hr>
-<h3>My Streaming Services</h3>
-{_render_provider_config(user)}
-<h3>IMDB Dataset</h3>
-<p>Download IMDB bulk data (200K+ titles, ~220MB). Eliminates most API calls for basic metadata.</p>
-<a href="{BASE}/datasets/download" style="display:inline-block;padding:8px 16px;background:#16213e;border:1px solid #4fc3f7;border-radius:6px;color:#4fc3f7;text-decoration:none">⬇ Download IMDB Datasets</a>
-<hr>
-<h3>Streaming Region</h3>
-<p>Region: <b>{WATCH_COUNTRY}</b> | <a href="{BASE}/catalog">Browse catalog</a></p>
-</div></body></html>"""
-
-def render_public_profile(user):
-    titles = load_titles()
-    ratings = load_user_ratings(user)
-    if not ratings: return '<html><body style="background:#1a1a2e;color:#eee;padding:40px"><h2>No ratings</h2></body></html>'
-    scores = [r["rating"] for r in ratings.values()]
-    avg = sum(scores) / len(scores)
-    # Top rated
-    top = sorted(ratings.items(), key=lambda x: x[1]["rating"], reverse=True)[:10]
-    top_html = ""
-    for iid, r in top:
-        t = titles.get(iid, {})
-        poster = '<img src="' + t.get("poster","") + '" height="80" style="border-radius:6px;margin:4px">' if t.get("poster") else ""
-        top_html += '<div style="text-align:center;width:100px" title="' + t.get("title","") + " " + str(r["rating"]) + '/10">' + poster + '<div style="font-size:.8em">' + str(r["rating"]) + '/10</div></div>'
-    # Genre breakdown
-    genre_count = {}
-    for iid in ratings:
-        for g in (titles.get(iid, {}).get("genres") or "").split(","):
-            g = g.strip()
-            if g: genre_count[g] = genre_count.get(g, 0) + 1
-    top_genres = sorted(genre_count.items(), key=lambda x: x[1], reverse=True)[:8]
-    genre_tags = " ".join('<span style="background:#16213e;padding:3px 10px;border-radius:12px;font-size:.85em">' + g + " (" + str(c) + ")</span>" for g, c in top_genres)
-    # Recent
-    recent = sorted(ratings.items(), key=lambda x: x[1].get("date",""), reverse=True)[:5]
-    recent_html = "".join("<li>" + titles.get(iid, {}).get("title", iid) + " — " + str(r["rating"]) + "/10 (" + r.get("date","") + ")</li>" for iid, r in recent)
-    return f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>{user}'s Profile</title>
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<meta property="og:title" content="{user}'s Movie Profile">
-<meta property="og:description" content="{len(ratings)} titles rated, avg {avg:.1f}/10">
-<style>body{{font-family:-apple-system,sans-serif;background:#1a1a2e;color:#eee;margin:0;padding:20px}}
-.card{{background:#16213e;padding:20px;border-radius:12px;margin-bottom:15px}}a{{color:#4fc3f7}}</style></head>
-<body><div style="max-width:700px;margin:0 auto">
-<div class="card" style="text-align:center"><h1>{user}</h1>
-<div style="display:flex;justify-content:center;gap:30px;margin:15px 0">
-<div><div style="font-size:2.5em">{len(ratings)}</div>rated</div>
-<div><div style="font-size:2.5em">{avg:.1f}</div>average</div></div>
-<div>{genre_tags}</div></div>
-<div class="card"><h3>Top Rated</h3><div style="display:flex;flex-wrap:wrap;gap:8px;justify-content:center">{top_html}</div></div>
-<div class="card"><h3>Recently Rated</h3><ul>{recent_html}</ul></div>
-<p style="text-align:center"><a href="{BASE}/u/{user}">Full ratings →</a></p>
-</div></body></html>"""
-
-def render_compare(u1, u2):
-    titles = load_titles()
-    r1, r2 = load_user_ratings(u1), load_user_ratings(u2)
-    common = set(r1.keys()) & set(r2.keys())
-    only1 = set(r1.keys()) - set(r2.keys())
-    only2 = set(r2.keys()) - set(r1.keys())
-    # Agreement / disagreement
-    agree, disagree = [], []
-    for iid in common:
-        t = titles.get(iid, {})
-        diff = abs(r1[iid]["rating"] - r2[iid]["rating"])
-        entry = (t.get("title","?"), r1[iid]["rating"], r2[iid]["rating"], diff)
-        if diff <= 1: agree.append(entry)
-        elif diff >= 3: disagree.append(entry)
-    disagree.sort(key=lambda x: x[3], reverse=True)
-    agree_rows = "".join(f"<tr><td>{t}</td><td>{a}</td><td>{b}</td></tr>" for t,a,b,_ in agree[:15])
-    disagree_rows = "".join(f"<tr><td>{t}</td><td>{a}</td><td>{b}</td><td style=\"color:#d72\">{d}</td></tr>" for t,a,b,d in disagree[:15])
-    return f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>{u1} vs {u2}</title>
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<style>body{{font-family:sans-serif;background:#1a1a2e;color:#eee;margin:20px}}
-.grid{{display:grid;grid-template-columns:1fr 1fr;gap:20px}}
-.card{{background:#16213e;padding:20px;border-radius:12px}}
-table{{border-collapse:collapse;width:100%}}td,th{{padding:4px 8px;border-bottom:1px solid #333;text-align:left}}
-a{{color:#4fc3f7}}</style></head>
-<body><h2>{u1} vs {u2}</h2>
-<div style="display:flex;gap:20px;margin-bottom:20px;flex-wrap:wrap">
-<div class="card" style="text-align:center"><div style="font-size:2em">{len(common)}</div>both rated</div>
-<div class="card" style="text-align:center"><div style="font-size:2em">{len(agree)}</div>agree (±1)</div>
-<div class="card" style="text-align:center"><div style="font-size:2em">{len(disagree)}</div>disagree (3+)</div>
-<div class="card" style="text-align:center"><div style="font-size:2em">{len(only1)}</div>only {u1}</div>
-<div class="card" style="text-align:center"><div style="font-size:2em">{len(only2)}</div>only {u2}</div>
-</div>
-<div class="grid">
-<div class="card"><h3>🤝 You agree on</h3><table><tr><th>Title</th><th>{u1}</th><th>{u2}</th></tr>{agree_rows}</table></div>
-<div class="card"><h3>🥊 You disagree on</h3><table><tr><th>Title</th><th>{u1}</th><th>{u2}</th><th>Gap</th></tr>{disagree_rows}</table></div>
-</div>
-<p style="margin-top:20px"><a href="{BASE}/">← Back</a></p></body></html>"""
-
-def render_friend_recs(user):
-    """Show titles highly rated by other users that this user hasn't seen."""
-    titles = load_titles()
-    my_ratings = load_user_ratings(user)
-    recs = {}
-    for other in list_users():
-        if other == user: continue
-        other_ratings = load_user_ratings(other)
-        for iid, r in other_ratings.items():
-            if iid in my_ratings: continue
-            if r["rating"] < 8: continue
-            if iid not in recs: recs[iid] = []
-            recs[iid].append({"user": other, "rating": r["rating"]})
-    # Sort by number of friends who liked it, then by avg rating
-    ranked = sorted(recs.items(), key=lambda x: (-len(x[1]), -sum(r["rating"] for r in x[1])/len(x[1])))[:30]
-    rows = ""
-    for iid, friends in ranked:
-        t = titles.get(iid, {})
-        poster = '<img src="' + t.get("poster","") + '" height="60" loading="lazy">' if t.get("poster") else ""
-        who = ", ".join(f["user"] + " " + str(f["rating"]) + "/10" for f in friends)
-        provs = " ".join(PROVIDER_ICONS.get(p,"") for p in t.get("providers",[]))
-        rows += "<tr><td>" + poster + "</td><td>" + t.get("title","") + "</td><td>" + str(t.get("year","")) + "</td><td>" + provs + "</td><td>" + who + "</td></tr>"
-    return f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>Friend Recs</title>
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<style>body{{font-family:sans-serif;background:#1a1a2e;color:#eee;margin:20px}}table{{border-collapse:collapse;width:100%}}
-th,td{{padding:6px 10px;text-align:left;border-bottom:1px solid #333}}th{{background:#16213e}}img{{border-radius:4px}}a{{color:#4fc3f7}}</style></head>
-<body><h2>👫 Friends recommend for {user}</h2>
-<p style="color:#888">Titles rated 8+ by other users that you haven't seen</p>
-<table><thead><tr><th></th><th>Title</th><th>Year</th><th>Stream</th><th>Recommended by</th></tr></thead>
-<tbody>{rows}</tbody></table>
-<p><a href="{BASE}/u/{user}">← Back</a></p></body></html>"""
-
-def render_stats(user):
-    titles = load_titles()
-    ratings = load_user_ratings(user)
-    if not ratings: return f'<html><body style="background:#1a1a2e;color:#eee;padding:40px"><h2>No ratings</h2></body></html>'
-    # Compute stats
-    scores = [r["rating"] for r in ratings.values()]
-    avg = sum(scores) / len(scores)
-    genre_count = {}
-    director_count = {}
-    year_count = {}
-    for iid, r in ratings.items():
-        t = titles.get(iid, {})
-        for g in (t.get("genres") or "").split(","):
-            g = g.strip()
-            if g: genre_count[g] = genre_count.get(g, 0) + 1
-        for d in (t.get("directors") or "").split(","):
-            d = d.strip()
-            if d: director_count[d] = director_count.get(d, 0) + 1
-        y = str(t.get("year",""))[:4]
-        if y: year_count[y] = year_count.get(y, 0) + 1
-    top_genres = sorted(genre_count.items(), key=lambda x: x[1], reverse=True)[:12]
-    top_dirs = sorted(director_count.items(), key=lambda x: x[1], reverse=True)[:10]
-    rating_dist = [sum(1 for s in scores if s == i) for i in range(1, 11)]
-    max_bar = max(rating_dist) or 1
-    dist_bars = "".join(f'<div style="display:flex;align-items:center;gap:8px;margin:2px 0"><span style="width:30px;text-align:right">{i}</span><div style="background:#4fc3f7;height:18px;width:{rating_dist[i-1]/max_bar*300}px;border-radius:3px"></div><span style="color:#888;font-size:.85em">{rating_dist[i-1]}</span></div>' for i in range(10, 0, -1))
-    genre_bars = "".join(f'<div style="display:flex;align-items:center;gap:8px;margin:2px 0"><span style="width:100px;text-align:right;font-size:.85em">{g}</span><div style="background:#4fc3f7;height:16px;width:{c/top_genres[0][1]*250}px;border-radius:3px"></div><span style="color:#888;font-size:.85em">{c}</span></div>' for g, c in top_genres)
-    dir_list = "".join(f"<tr><td>{d}</td><td>{c}</td></tr>" for d, c in top_dirs)
-    return f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>{user} Stats</title>
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<style>body{{font-family:-apple-system,sans-serif;background:#1a1a2e;color:#eee;margin:20px}}
-.grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:20px}}
-.card{{background:#16213e;padding:20px;border-radius:12px}}
-table{{border-collapse:collapse;width:100%}}td{{padding:4px 8px;border-bottom:1px solid #333}}
-a{{color:#4fc3f7;text-decoration:none}}h3{{margin-top:0}}</style></head>
-<body><div style="display:flex;justify-content:space-between;align-items:center">
-<h2>📊 {user}'s Stats</h2><a href="{BASE}/u/{user}">← Ratings</a></div>
-<div style="display:flex;gap:20px;margin-bottom:20px;flex-wrap:wrap">
-<div class="card" style="text-align:center"><div style="font-size:3em">{len(ratings)}</div>titles rated</div>
-<div class="card" style="text-align:center"><div style="font-size:3em">{avg:.1f}</div>average rating</div>
-<div class="card" style="text-align:center"><div style="font-size:3em">{max(scores)}</div>highest</div>
-<div class="card" style="text-align:center"><div style="font-size:3em">{min(scores)}</div>lowest</div>
-</div>
-<div class="grid">
-<div class="card"><h3>Rating Distribution</h3>{dist_bars}</div>
-<div class="card"><h3>Top Genres</h3>{genre_bars}</div>
-<div class="card"><h3>Most-Watched Directors</h3><table>{dir_list}</table></div>
-</div></body></html>"""
-
-def render_new_on_streaming():
-    """Show titles that appeared in the catalog since last refresh."""
-    if not os.path.exists(CATALOG_FILE) or not os.path.exists(CATALOG_PREV):
-        return f'<html><body style="background:#1a1a2e;color:#eee;font-family:sans-serif;padding:40px"><h2>Need at least 2 catalog refreshes to detect new titles</h2><a href="{BASE}/catalog/fetch" style="color:#4fc3f7">Refresh catalog</a></body></html>'
-    prev = {c["tmdb_id"]: c for c in json.load(open(CATALOG_PREV)).get("catalog", [])}
-    curr = {c["tmdb_id"]: c for c in json.load(open(CATALOG_FILE)).get("catalog", [])}
-    new_ids = set(curr.keys()) - set(prev.keys())
-    new_titles = [curr[tid] for tid in new_ids]
-    new_titles.sort(key=lambda x: x.get("tmdb_rating", 0), reverse=True)
-    rows = ""
-    for r in new_titles[:50]:
-        poster = '<img src="' + r.get("poster","") + '" height="60" loading="lazy">' if r.get("poster") else ""
-        provs = " ".join(PROVIDER_ICONS.get(p, "") for p in r.get("providers", []))
-        rows += "<tr><td>" + poster + "</td><td>" + r["title"] + "</td><td>" + r.get("year","") + "</td><td>" + str(r.get("tmdb_rating","")) + "</td><td>" + provs + "</td></tr>"
-    return f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>New on Streaming</title>
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<style>body{{font-family:sans-serif;background:#1a1a2e;color:#eee;margin:20px}}
-table{{border-collapse:collapse;width:100%}}th,td{{padding:6px 10px;text-align:left;border-bottom:1px solid #333}}
-th{{background:#16213e}}img{{border-radius:4px}}a{{color:#4fc3f7}}</style></head>
-<body><h2>🆕 New on Streaming — {len(new_titles)} titles</h2>
-<table><thead><tr><th></th><th>Title</th><th>Year</th><th>TMDB</th><th>On</th></tr></thead>
-<tbody>{rows}</tbody></table>
-<p style="margin-top:15px"><a href="{BASE}/">← Back</a> | <a href="{BASE}/catalog">Full catalog</a></p></body></html>"""
 
 def render_catalog():
     if not os.path.exists(CATALOG_FILE):
