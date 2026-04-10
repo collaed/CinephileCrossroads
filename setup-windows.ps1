@@ -1,3 +1,10 @@
+# Self-elevate if not running as admin
+if (-NOT ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    Write-Host "Requesting administrator privileges..." -ForegroundColor Yellow
+    Start-Process powershell.exe "-ExecutionPolicy Bypass -File `"$PSCommandPath`"" -Verb RunAs
+    exit
+}
+
 # CineCross Windows Setup — installs ffmpeg and NFS client
 # Run as Administrator: powershell -ExecutionPolicy Bypass -File setup-windows.ps1
 

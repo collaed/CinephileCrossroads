@@ -364,7 +364,7 @@ def check_prerequisites():
         for name, reason in issues:
             print(f"  ✗ {name} — {reason}")
         if os.name == "nt":
-            print("\nRun setup-windows.ps1 as Administrator to install them:")
+            print("\nRun the setup script (it will request admin privileges automatically):")
             print("  powershell -ExecutionPolicy Bypass -File setup-windows.ps1")
             resp = input("\nContinue without them? [y/N] ").strip().lower()
             if resp != "y":
