@@ -42,6 +42,7 @@ CATALOG_FILE = f"{DATA_DIR}/catalog.json"
 CATALOG_PREV = f"{DATA_DIR}/catalog_prev.json"
 KEYS_FILE = f"{DATA_DIR}/api_keys.json"
 PORT = 8000
+AGENT_TOKEN = os.environ.get("AGENT_TOKEN", "")
 BASE = "/imdb"
 PROVIDER_ICONS = {"Netflix": "🟥", "Amazon Prime Video": "📦", "Disney Plus": "🏰", "Max": "🟪", "Apple TV Plus": "🍎"}
 LU_PROVIDER_IDS = {"Netflix": 8, "Amazon Prime Video": 119, "Disney Plus": 337}  # TMDB provider IDs per country
@@ -1449,6 +1450,11 @@ def render_setup(user):
     html += '<h3>My Streaming Services</h3>' + provider_config + '<hr>'
     
     # IMDB Dataset
+    html += '<h3>Agent Token</h3>'
+    html += '<p>Token for the LAN agent to push library data. Set in agent.json as <code>token</code>.</p>'
+    html += '<form method="POST" action="' + BASE + '/keys">'
+    html += '<input name="agent_token" value="' + AGENT_TOKEN + '" placeholder="Generate a random token">'
+    html += '<button type="submit">Save</button></form><hr>'
     html += '<h3>IMDB Dataset</h3>'
     html += '<p>Download IMDB bulk data (200K+ titles, ~220MB). Eliminates most API calls.</p>'
     html += '<a href="' + BASE + '/datasets/download" style="display:inline-block;padding:8px 16px;background:#1a1a2e;border:1px solid #4fc3f7;border-radius:6px;color:#4fc3f7;text-decoration:none">Download IMDB Datasets</a><hr>'
@@ -1881,6 +1887,7 @@ button{{padding:10px 20px;background:#4fc3f7;border:none;border-radius:6px;curso
             self._html(render_ratings(user))
 
     def do_POST(self):
+        global TMDB_KEY, OMDB_KEY, TVDB_KEY, AGENT_TOKEN
         cl = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(cl)
         parts = [p for p in self.path.split("?")[0].split("/") if p]
@@ -1947,6 +1954,13 @@ button{{padding:10px 20px;background:#4fc3f7;border:none;border-radius:6px;curso
             return
         elif self.path.startswith("/api/library/"):
             user = parts[-1]
+            # Verify agent token
+            token = self.headers.get("X-Agent-Token", "")
+            if AGENT_TOKEN and token != AGENT_TOKEN:
+                self.send_response(403)
+                self.end_headers()
+                self.wfile.write(b'{"error":"invalid token"}')
+                return
             data = json.loads(body.decode())
             library = load_user_tmm(user)
             library.update(data.get("library", {}))
@@ -1955,10 +1969,10 @@ button{{padding:10px 20px;background:#4fc3f7;border:none;border-radius:6px;curso
             return
         elif self.path.startswith("/keys"):
             params = urllib.parse.parse_qs(body.decode())
-            keys = {k: params.get(k, [""])[0] for k in ("tmdb", "omdb", "tvdb", "opensubs")}
+            keys = {k: params.get(k, [""])[0] for k in ("tmdb", "omdb", "tvdb", "opensubs", "agent_token")}
             json.dump(keys, open(KEYS_FILE, "w"))
-            global TMDB_KEY, OMDB_KEY, TVDB_KEY
             TMDB_KEY, OMDB_KEY, TVDB_KEY = keys["tmdb"], keys["omdb"], keys["tvdb"]
+            AGENT_TOKEN = keys.get("agent_token", "")
             self._redirect(f"{BASE}/")
 
     def _html(self, body):
@@ -2046,6 +2060,7 @@ if __name__ == "__main__":
         TMDB_KEY = keys.get("tmdb", TMDB_KEY)
         OMDB_KEY = keys.get("omdb", OMDB_KEY)
         TVDB_KEY = keys.get("tvdb", TVDB_KEY)
+        AGENT_TOKEN = keys.get("agent_token", AGENT_TOKEN)
     migrate_old_data()
     users = list_users()
     titles = load_titles()

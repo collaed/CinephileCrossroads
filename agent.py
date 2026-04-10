@@ -19,6 +19,7 @@ DEFAULT_CONFIG = {
     "kodi": {"enabled": False, "url": "http://192.168.1.x:8080/jsonrpc"},
     "radarr": {"enabled": False, "url": "http://192.168.1.x:7878", "token": ""},
     "sonarr": {"enabled": False, "url": "http://192.168.1.x:8989", "token": ""},
+    "_agent_token": "paste-your-token-here",
     "tmm": {"enabled": False, "url": "http://192.168.1.x:7878", "token": "your-tmm-api-key"},
 }
 
@@ -216,8 +217,12 @@ def main():
         print(f"  {len(missing_subs)} titles have no subtitles")
 
     print(f"Pushing {len(library)} titles to {args.server}...")
+    token = config.get("_agent_token", "")
     url = f"{args.server}/api/library/{args.user}"
-    result = api_post(url, {"library": library})
+    headers = {"X-Agent-Token": token} if token else {}
+    req = urllib.request.Request(url, data=json.dumps({"library": library}).encode(),
+        headers={"Content-Type": "application/json", "User-Agent": "CinephileAgent/1.0", **headers})
+    result = json.loads(urllib.request.urlopen(req, timeout=30).read())
     print(f"Done — server has {result.get('count', '?')} titles in library")
 
 if __name__ == "__main__":
