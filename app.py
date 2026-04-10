@@ -1774,10 +1774,46 @@ button{{padding:10px 20px;background:#4fc3f7;border:none;border-radius:6px;curso
     def log_message(self, *a): pass
 
 # ── Main ──────────────────────────────────────────────────────────────
+def _discover_highly_rated():
+    """Discover highly-rated movies in EN/FR/PT/ES from TMDB and add to title store."""
+    if not TMDB_KEY: return
+    titles = load_titles()
+    existing_tmdb = {t.get("tmdb_id") for t in titles.values() if t.get("tmdb_id")}
+    added = 0
+    for lang in ["en", "fr", "pt", "es"]:
+        for vmin, vmax in [(500, 0), (100, 5000)]:  # mainstream + arthouse
+            for page in range(1, 30):
+                params = f"&vote_count.gte={vmin}&vote_average.gte=8.0&with_original_language={lang}&page={page}"
+                if vmax: params += f"&vote_count.lte={vmax}"
+                url = f"https://api.themoviedb.org/3/discover/movie?api_key={TMDB_KEY}&sort_by=vote_average.desc{params}"
+                data = api_get(url)
+                if not data or not data.get("results"): break
+                for r in data["results"]:
+                    tmdb_id = r["id"]
+                    if tmdb_id in existing_tmdb: continue
+                    ext = api_get(f"https://api.themoviedb.org/3/movie/{tmdb_id}/external_ids?api_key={TMDB_KEY}")
+                    if ext and ext.get("imdb_id"):
+                        iid = ext["imdb_id"]
+                        if iid not in titles:
+                            titles[iid] = {
+                                "title": r.get("title", ""), "year": (r.get("release_date") or "")[:4],
+                                "type": "movie", "tmdb_id": tmdb_id, "tmdb_rating": r.get("vote_average"),
+                                "poster": f"https://image.tmdb.org/t/p/w185{r['poster_path']}" if r.get("poster_path") else "",
+                                "overview": r.get("overview", ""), "language": lang,
+                            }
+                            existing_tmdb.add(tmdb_id)
+                            added += 1
+                    time.sleep(0.08)
+                if page >= data.get("total_pages", 1): break
+        if added % 50 == 0 and added > 0:
+            save_titles(titles)
+    save_titles(titles)
+    print(f"Discovery: added {added} new titles. Total: {len(titles)}")
+
 def _scheduler():
-    """Background scheduler: enrichment at 3am, catalog refresh weekly."""
+    """Background scheduler: enrichment daily 3am, catalog+discovery weekly Sunday 4am."""
     import datetime
-    last_enrich = last_catalog = None
+    last_enrich = last_catalog = last_discover = None
     while True:
         now = datetime.datetime.now()
         # Daily enrichment at 3am
@@ -1785,11 +1821,15 @@ def _scheduler():
             print("Scheduled: enrichment")
             enrich_titles()
             last_enrich = now.date()
-        # Weekly catalog refresh on Sundays at 4am
+        # Weekly on Sundays at 4am: catalog refresh + discovery + re-seed
         if now.weekday() == 6 and now.hour == 4 and last_catalog != now.date():
             print("Scheduled: catalog refresh")
             fetch_streaming_catalog()
             last_catalog = now.date()
+        if now.weekday() == 6 and now.hour == 5 and last_discover != now.date():
+            print("Scheduled: discovery sweep")
+            _discover_highly_rated()
+            last_discover = now.date()
         time.sleep(600)  # Check every 10 min
 
 if __name__ == "__main__":
