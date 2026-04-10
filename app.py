@@ -78,10 +78,10 @@ def generate_tasks_for_library(user):
                   if info.get("path") and not info.get("file_size") and not info.get("size")]
     if needs_size:
         # Batch into groups of 50
-        for i in range(0, len(needs_size), 50):
-            batch = needs_size[i:i+50]
+        for i in range(0, len(needs_size), 20):  # Small batches = responsive
+            batch = needs_size[i:i+20]
             paths = [library[iid]["path"] for iid in batch]
-            enqueue_task("size_files", {"paths": paths, "imdb_ids": batch}, priority=1)
+            enqueue_task("size_files", {"paths": paths, "imdb_ids": batch}, priority=PRIORITY_QUALITY)
             count += 1
     
     # 2. Potential duplicates — same title, need hash to confirm (priority 0)
@@ -98,8 +98,8 @@ def generate_tasks_for_library(user):
                 if not library[item["iid"]].get("file_hash"):
                     dupes_needing_hash.append(item["path"])
     if dupes_needing_hash:
-        for i in range(0, len(dupes_needing_hash), 50):
-            enqueue_task("hash_files", {"paths": dupes_needing_hash[i:i+50]}, priority=0)
+        for i in range(0, len(dupes_needing_hash), 20):
+            enqueue_task("hash_files", {"paths": dupes_needing_hash[i:i+20]}, priority=PRIORITY_DUPES)
             count += 1
     
     # 3. Files without subtitles — need sub search (priority 2)
@@ -109,19 +109,52 @@ def generate_tasks_for_library(user):
         enqueue_task("download_subs", {
             "imdb_id": iid, "path": info["path"],
             "language": "en"
-        }, priority=2)
+        }, priority=PRIORITY_SUBS)
         count += 1
     
     # 4. Files without quality info (priority 1)
     needs_quality = [info["path"] for iid, info in library.items()
                      if info.get("path") and not info.get("video_codec") and not info.get("quality")]
     if needs_quality:
-        for i in range(0, len(needs_quality), 50):
-            enqueue_task("check_quality", {"paths": needs_quality[i:i+50]}, priority=1)
+        for i in range(0, len(needs_quality), 20):
+            enqueue_task("check_quality", {"paths": needs_quality[i:i+20]}, priority=PRIORITY_QUALITY)
             count += 1
     
     print(f"Generated {count} tasks for {user}: {len(needs_size)} sizing, {len(dupes_needing_hash)} hashing, {min(len(needs_subs),20)} subs, {len(needs_quality)} quality")
     return count
+
+PRIORITY_HUMAN = -1   # User clicked something — do it NOW
+PRIORITY_DUPES = 0    # Duplicate detection
+PRIORITY_QUALITY = 1  # Sizing, quality checks
+PRIORITY_SUBS = 2     # Subtitle search (API rate limited)
+
+
+def enqueue_human_task(task_type, params=None):
+    """Enqueue a user-triggered task at highest priority."""
+    return enqueue_task(task_type, params, priority=PRIORITY_HUMAN)
+
+def request_file_hash(user, imdb_id):
+    """User wants hash for a specific file (e.g. clicked 'find subs')."""
+    library = load_user_tmm(user)
+    info = library.get(imdb_id, {})
+    if info.get("path"):
+        enqueue_human_task("hash_files", {"paths": [info["path"]]})
+
+def request_subs(user, imdb_id, language="en"):
+    """User clicked 'find subtitles' for a specific title."""
+    library = load_user_tmm(user)
+    info = library.get(imdb_id, {})
+    if info.get("path"):
+        enqueue_human_task("download_subs", {
+            "imdb_id": imdb_id, "path": info["path"], "language": language
+        })
+
+def request_quality_check(user, imdb_ids):
+    """User wants quality info for specific titles."""
+    library = load_user_tmm(user)
+    paths = [library[iid]["path"] for iid in imdb_ids if iid in library and library[iid].get("path")]
+    if paths:
+        enqueue_human_task("check_quality", {"paths": paths})
 
 def enqueue_task(task_type, params=None, priority=0):
     """Add a task for the agent. Priority: 0=high, 1=medium, 2=low.
@@ -138,10 +171,11 @@ def enqueue_task(task_type, params=None, priority=0):
     queue.sort(key=lambda t: t["priority"])
     save_task_queue(queue)
 
-def get_pending_tasks(limit=10):
-    """Get next pending tasks for the agent."""
+def get_pending_tasks(limit=5):
+    """Get next pending tasks for the agent, highest priority first.
+    Returns small batches so agent stays responsive to human actions."""
     queue = load_task_queue()
-    pending = [t for t in queue if t["status"] == "pending"]
+    pending = sorted([t for t in queue if t["status"] == "pending"], key=lambda t: t["priority"])
     return pending[:limit]
 
 def complete_task(task_id, result=None):
@@ -2359,6 +2393,14 @@ th,td{{padding:6px 10px;text-align:left;border-bottom:1px solid #333}}th{{backgr
 <table><thead><tr><th>Lang</th><th>Release</th><th>Downloads</th><th>Rating</th><th>Match</th><th></th></tr></thead>
 <tbody>{rows}</tbody></table>
 <p><a href="{BASE}/">← Back</a></p></body></html>""")
+            return
+        elif p.startswith("/subs/request/"):
+            # Human clicked find-subs on a specific title
+            iid = parts[-1]
+            u = self._user(parts)
+            request_file_hash(u, iid)
+            request_subs(u, iid)
+            self._redirect(f"{BASE}/subs/{iid}")
             return
         elif p.startswith("/subs/auto/"):
             u = parts[-1]
