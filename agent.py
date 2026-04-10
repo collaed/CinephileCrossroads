@@ -194,6 +194,8 @@ def main():
     config = json.load(open(CONFIG_FILE))
     library = {}
     for name, cfg in config.items():
+        if name.startswith("_"): continue
+        if not isinstance(cfg, dict): continue
         if not cfg.get("enabled"): continue
         if name not in FETCHERS: continue
         print(f"Fetching {name} from {cfg.get('url', '?')}...")
