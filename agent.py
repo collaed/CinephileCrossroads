@@ -20,7 +20,7 @@ DEFAULT_CONFIG = {
     "radarr": {"enabled": False, "url": "http://192.168.1.x:7878", "token": ""},
     "sonarr": {"enabled": False, "url": "http://192.168.1.x:8989", "token": ""},
     "_agent_token": "paste-your-token-here",
-    "tmm": {"enabled": False, "path": "/path/to/tmm/movies", "url": "http://192.168.1.x:7878", "token": ""},
+    "tmm": {"enabled": False, "path": "/path/to/tmm/movies", "url": "http://192.168.1.x:7878", "token": "", "template": "ListExampleCSV"},
 }
 
 def api_get(url):
@@ -168,10 +168,8 @@ def fetch_tmm(cfg):
     export_path = cfg.get("export_path", os.path.join(tempfile.gettempdir(), "tmm_export"))
     os.makedirs(export_path, exist_ok=True)
     headers = {"Content-Type": "application/json", "api-key": key}
-    for kind, endpoint, template in [
-        ("movie", "/api/movie", "ListExampleCSV"),
-        ("tvshow", "/api/tvshow", "ListExampleCSV"),
-    ]:
+    template = cfg.get("template", "ListExampleCSV")
+    for kind, endpoint in [("movie", "/api/movie"), ("tvshow", "/api/tvshow")]:
         payload = json.dumps([
             {"action": "update", "scope": {"name": "all"}},
             {"action": "export", "scope": {"name": "all"},
