@@ -972,7 +972,7 @@ def _richness(t):
     if t.get("keywords"): score += 1
     return score
 
-def enrich_titles(jid=None):
+def enrich_titles(jid=None, fast=False):
     """Enrich all titles: unenriched first, then poorest metadata.
     Pulls from TMDB (poster, keywords, streaming), OMDB (RT, Metacritic), TVDB.
     Saves incrementally every 50 titles. Runs as background job."""
@@ -998,7 +998,7 @@ def enrich_titles(jid=None):
         if TMDB_KEY:
             for k, v in tmdb_enrich(iid).items():
                 if v: t[k] = v
-        if OMDB_KEY and omdb_calls < 500:
+        if OMDB_KEY and omdb_calls < 500 and not fast:
             o = omdb_enrich(iid)
             omdb_calls += 1
             for k in ("rotten_tomatoes", "metacritic", "plot", "awards"):
@@ -1015,7 +1015,7 @@ def enrich_titles(jid=None):
         if count % 50 == 0:
             save_titles(titles)
             print(f"  Enriched {count}/{total}...")
-            time.sleep(0.1)
+        time.sleep(0.03 if fast else 0.08)
     save_titles(titles)
     print(f"Enriched {count} titles")
 
@@ -1147,7 +1147,7 @@ def _bg_history(jid, user):
     save_user_history(user, history)
     job_progress(jid, 1, 1, f"Saved {len(history)} watch events")
 
-def _bg_enrich(jid): enrich_titles(jid)
+def _bg_enrich(jid): enrich_titles(jid, fast=True)
 def _bg_catalog(jid): fetch_streaming_catalog(jid)
 def _bg_trakt_sync(jid, user):
     titles = load_titles(); ratings = load_user_ratings(user)
@@ -2040,7 +2040,7 @@ def _scheduler():
         # Daily enrichment at 3am
         if now.hour == 3 and last_enrich != now.date():
             print("Scheduled: enrichment")
-            enrich_titles()
+            enrich_titles(fast=False)
             last_enrich = now.date()
         # Weekly on Sundays at 4am: catalog refresh + discovery + re-seed
         if now.weekday() == 6 and now.hour == 4 and last_catalog != now.date():
