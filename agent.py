@@ -77,11 +77,41 @@ def fetch_kodi(cfg):
         headers["Authorization"] = "Basic " + cred
     req = urllib.request.Request(cfg["url"], data=json.dumps(payload).encode(), headers=headers)
     try:
-        data = json.loads(urllib.request.urlopen(req, timeout=10).read())
+        resp = urllib.request.urlopen(req, timeout=30)
+        data = json.loads(resp.read())
         for m in data.get("result", {}).get("movies", []):
             iid = m.get("imdbnumber", "")
-            if iid and iid.startswith("tt"): lib[iid] = {"source": "kodi", "path": m.get("file", "")}
-    except: pass
+            if not iid or not iid.startswith("tt"): continue
+            sd = m.get("streamdetails", {})
+            vs = sd.get("video", [])
+            aus = sd.get("audio", [])
+            subs = sd.get("subtitle", [])
+            v = vs[0] if vs else {}
+            lib[iid] = {
+                "source": "kodi", "path": m.get("file", ""),
+                "title": m.get("title", ""), "year": m.get("year", ""),
+                "runtime": m.get("runtime", 0),
+                "quality": str(v.get("height", "")),
+                "video_codec": v.get("codec", ""),
+                "video_width": v.get("width", 0),
+                "video_height": v.get("height", 0),
+                "audio": [{"codec": a.get("codec",""), "channels": a.get("channels",0), "language": a.get("language","")} for a in aus],
+                "subtitles": [{"language": s.get("language","")} for s in subs],
+            }
+    except Exception as e:
+        print(f"  Kodi movies error: {e}")
+    # TV Shows
+    payload2 = {"jsonrpc": "2.0", "method": "VideoLibrary.GetTVShows", "id": 2,
+                "params": {"properties": ["imdbnumber", "title", "year"]}}
+    req2 = urllib.request.Request(cfg["url"], data=json.dumps(payload2).encode(), headers=headers)
+    try:
+        data2 = json.loads(urllib.request.urlopen(req2, timeout=30).read())
+        for s in data2.get("result", {}).get("tvshows", []):
+            iid = s.get("imdbnumber", "")
+            if iid and iid.startswith("tt") and iid not in lib:
+                lib[iid] = {"source": "kodi", "title": s.get("title",""), "year": s.get("year",""), "type": "tvshow"}
+    except Exception as e:
+        print(f"  Kodi tvshows error: {e}")
     return lib
 
 def fetch_radarr(cfg):
@@ -187,6 +217,17 @@ def fetch_tmm(cfg):
                             lg = re.search(r"<language>(\w+)</language>", sm.group(1))
                             if lg: subs.append({"language": lg.group(1)})
                         if subs: info["subtitles"] = subs
+                        # Detect external subtitle files (.srt, .sub, .ass, .ssa)
+                        ext_subs = []
+                        for sf in os.listdir(root):
+                            if sf.lower().endswith((".srt", ".sub", ".ass", ".ssa", ".vtt")):
+                                # Extract language from filename: movie.en.srt, movie.french.srt
+                                parts_s = sf.rsplit(".", 2)
+                                lang = parts_s[-2] if len(parts_s) >= 3 else ""
+                                ext_subs.append({"language": lang, "file": sf, "external": True})
+                        if ext_subs:
+                            info.setdefault("subtitles", [])
+                            info["subtitles"].extend(ext_subs)
                         info["quality"] = str(info.get("video_height", ""))
                         lib[iid] = info
                 except: pass
