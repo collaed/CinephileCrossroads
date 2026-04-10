@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-CinephileCrossroads LAN Agent — runs on your local network, syncs media servers.
+CinephileCrossroads LAN Agent - runs on your local network, syncs media servers.
 
 Usage:
     python3 agent.py --server https://tools.ecb.pm/imdb --user ecb
@@ -33,7 +33,7 @@ def api_get(url):
         with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "CinephileAgent/1.0"}), timeout=10) as r:
             return json.loads(r.read())
     except Exception as e:
-        print(f"  Error: {url[:60]} — {e}")
+        print(f"  Error: {url[:60]} - {e}")
         return None
 
 def api_post(url, data):
@@ -221,7 +221,7 @@ def fetch_tmm(cfg):
     """
     import re
     lib = {}
-    # Mode 1: scan local NFO files (preferred — works offline)
+    # Mode 1: scan local NFO files (preferred - works offline)
     scan_path = cfg.get("path", "")
     if scan_path and os.path.isdir(scan_path):
         print(f"  Scanning NFO files in {scan_path}...")
@@ -289,7 +289,7 @@ def fetch_tmm(cfg):
                             print(f"    Scanned {scanned} NFO files, found {len(lib)} titles...")
                 except: pass
         return lib
-    # Mode 2: TMM HTTP API — export to temp dir on same machine, then read
+    # Mode 2: TMM HTTP API - export to temp dir on same machine, then read
     url = cfg.get("url", "").rstrip("/")
     key = cfg.get("token", "")
     if not url or not key:
@@ -370,12 +370,12 @@ def check_prerequisites():
             ffmpeg_ok = True
         except: pass
     if not ffmpeg_ok:
-        issues.append(("ffmpeg", "Optional — needed for video thumbnails"))
+        issues.append(("ffmpeg", "Optional - needed for video thumbnails"))
 
     if issues:
         print("\n⚠ Missing components:")
         for name, reason in issues:
-            print(f"  ✗ {name} — {reason}")
+            print(f"  ✗ {name} - {reason}")
         if os.name == "nt":
             print("\nRun the setup script (it will request admin privileges automatically):")
             print("  powershell -ExecutionPolicy Bypass -File setup-windows.ps1")
@@ -437,7 +437,7 @@ def main():
 
     if not os.path.exists(CONFIG_FILE):
         json.dump(DEFAULT_CONFIG, open(CONFIG_FILE, "w"), indent=2)
-        print(f"Created {CONFIG_FILE} — edit it with your server details, then run again.")
+        print(f"Created {CONFIG_FILE} - edit it with your server details, then run again.")
         sys.exit(0)
 
     check_prerequisites()
@@ -548,7 +548,7 @@ def main():
             urllib.request.urlopen(req, timeout=60)
             print(f"  Pushed {min(i+chunk_size, len(ep_items))}/{len(ep_items)} episodes...")
     result = {"count": total_pushed}
-    print(f"Done — server has {result.get('count', '?')} titles in library")
+    print(f"Done - server has {result.get('count', '?')} titles in library")
 
     # Phase 2: Thumbnails (only if --thumbnails flag)
     if args.thumbnails:
@@ -558,7 +558,7 @@ def generate_thumbnails(args, config, library, headers, base_url):
     """Phase 2: Ask server which titles need screenshots, generate and upload."""
     import shutil, subprocess, base64, re
     if not shutil.which("ffmpeg"):
-        print("ffmpeg not found — run setup-windows.ps1 to install")
+        print("ffmpeg not found - run setup-windows.ps1 to install")
         return
 
     # Ask server for titles needing thumbnails
