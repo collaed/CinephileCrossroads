@@ -478,9 +478,12 @@ def daemon_mode(args, config):
                     print(f"[sync] Pushed {len(library)} titles")
             except Exception as e:
                 print(f"[sync] Error: {e}")
+                time.sleep(60)  # Retry sooner on error
+                continue
             time.sleep(1800)  # Every 30 min
     
     def task_loop():
+        consecutive_errors = 0
         """Poll server for tasks and execute them."""
         while True:
             try:
@@ -503,8 +506,16 @@ def daemon_mode(args, config):
                     except Exception as e:
                         print(f"[task] Report failed: {e}")
             except Exception as e:
-                if "URLError" not in str(type(e)):
-                    print(f"[task] Poll error: {e}")
+                if consecutive_errors == 0:
+                    print(f"[task] Connection lost: {e}")
+                consecutive_errors += 1
+                # Back off: 15s, 30s, 60s, then cap at 60s
+                wait = min(15 * (2 ** min(consecutive_errors - 1, 2)), 60)
+                if consecutive_errors % 4 == 0:
+                    print(f"[task] Still retrying... ({consecutive_errors} attempts)")
+                time.sleep(wait)
+                continue
+            consecutive_errors = 0
             time.sleep(15)  # Check every 15s
     
     print(f"Agent daemon — server: {base_url}, user: {args.user}")
