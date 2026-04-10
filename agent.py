@@ -451,104 +451,123 @@ def check_path_access(config, library):
 
 
 def daemon_mode(args, config):
-    """Run as a daemon, polling the server for tasks."""
-    print(f"Agent daemon mode — polling {args.server} every 60s")
-    headers = {"Content-Type": "application/json", "User-Agent": "CinephileAgent/2.0"}
-    base_url = args.server.rstrip("/")
+    """Run as daemon: Kodi sync + server task polling in parallel."""
+    import threading
     
-    while True:
-        try:
-            # Poll for tasks
-            req = urllib.request.Request(f"{base_url}/api/tasks", headers=headers)
-            resp = urllib.request.urlopen(req, timeout=10)
-            data = json.loads(resp.read())
-            tasks = data.get("tasks", [])
-            
-            if tasks:
-                print(f"  {len(tasks)} pending tasks")
-                for task in tasks:
-                    tid = task["id"]
-                    ttype = task["type"]
-                    params = task.get("params", {})
-                    print(f"  Running: {ttype} ({tid})")
-                    
-                    result = {}
+    base_url = args.server.rstrip("/")
+    headers = {"Content-Type": "application/json", "User-Agent": "CinephileAgent/2.0"}
+    
+    def sync_loop():
+        """Periodic Kodi/media server sync."""
+        while True:
+            try:
+                print("[sync] Fetching media servers...")
+                library = {}
+                for name, cfg in config.items():
+                    if not isinstance(cfg, dict) or not cfg.get("enabled"): continue
+                    if name not in FETCHERS: continue
                     try:
-                        if ttype == "size_files":
-                            # Size specific files
-                            paths = params.get("paths", [])
-                            sized = {}
-                            for p in paths:
-                                mp = map_path(p, config)
-                                if os.path.isfile(mp):
-                                    sized[p] = os.path.getsize(mp)
-                            result = {"sized": len(sized), "data": sized}
-                        
-                        elif ttype == "hash_files":
-                            paths = params.get("paths", [])
-                            hashed = {}
-                            for p in paths:
-                                mp = map_path(p, config)
-                                if os.path.isfile(mp):
-                                    h = opensubtitles_hash(mp)
-                                    if h: hashed[p] = {"hash": h, "size": os.path.getsize(mp)}
-                            result = {"hashed": len(hashed), "data": hashed}
-                        
-                        elif ttype == "download_subs":
-                            imdb_id = params.get("imdb_id")
-                            path = params.get("path")
-                            lang = params.get("language", "en")
-                            if imdb_id and path:
-                                mp = map_path(path, config)
-                                # Search OpenSubtitles
-                                file_hash = None
-                                if os.path.isfile(mp):
-                                    file_hash = opensubtitles_hash(mp)
-                                result = {"imdb_id": imdb_id, "hash": file_hash, "path": path}
-                        
-                        elif ttype == "check_quality":
-                            paths = params.get("paths", [])
-                            quality = {}
-                            for p in paths:
-                                mp = map_path(p, config)
-                                if os.path.isfile(mp):
-                                    quality[p] = {"size": os.path.getsize(mp), "exists": True}
-                            result = {"checked": len(quality), "data": quality}
-                        
-                        elif ttype == "find_duplicates":
-                            # Report files with same size
-                            paths = params.get("paths", [])
-                            sizes = {}
-                            for p in paths:
-                                mp = map_path(p, config)
-                                if os.path.isfile(mp):
-                                    s = os.path.getsize(mp)
-                                    sizes.setdefault(s, []).append(p)
-                            dupes = {str(s): ps for s, ps in sizes.items() if len(ps) > 1}
-                            result = {"duplicates": len(dupes), "data": dupes}
-                        
-                        else:
-                            result = {"error": f"Unknown task type: {ttype}"}
-                    
+                        items = FETCHERS[name](cfg)
+                        library.update(items)
+                        print(f"[sync] {name}: {len(items)} titles")
                     except Exception as e:
-                        result = {"error": str(e)}
-                    
+                        print(f"[sync] {name} error: {e}")
+                if library:
+                    library = compute_hashes(library)
+                    api_post(f"{base_url}/api/library/{args.user}", {"library": library})
+                    print(f"[sync] Pushed {len(library)} titles")
+            except Exception as e:
+                print(f"[sync] Error: {e}")
+            time.sleep(1800)  # Every 30 min
+    
+    def task_loop():
+        """Poll server for tasks and execute them."""
+        while True:
+            try:
+                req = urllib.request.Request(f"{base_url}/api/tasks", headers=headers)
+                resp = urllib.request.urlopen(req, timeout=10)
+                tasks = json.loads(resp.read()).get("tasks", [])
+                
+                for task in tasks:
+                    tid, ttype = task["id"], task["type"]
+                    params = task.get("params", {})
+                    print(f"[task] {ttype} ({tid})")
+                    result = run_task(ttype, params, config)
                     # Report completion
                     try:
-                        complete_data = json.dumps({"result": result}).encode()
                         req = urllib.request.Request(
                             f"{base_url}/api/tasks/complete/{tid}",
-                            data=complete_data, headers=headers)
+                            data=json.dumps({"result": result}).encode(), headers=headers)
                         urllib.request.urlopen(req, timeout=10)
-                        print(f"  Completed: {ttype}")
+                        print(f"[task] Done: {ttype} -> {result.get('error', 'ok')}")
                     except Exception as e:
-                        print(f"  Failed to report: {e}")
-            
-        except Exception as e:
-            if "urlopen" not in str(type(e).__name__):
-                print(f"  Poll error: {e}")
+                        print(f"[task] Report failed: {e}")
+            except Exception as e:
+                if "URLError" not in str(type(e)):
+                    print(f"[task] Poll error: {e}")
+            time.sleep(15)  # Check every 15s
+    
+    print(f"Agent daemon — server: {base_url}, user: {args.user}")
+    print(f"  Sync thread: every 30 min")
+    print(f"  Task thread: every 15 sec")
+    
+    threading.Thread(target=sync_loop, daemon=True).start()
+    task_loop()  # Run task loop in main thread
+
+def run_task(ttype, params, config):
+    """Execute a single task from the server."""
+    try:
+        if ttype == "size_files":
+            paths = params.get("paths", [])
+            data = {}
+            for p in paths:
+                mp = map_path(p, config)
+                if os.path.isfile(mp):
+                    data[p] = os.path.getsize(mp)
+            return {"sized": len(data), "data": data}
         
-        time.sleep(60)
+        elif ttype == "hash_files":
+            paths = params.get("paths", [])
+            data = {}
+            for p in paths:
+                mp = map_path(p, config)
+                if os.path.isfile(mp):
+                    h = opensubtitles_hash(mp)
+                    if h: data[p] = {"hash": h, "size": os.path.getsize(mp)}
+            return {"hashed": len(data), "data": data}
+        
+        elif ttype == "download_subs":
+            imdb_id = params.get("imdb_id")
+            path = params.get("path")
+            if imdb_id and path:
+                mp = map_path(path, config)
+                file_hash = opensubtitles_hash(mp) if os.path.isfile(mp) else None
+                return {"imdb_id": imdb_id, "hash": file_hash, "path": path}
+            return {"error": "missing imdb_id or path"}
+        
+        elif ttype == "check_quality":
+            paths = params.get("paths", [])
+            data = {}
+            for p in paths:
+                mp = map_path(p, config)
+                data[p] = {"exists": os.path.isfile(mp), "size": os.path.getsize(mp) if os.path.isfile(mp) else 0}
+            return {"checked": len(data), "data": data}
+        
+        elif ttype == "find_duplicates":
+            paths = params.get("paths", [])
+            sizes = {}
+            for p in paths:
+                mp = map_path(p, config)
+                if os.path.isfile(mp):
+                    s = os.path.getsize(mp)
+                    sizes.setdefault(s, []).append(p)
+            dupes = {str(s): ps for s, ps in sizes.items() if len(ps) > 1}
+            return {"duplicates": len(dupes), "data": dupes}
+        
+        else:
+            return {"error": f"Unknown task: {ttype}"}
+    except Exception as e:
+        return {"error": str(e)}
 
 
 def main():
