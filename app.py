@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-CinephileCrossroads — Self-hosted multi-user movie & TV ratings dashboard.
+CineCross — Self-hosted multi-user movie & TV ratings dashboard.
 
 Aggregates data from IMDB, TMDB, OMDB, TVDB, and Trakt into a single searchable
 interface with streaming availability and taste-based recommendations.
@@ -527,7 +527,7 @@ def opensubs_search(imdb_id, languages=None, file_hash=None, file_size=None):
     if languages: params += "&languages=" + ",".join(languages)
     if file_hash: params += f"&moviehash={file_hash}"
     data = api_get(f"{OPENSUBS_API}/subtitles?{params}",
-                   {"Api-Key": api_key, "User-Agent": "CinephileCrossroads v1.0"})
+                   {"Api-Key": api_key, "User-Agent": "CineCross v1.0"})
     if not data: return []
     results = []
     for s in data.get("data", []):
@@ -549,7 +549,7 @@ def opensubs_download_link(file_id):
     api_key = _load_key("opensubs")
     if not api_key: return None
     data = api_post(f"{OPENSUBS_API}/download", {"file_id": file_id},
-                    {"Api-Key": api_key, "User-Agent": "CinephileCrossroads v1.0"})
+                    {"Api-Key": api_key, "User-Agent": "CineCross v1.0"})
     if data: return data.get("link")
     return None
 
@@ -631,7 +631,7 @@ def download_imdb_datasets(jid=None):
         dest = dest_gz.replace(".gz", "")
         if jid: job_progress(jid, 0, 2, f"Downloading {fname}...")
         print(f"Downloading {url}...")
-        req = urllib.request.Request(url, headers={"User-Agent": "CinephileCrossroads/1.0"})
+        req = urllib.request.Request(url, headers={"User-Agent": "CineCross/1.0"})
         with urllib.request.urlopen(req, timeout=300) as resp, open(dest_gz, "wb") as f:
             shutil.copyfileobj(resp, f)
         with gzip.open(dest_gz, "rb") as gz, open(dest, "wb") as out:
@@ -1304,9 +1304,9 @@ rows.sort((a,b)=>{{let x=a.cells[n].textContent,y=b.cells[n].textContent;return(
 <select id="mr" onchange="f()"><option value="">Min ★</option>{''.join(f'<option value="{i}">{i}+</option>' for i in range(10,0,-1))}</select>
 <select id="dec" onchange="f()"><option value="">All decades</option><option value="2020">2020s</option><option value="2010">2010s</option><option value="2000">2000s</option><option value="1990">1990s</option><option value="1980">1980s</option><option value="1970">1970s</option><option value="1960">1960s</option><option value="1950">1950s</option></select>
 <select id="st" onchange="f()"><option value="">All streams</option>{"".join('<option value="' + p + '">' + PROVIDER_ICONS.get(p,"▪") + " " + p + '</option>' for p in sorted(user_provs))}</select>
-<a href="{BASE}/tonight/{user}">🎲 Tonight</a> <a href="{BASE}/stats/{user}">📊</a> <a href="{BASE}/export/{user}">⬇</a> <a href="{BASE}/enrich">⚡</a> <a href="{BASE}/recs/{user}">🎯 Recs</a> <a href="{BASE}/catalog">📺</a> <a href="{BASE}/new">🆕</a> <a href="{BASE}/random/{user}">🎰</a> <a href="{BASE}/compare/">👥</a> <a href="{BASE}/rss/{user}" title="RSS">📡</a> <a href="{BASE}/profile/{user}">👤</a> <a href="{BASE}/friendrecs/{user}">👫</a> <a href="{BASE}/history/{user}" title="Sync Trakt history">📅</a> <a href="{BASE}/setup/{user}">⚙</a>
+<a href="{BASE}/tonight/{user}">🎲 <span title="Pick a random recommendation">Tonight</span></a> <a href="{BASE}/stats/{user}" title="Your rating stats">📊</a> <a href="{BASE}/export/{user}" title="Export ratings as CSV">⬇</a> <a href="{BASE}/enrich" title="Enrich titles with metadata">⚡</a> <a href="{BASE}/recs/{user}" title="Personalized recommendations">🎯 Recs</a> <a href="{BASE}/catalog" title="Streaming catalog">📺</a> <a href="{BASE}/new" title="New on streaming">🆕</a> <a href="{BASE}/random/{user}" title="Random unwatched title">🎰</a> <a href="{BASE}/compare/" title="Compare users">👥</a> <a href="{BASE}/rss/{user}" title="RSS feed of your ratings">📡</a> <a href="{BASE}/profile/{user}">👤</a> <a href="{BASE}/friendrecs/{user}">👫</a> <a href="{BASE}/history/{user}" title="Sync Trakt history">📅</a> <a href="{BASE}/setup/{user}" title="Setup & configuration">⚙</a>
 {f'<a href="{BASE}/trakt/sync/{user}">↕ Trakt</a>' if has_trakt else ""}
-<button onclick="document.body.classList.toggle('light');localStorage.setItem('theme',document.body.classList.contains('light')?'light':'dark')" style="background:none;border:1px solid #444;border-radius:4px;cursor:pointer;padding:2px 8px;color:var(--fg)">🌓</button> <span style="color:#666;font-size:.8em">{" ".join(services)}</span></div>
+<button onclick="document.body.classList.toggle('light');localStorage.setItem('theme',document.body.classList.contains('light')?'light':'dark')" style="background:none;border:1px solid #444;border-radius:4px;cursor:pointer;padding:2px 8px;color:var(--fg)" title="Toggle dark/light theme">🌓</button> <span style="color:#666;font-size:.8em">{" ".join(services)}</span></div>
 <div style="margin-bottom:10px;font-size:1.2em">Mood: <a href="{BASE}/mood/{user}/light" title="Light" style="text-decoration:none">☀️</a><a href="{BASE}/mood/{user}/intense" title="Intense" style="text-decoration:none">🔥</a><a href="{BASE}/mood/{user}/funny" title="Funny" style="text-decoration:none">😂</a><a href="{BASE}/mood/{user}/mind-bending" title="Mind-Bending" style="text-decoration:none">🌀</a><a href="{BASE}/mood/{user}/dark" title="Dark" style="text-decoration:none">🌑</a><a href="{BASE}/mood/{user}/epic" title="Epic" style="text-decoration:none">⚔️</a><a href="{BASE}/mood/{user}/romantic" title="Romantic" style="text-decoration:none">💕</a><a href="{BASE}/mood/{user}/scary" title="Scary" style="text-decoration:none">👻</a><a href="{BASE}/mood/{user}/inspiring" title="Inspiring" style="text-decoration:none">✨</a></div>
 <table><thead><tr><th></th><th onclick="sortTable(1)">Title</th><th onclick="sortTable(2)">Year</th><th onclick="sortTable(3)">★</th><th onclick="sortTable(4)">IMDB</th><th>Scores</th><th>Stream</th><th onclick="sortTable(7)">Genres</th><th onclick="sortTable(8)">Rated</th><th>💾</th></tr></thead>
 <tbody>{rows}</tbody></table></body></html>"""
@@ -1606,7 +1606,7 @@ class H(BaseHTTPRequestHandler):
             for s in subs[:20]:
                 badge = '<span style="color:#2d7">★ hash match</span>' if s["hash_match"] else ""
                 hi = "🦻" if s["hearing_impaired"] else ""
-                dl = f'<a href="{BASE}/subs/dl/{s["file_id"]}">⬇</a>' if s["file_id"] else ""
+                dl = f'<a href="{BASE}/subs/dl/{s["file_id"]}" title="Export ratings as CSV">⬇</a>' if s["file_id"] else ""
                 rows += "<tr><td>" + s["language"] + "</td><td>" + s["release"][:60] + "</td><td>" + str(s["download_count"]) + "</td><td>" + str(s["rating"]) + "</td><td>" + badge + " " + hi + "</td><td>" + dl + "</td></tr>"
             self._html(f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>Subtitles</title>
 <style>body{{font-family:sans-serif;background:#1a1a2e;color:#eee;margin:20px}}table{{border-collapse:collapse;width:100%}}
@@ -2033,7 +2033,7 @@ if __name__ == "__main__":
     users = list_users()
     titles = load_titles()
     load_imdb_cache()
-    print(f"CinephileCrossroads — {len(titles)} titles, users: {users}")
+    print(f"CineCross — {len(titles)} titles, users: {users}")
     print(f"  TMDB:{'✓' if TMDB_KEY else '✗'} OMDB:{'✓' if OMDB_KEY else '✗'} TVDB:{'✓' if TVDB_KEY else '✗'} Trakt:{'✓' if TRAKT_ID else '✗'} Region:{WATCH_COUNTRY}")
     threading.Thread(target=_scheduler, daemon=True).start()
     HTTPServer(("0.0.0.0", PORT), H).serve_forever()
