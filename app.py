@@ -74,6 +74,8 @@ AGENT_TOKEN = os.environ.get("AGENT_TOKEN", "")
 BASE = "/cinecross"
 
 # ── Shared UI ─────────────────────────────────────────────────────────
+APP_BANNER = '<div style="background:var(--card);padding:6px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px"><span style="font-size:1.2em">🎬</span><b style="font-size:1.1em;letter-spacing:.5px">Cinephile Crossroads</b></div>'
+
 def nav_bar(active="ratings", user=""):
     u = user or (list_users() or ["default"])[0]
     sections = [("ratings", "Ratings", f"{BASE}/u/{u}"), ("discover", "Discover", f"{BASE}/recs/{u}"),
@@ -83,7 +85,7 @@ def nav_bar(active="ratings", user=""):
     for key, label, href in sections:
         cls = "nav-active" if key == active else ""
         links += f'<a href="{href}" class="nav-link {cls}">{label}</a>'
-    return f'<nav class="top-nav"><div class="nav-links">{links}</div>{render_user_bar(u)}</nav>'
+    return APP_BANNER + f'<nav class="top-nav"><div class="nav-links">{links}</div>{render_user_bar(u)}</nav>'
 
 def sub_nav(items, active=""):
     links = ""
@@ -106,7 +108,7 @@ body{font-family:-apple-system,sans-serif;background:var(--bg);color:var(--fg);m
 .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:15px;margin-bottom:20px}
 .card{background:var(--card);padding:15px;border-radius:10px}
 table{border-collapse:collapse;width:100%}th,td{padding:6px 10px;text-align:left;border-bottom:1px solid var(--border)}
-th{background:var(--card);position:sticky;top:88px;cursor:pointer}tr:hover{background:var(--card)}
+th{background:var(--card);cursor:pointer;position:sticky;top:88px;cursor:pointer}tr:hover{background:var(--card)}
 a{color:var(--accent);text-decoration:none}img{border-radius:4px}
 .btn{display:inline-block;padding:6px 14px;border-radius:6px;background:var(--card);border:1px solid var(--border);color:var(--fg);text-decoration:none;font-size:.85em;margin:2px}
 .btn:hover{border-color:var(--accent);color:var(--accent)}.btn-primary{background:var(--accent);color:#1a1a2e;border-color:var(--accent)}
@@ -114,11 +116,17 @@ a{color:var(--accent);text-decoration:none}img{border-radius:4px}
 @media(max-width:768px){.top-nav{flex-direction:column;gap:8px;padding:8px}.page{padding:10px}table{font-size:.8em}th,td{padding:4px 6px}img{height:50px!important}.x{display:none}}
 """
 
+SHARED_JS = ('<script>'
+    'if(localStorage.getItem("theme")==="light")document.body.classList.add("light");'
+    'function sortTable(n){var tb=document.querySelector("tbody");if(!tb)return;var rows=[].slice.call(tb.rows),dir=tb.dataset.sort==n?-1:1;tb.dataset.sort=dir==1?n:"";rows.sort(function(a,b){var x=a.cells[n].textContent,y=b.cells[n].textContent;return(!isNaN(x)&&!isNaN(y)?(x-y):x.localeCompare(y))*dir});rows.forEach(function(r){tb.appendChild(r)})}'
+    'function filterTable(){var q=(document.getElementById("s")||{}).value;q=q?q.toLowerCase():"";var rows=document.querySelectorAll("tbody tr");rows.forEach(function(r){r.style.display=r.textContent.toLowerCase().indexOf(q)>=0?"":"none"})}'
+    '</script>')
+
 def page_head(title, extra_css=""):
     return f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>{title}</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style>{SHARED_CSS}{extra_css}</style>
-<script>if(localStorage.getItem("theme")==="light")document.body.classList.add("light")</script></head><body>"""
+</head><body>"""
 
 def page_foot():
     return "</body></html>"
@@ -1901,7 +1909,7 @@ input,select{{padding:6px;border-radius:4px;border:1px solid #444;background:#16
 <script>function f(){{const q=document.getElementById('s').value.toLowerCase(),g=document.getElementById('g').value,mr=document.getElementById('mr').value,st=document.getElementById('st').value,dec=document.getElementById('dec').value;
 document.querySelectorAll('tbody tr').forEach(r=>r.style.display=(r.textContent.toLowerCase().includes(q)&&(!g||r.dataset.g.includes(g))&&(!mr||parseInt(r.dataset.r)>=parseInt(mr))&&(!st||r.dataset.s.includes(st))&&(!dec||r.dataset.d===dec)&&(!vs||r.dataset.vs===vs))?'':'none')}}
 function sortTable(n){{const tb=document.querySelector('tbody'),rows=[...tb.rows],dir=tb.dataset.sort==n?-1:1;tb.dataset.sort=dir==1?n:'';
-rows.sort((a,b)=>{{let x=a.cells[n].textContent,y=b.cells[n].textContent;return(!isNaN(x)&&!isNaN(y)?(x-y):x.localeCompare(y))*dir}});rows.forEach(r=>tb.appendChild(r))}}</script><script>if(localStorage.getItem("theme")==="light")document.body.classList.add("light")</script></head><body>
+rows.sort((a,b)=>{{let x=a.cells[n].textContent,y=b.cells[n].textContent;return(!isNaN(x)&&!isNaN(y)?(x-y):x.localeCompare(y))*dir}});rows.forEach(r=>tb.appendChild(r))}}</script></head><body>
 {job_banner}
 <div style="display:flex;justify-content:space-between;align-items:center"><h2>🎬 {user}'s Ratings — {len(ratings)} titles</h2>{render_user_bar(user)}</div>
 <div class="bar"><input id="s" onkeyup="f()" placeholder="Search..." style="width:220px">
@@ -2357,15 +2365,10 @@ def render_tvshows(user):
         c = quality_dist.get(q, 0)
         if c: q_bars += '<div style="display:flex;align-items:center;gap:8px;margin:2px 0"><span style="width:50px;text-align:right">' + q + '</span><div style="background:#4fc3f7;height:18px;width:' + str(min(c/max_q*300, 300)) + 'px;border-radius:3px"></div><span style="color:#888">' + str(c) + '</span></div>'
 
-    html = '<!DOCTYPE html><html><head><meta charset="utf-8"><title>TV Shows</title>'
-    html += '<meta name="viewport" content="width=device-width,initial-scale=1">'
-    html += '<style>body{font-family:-apple-system,sans-serif;background:#1a1a2e;color:#eee;margin:20px}'
-    html += '.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:15px}'
-    html += '.card{background:#16213e;padding:15px;border-radius:10px;text-align:center}'
-    html += 'table{border-collapse:collapse;width:100%}th,td{padding:6px 10px;text-align:left;border-bottom:1px solid #333}'
-    html += 'th{background:#16213e;position:sticky;top:0}a{color:#4fc3f7;text-decoration:none}'
-    html += 'input{padding:6px;border-radius:4px;border:1px solid #444;background:#16213e;color:#eee;width:250px}'
-    html += '</style>'
+    html = page_head("TV Shows - " + user)
+    html += nav_bar("library", user)
+    html += render_library_nav(user, "tvshows")
+    html += '<div class="page">'
     html += '<script>function f(){const q=document.getElementById("s").value.toLowerCase();document.querySelectorAll("tbody tr").forEach(r=>r.style.display=r.textContent.toLowerCase().includes(q)?"":"none")}</script>'
     html += '<script>function sortTable(n){const tb=document.querySelector("tbody"),rows=[...tb.rows],dir=tb.dataset.sort==n?-1:1;tb.dataset.sort=dir==1?n:"";rows.sort((a,b)=>{let x=a.cells[n].textContent,y=b.cells[n].textContent;return(!isNaN(x)&&!isNaN(y)?(x-y):x.localeCompare(y))*dir});rows.forEach(r=>tb.appendChild(r))}'
     html += 'function rate(el,user,iid,score){fetch("' + BASE + '/rate/"+user+"/"+iid+"/"+score).then(()=>{const row=el.closest("tr");const stars=row.querySelectorAll("a[href*=rate]");stars.forEach((s,i)=>{s.style.color=i<score?"#4fc3f7":"#444"});row.style.opacity="0.6"})}'
