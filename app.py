@@ -71,7 +71,7 @@ def safe_json_save(path, data):
 
 PORT = 8000
 AGENT_TOKEN = os.environ.get("AGENT_TOKEN", "")
-BASE = "/imdb"
+BASE = "/cinecross"
 
 # ── Shared UI ─────────────────────────────────────────────────────────
 def nav_bar(active="ratings", user=""):
@@ -1913,35 +1913,33 @@ def render_recs(user):
         ("rewatch", "💫 Blast from the Past", "Favorites you haven\'t seen in years"),
     ]
     
-    sections = ""
+    # Build columns layout
+    columns = ""
     for cat_key, cat_title, cat_desc in cat_meta:
         items = cats.get(cat_key, [])
         if not items: continue
         cards = ""
         for iid, t, score in items:
-            poster = '<img src="' + t.get("poster","") + '" style="border-radius:6px;height:120px" loading="lazy">' if t.get("poster") else ""
+            poster = '<img src="' + t.get("poster","") + '" style="border-radius:4px;width:45px;height:65px;object-fit:cover" loading="lazy">' if t.get("poster") else ""
             provs = " ".join(PROVIDER_ICONS.get(p,"") for p in t.get("providers",[]) if p in get_user_active_providers(user))
             wl = '<a href="' + BASE + '/watchlist/add/' + iid + '">🤍</a>' if iid not in watchlist else '<a href="' + BASE + '/watchlist/rm/' + iid + '">❤️</a>'
             trailer = ' <a href="' + t.get("trailer","") + '" target="_blank">▶️</a>' if t.get("trailer") else ""
-            diverge = ' <span title="Score divergence detected" style="color:#d72">⚠</span>' if score_divergence(t) else ""
-            # For rewatch items, show previous rating in blue, allow re-rating
             prev_rating = user_ratings.get(iid, {}).get("rating", 0) if cat_key == "rewatch" else 0
             if prev_rating:
-                stars = "".join('<a href="' + BASE + '/rate/' + user + '/' + iid + '/' + str(s) + '" style="text-decoration:none;color:' + ('#4fc3f7' if s <= prev_rating else '#444') + '" title="' + ('Previous: ' if s <= prev_rating else 'Rate ') + str(s) + '">' + "★" + '</a>' for s in range(1, 11))
+                stars = "".join('<a href="' + BASE + '/rate/' + user + '/' + iid + '/' + str(s) + '" style="text-decoration:none;color:' + ('#4fc3f7' if s <= prev_rating else '#444') + '">' + "★" + '</a>' for s in range(1, 11))
             else:
-                stars = "".join('<a href="' + BASE + '/rate/' + user + '/' + iid + '/' + str(s) + '" style="text-decoration:none;color:gold" title="' + str(s) + '">' + ("★" if s <= 5 else "☆") + '</a>' for s in range(1, 11))
-            tooltip = t.get("overview","")[:150]
-            cards += '<div style="background:var(--card,#16213e);border-radius:10px;padding:12px;display:flex;gap:12px;align-items:start">'
+                stars = "".join('<a href="' + BASE + '/rate/' + user + '/' + iid + '/' + str(s) + '" style="text-decoration:none;color:gold">' + ("★" if s <= 5 else "☆") + '</a>' for s in range(1, 11))
+            cards += '<div style="display:flex;gap:8px;padding:8px 0;border-bottom:1px solid var(--border,#333);align-items:center">'
             cards += poster
-            cards += '<div style="flex:1;min-width:0">'
-            cards += '<div style="display:flex;justify-content:space-between;align-items:center"><b><a href="https://www.imdb.com/title/' + iid + '/" target="_blank" title="' + tooltip + '">' + t.get("title","?") + '</a></b> ' + wl + trailer + diverge + '</div>'
-            cards += '<div style="color:#888;font-size:.85em">' + str(t.get("year","")) + ' · ' + provs + ' · IMDB ' + str(t.get("imdb_rating","?")) + ' · Match: ' + str(score) + '</div>'
-            cards += '<div style="font-size:.8em;color:#666;margin-top:4px">' + (t.get("genres",""))[:50] + '</div>'
-            cards += '<div style="margin-top:4px">' + stars + '</div>'
+            cards += '<div style="flex:1;min-width:0;overflow:hidden">'
+            cards += '<div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis"><b><a href="https://www.imdb.com/title/' + iid + '/" target="_blank" title="' + t.get("overview","")[:150] + '">' + t.get("title","?") + '</a></b> ' + wl + trailer + '</div>'
+            cards += '<div style="color:#888;font-size:.8em">' + str(t.get("year","")) + ' · ' + provs + ' · ' + str(t.get("imdb_rating","")) + '</div>'
+            cards += '<div style="font-size:.75em">' + stars + '</div>'
             cards += '</div></div>'
-        sections += '<div style="margin-bottom:25px"><h3>' + cat_title + '</h3>'
-        sections += '<p style="color:#888;font-size:.85em;margin-top:-10px">' + cat_desc + '</p>'
-        sections += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(350px,1fr));gap:10px">' + cards + '</div></div>'
+        columns += '<div style="min-width:0"><h4 style="margin:0 0 5px;white-space:nowrap">' + cat_title + '</h4>'
+        columns += '<p style="color:#888;font-size:.75em;margin:0 0 8px">' + cat_desc + '</p>'
+        columns += cards + '</div>'
+    sections = '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:20px;align-items:start">' + columns + '</div>'
     
     user_bar = render_user_bar(user, "recs", False)
     html = '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Recommendations for ' + user + '</title>'
