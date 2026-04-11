@@ -1878,12 +1878,12 @@ def render_ratings(user):
         has_subs = bool(local_info.get("subtitles")) if local_info else False
         has_suggested = bool(local_info.get("suggested_sub")) if local_info else False
         sub_icon = "🗨" if has_subs else ("💬" if has_suggested else ('<a href="' + BASE + '/subs/' + iid + '" title="Find subtitles">🔤</a>' if iid in tmm else ""))
-        local = ('💾 ' + local_src + " " + sub_icon) if iid in tmm else ""
+        local = ('💾' + vsource_icon + ' ' + sub_icon) if iid in tmm else ""
         tooltip = f' title="{t.get("overview","")[:200]}"' if t.get("overview") else ""
         awards_badge = " 🏆" if t.get("awards") and ("Oscar" in t.get("awards","") or "Won" in t.get("awards","")) else ""
         trailer_link = (' <a href="' + t.get("trailer","") + '" target="_blank" title="Trailer">▶️</a>') if t.get("trailer") else ""
         similar_link = ' <a href="' + BASE + '/similar/' + iid + '" title="Similar">🔗</a>'
-        rows += f'<tr data-g="{t.get("genres","")}" data-r="{r["rating"]}" data-s="{" ".join(provs)}" data-d="{str(t.get("year",""))[:3]}0"><td>{poster}</td><td><a href="https://www.imdb.com/title/{iid}/" target="_blank"{tooltip}>{t.get("title",iid)}</a>{awards_badge}{trailer_link}{similar_link}</td><td>{t.get("year","")}</td><td style="font-weight:bold;color:{c}">{r["rating"]}</td><td>{imdb}</td><td class="x">{" ".join(scores)}</td><td>{stream}</td><td class="x">{t.get("genres","")}</td><td class="x">{r.get("date","")}</td><td>{local}</td></tr>'
+        rows += f'<tr data-g="{t.get("genres","")}" data-r="{r["rating"]}" data-s="{" ".join(provs)}" data-d="{str(t.get("year",""))[:3]}0" data-vs="{vsource}"><td>{poster}</td><td><a href="https://www.imdb.com/title/{iid}/" target="_blank"{tooltip}>{t.get("title",iid)}</a>{awards_badge}{trailer_link}{similar_link}</td><td>{t.get("year","")}</td><td style="font-weight:bold;color:{c}">{r["rating"]}</td><td>{imdb}</td><td class="x">{" ".join(scores)}</td><td>{stream}</td><td class="x">{t.get("genres","")}</td><td class="x">{r.get("date","")}</td><td>{local}</td></tr>'
     jb = active_job()[1]
     job_banner = f'<div id="jb" style="background:#1a3a1a;padding:8px 15px;border-radius:6px;margin-bottom:10px"><span id="jm">⏳ {jb["name"]}: {jb["message"]}</span> <progress id="jp" max="100" value="{jb["progress"]/max(jb["total"],1)*100 if jb else 0}" style="vertical-align:middle"></progress></div><script>setInterval(()=>fetch("{BASE}/jobs").then(r=>r.json()).then(d=>{{let a=Object.values(d).find(j=>j.status=="running");if(a){{document.getElementById("jb").style.display="block";document.getElementById("jm").textContent="⏳ "+a.name+": "+a.message;document.getElementById("jp").value=a.total?a.progress/a.total*100:0}}else{{document.getElementById("jb").style.display="none"}}}}),3000)</script>' if jb else ""
     return f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>{user}'s Ratings ({len(ratings)})</title>
@@ -1897,7 +1897,7 @@ tr:hover{{background:#16213e}}a{{color:#4fc3f7;text-decoration:none}}img{{border
 .bar{{display:flex;gap:10px;align-items:center;margin-bottom:15px;flex-wrap:wrap}}
 input,select{{padding:6px;border-radius:4px;border:1px solid #444;background:#16213e;color:#eee}}</style>
 <script>function f(){{const q=document.getElementById('s').value.toLowerCase(),g=document.getElementById('g').value,mr=document.getElementById('mr').value,st=document.getElementById('st').value,dec=document.getElementById('dec').value;
-document.querySelectorAll('tbody tr').forEach(r=>r.style.display=(r.textContent.toLowerCase().includes(q)&&(!g||r.dataset.g.includes(g))&&(!mr||parseInt(r.dataset.r)>=parseInt(mr))&&(!st||r.dataset.s.includes(st))&&(!dec||r.dataset.d===dec))?'':'none')}}
+document.querySelectorAll('tbody tr').forEach(r=>r.style.display=(r.textContent.toLowerCase().includes(q)&&(!g||r.dataset.g.includes(g))&&(!mr||parseInt(r.dataset.r)>=parseInt(mr))&&(!st||r.dataset.s.includes(st))&&(!dec||r.dataset.d===dec)&&(!vs||r.dataset.vs===vs))?'':'none')}}
 function sortTable(n){{const tb=document.querySelector('tbody'),rows=[...tb.rows],dir=tb.dataset.sort==n?-1:1;tb.dataset.sort=dir==1?n:'';
 rows.sort((a,b)=>{{let x=a.cells[n].textContent,y=b.cells[n].textContent;return(!isNaN(x)&&!isNaN(y)?(x-y):x.localeCompare(y))*dir}});rows.forEach(r=>tb.appendChild(r))}}</script><script>if(localStorage.getItem("theme")==="light")document.body.classList.add("light")</script></head><body>
 {job_banner}
@@ -2131,6 +2131,23 @@ def analyze_library(user):
 # ── Title/Path Mismatch Detection ─────────────────────────────────────
 import re as _re
 import unicodedata as _ud
+
+
+# ── Video Source Detection ────────────────────────────────────────────
+SOURCE_ICONS = {"bluray": "💿", "dvd": "📀", "webrip": "🌐", "webdl": "🌐", "hdtv": "📡", "telesync": "📹", "cam": "📷", "remux": "💎"}
+
+def detect_video_source(path):
+    """Detect video source from filename/path."""
+    p = path.lower()
+    if "remux" in p: return "remux"
+    if "blu-ray" in p or "bluray" in p or "brrip" in p or "bdmv" in p or "bdrip" in p: return "bluray"
+    if "dvd" in p or "video_ts" in p: return "dvd"
+    if "webrip" in p or "web-rip" in p: return "webrip"
+    if "webdl" in p or "web-dl" in p or "web dl" in p: return "webdl"
+    if "hdtv" in p: return "hdtv"
+    if "telesync" in p or "ts" in p.split("_"): return "telesync"
+    if "cam" in p.split("_") or "camrip" in p: return "cam"
+    return ""
 
 def _normalize(s):
     """Normalize a string for fuzzy comparison: lowercase, strip tags, accents, punctuation."""
@@ -3106,10 +3123,12 @@ td{{padding:8px;border-bottom:1px solid #333}}a{{color:#4fc3f7;text-decoration:n
                 poster = f'<img src="{t["poster"]}" height="60" loading="lazy">' if t.get("poster") else ""
                 imdb = str(t.get("imdb_rating", "")) if t.get("imdb_rating") else ""
                 source = lib_info.get("source", "")
+                vsource = detect_video_source(lib_info.get("path", ""))
+                vsource_icon = SOURCE_ICONS.get(vsource, "")
                 plays = lib_info.get("playcount", "")
                 # Inline rating stars
                 stars = "".join('<a href="#" onclick="rate(this,\'' + u + '\',\'' + iid + '\',' + str(s) + ');return false" style="text-decoration:none;color:gold" title="' + str(s) + '">' + ("★" if s <= 5 else "☆") + '</a>' for s in range(1, 11))
-                rows += f'<tr><td>{poster}</td><td><a href="https://www.imdb.com/title/{iid}/" target="_blank">{t.get("title",iid)}</a></td><td>{t.get("year","")}</td><td>{imdb}</td><td>{source}</td><td>{plays}</td><td>{stars}</td></tr>'
+                rows += f'<tr><td>{poster}</td><td><a href="https://www.imdb.com/title/{iid}/" target="_blank">{t.get("title",iid)}</a></td><td>{t.get("year","")}</td><td>{imdb}</td><td>{source} {vsource_icon}</td><td>{plays}</td><td>{stars}</td></tr>'
             html = page_head(f"Unrated - {u}")
             html += nav_bar("ratings", u)
             html += '<div class="page">'
@@ -3250,7 +3269,9 @@ button{{padding:12px 30px;background:#4fc3f7;border:none;border-radius:8px;curso
             local_html = ""
             if lib_info:
                 local_html = '<div class="card" style="margin-top:15px"><h4>💾 Local Library</h4>'
-                local_html += f'<p>Source: {lib_info.get("source","")}'
+                vsrc = detect_video_source(lib_info.get("path",""))
+                vsrc_icon = SOURCE_ICONS.get(vsrc, "")
+                local_html += f'<p>Source: {lib_info.get("source","")} {vsrc_icon} {vsrc}'
                 if lib_info.get("quality") or lib_info.get("video_height"): local_html += f' · {lib_info.get("video_height") or lib_info.get("quality","")}p'
                 if lib_info.get("video_codec"): local_html += f' · {lib_info.get("video_codec","")}'
                 if lib_info.get("file_size"): local_html += f' · {int(lib_info["file_size"])/(1024**3):.1f} GB'
