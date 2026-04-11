@@ -2282,7 +2282,9 @@ def render_tvshows(user):
     html += 'input{padding:6px;border-radius:4px;border:1px solid #444;background:#16213e;color:#eee;width:250px}'
     html += '</style>'
     html += '<script>function f(){const q=document.getElementById("s").value.toLowerCase();document.querySelectorAll("tbody tr").forEach(r=>r.style.display=r.textContent.toLowerCase().includes(q)?"":"none")}</script>'
-    html += '<script>function sortTable(n){const tb=document.querySelector("tbody"),rows=[...tb.rows],dir=tb.dataset.sort==n?-1:1;tb.dataset.sort=dir==1?n:"";rows.sort((a,b)=>{let x=a.cells[n].textContent,y=b.cells[n].textContent;return(!isNaN(x)&&!isNaN(y)?(x-y):x.localeCompare(y))*dir});rows.forEach(r=>tb.appendChild(r))}</script>'
+    html += '<script>function sortTable(n){const tb=document.querySelector("tbody"),rows=[...tb.rows],dir=tb.dataset.sort==n?-1:1;tb.dataset.sort=dir==1?n:"";rows.sort((a,b)=>{let x=a.cells[n].textContent,y=b.cells[n].textContent;return(!isNaN(x)&&!isNaN(y)?(x-y):x.localeCompare(y))*dir});rows.forEach(r=>tb.appendChild(r))}'
+    html += 'function rate(el,user,iid,score){fetch("' + BASE + '/rate/"+user+"/"+iid+"/"+score).then(()=>{const row=el.closest("tr");const stars=row.querySelectorAll("a[href*=rate]");stars.forEach((s,i)=>{s.style.color=i<score?"#4fc3f7":"#444"});row.style.opacity="0.6"})}'
+    html += '</script>'
     html += '</head><body>'
     html += '<h2>📺 TV Shows — ' + user + '</h2>'
 
@@ -3031,18 +3033,23 @@ td{{padding:8px;border-bottom:1px solid #333}}a{{color:#4fc3f7;text-decoration:n
             for iid in sorted(unrated, key=lambda x: titles.get(x, {}).get("title", x)):
                 t = titles.get(iid, {})
                 lib_info = library.get(iid, {})
+                # Fallback: use library title if titles store is empty
+                if not t.get("title") and lib_info.get("title"):
+                    t = {"title": lib_info["title"], "year": lib_info.get("year", "")}
                 poster = f'<img src="{t["poster"]}" height="60" loading="lazy">' if t.get("poster") else ""
                 imdb = str(t.get("imdb_rating", "")) if t.get("imdb_rating") else ""
                 source = lib_info.get("source", "")
                 plays = lib_info.get("playcount", "")
                 # Inline rating stars
-                stars = "".join('<a href="' + BASE + '/rate/' + u + '/' + iid + '/' + str(s) + '" style="text-decoration:none;color:gold" title="' + str(s) + '">' + ("★" if s <= 5 else "☆") + '</a>' for s in range(1, 11))
+                stars = "".join('<a href="#" onclick="rate(this,\'' + u + '\',\'' + iid + '\',' + str(s) + ');return false" style="text-decoration:none;color:gold" title="' + str(s) + '">' + ("★" if s <= 5 else "☆") + '</a>' for s in range(1, 11))
                 rows += f'<tr><td>{poster}</td><td><a href="https://www.imdb.com/title/{iid}/" target="_blank">{t.get("title",iid)}</a></td><td>{t.get("year","")}</td><td>{imdb}</td><td>{source}</td><td>{plays}</td><td>{stars}</td></tr>'
             html = page_head(f"Unrated - {u}")
             html += nav_bar("ratings", u)
             html += '<div class="page">'
             html += f'<h2>Watched but unrated - {len(unrated)} titles</h2>'
-            html += '<script>function sortTable(n){const tb=document.querySelector("tbody"),rows=[...tb.rows],dir=tb.dataset.sort==n?-1:1;tb.dataset.sort=dir==1?n:"";rows.sort((a,b)=>{let x=a.cells[n].textContent,y=b.cells[n].textContent;return(!isNaN(x)&&!isNaN(y)?(x-y):x.localeCompare(y))*dir});rows.forEach(r=>tb.appendChild(r))}</script>'
+            html += '<script>function sortTable(n){const tb=document.querySelector("tbody"),rows=[...tb.rows],dir=tb.dataset.sort==n?-1:1;tb.dataset.sort=dir==1?n:"";rows.sort((a,b)=>{let x=a.cells[n].textContent,y=b.cells[n].textContent;return(!isNaN(x)&&!isNaN(y)?(x-y):x.localeCompare(y))*dir});rows.forEach(r=>tb.appendChild(r))}'
+            html += 'function rate(el,user,iid,score){fetch("' + BASE + '/rate/"+user+"/"+iid+"/"+score).then(()=>{const row=el.closest("tr");const stars=row.querySelectorAll("a[href*=rate]");stars.forEach((s,i)=>{s.style.color=i<score?"#4fc3f7":"#444"});row.style.opacity="0.6"})}'
+            html += '</script>'
             html += '<p style="color:var(--muted)">Movies you watched in Kodi or Trakt but never rated. Click stars to rate.</p>'
             html += '<table><thead><tr><th></th><th onclick="sortTable(1)">Title</th><th onclick="sortTable(2)">Year</th><th onclick="sortTable(3)">IMDB</th><th onclick="sortTable(4)">Source</th><th onclick="sortTable(5)">Plays</th><th>Rate</th></tr></thead>'
             html += '<tbody>' + rows + '</tbody></table>'
@@ -3206,7 +3213,6 @@ td{{padding:8px;border-bottom:1px solid #333}}a{{color:#4fc3f7}}</style></head>
 <table>{rows}</table><p><a href="{BASE}/">← Back</a></p></body></html>""")
             return
         elif p.startswith("/rate/"):
-            # Inline rating: /rate/<user>/<imdb_id>/<score>
             u = parts[-3] if len(parts) >= 3 else self._user(parts)
             iid = parts[-2]
             score = int(parts[-1])
@@ -3214,7 +3220,12 @@ td{{padding:8px;border-bottom:1px solid #333}}a{{color:#4fc3f7}}</style></head>
                 ratings = load_user_ratings(u)
                 ratings[iid] = {"rating": score, "date": time.strftime("%Y-%m-%d")}
                 save_user_ratings(u, ratings)
-            self._redirect(self.headers.get("Referer", f"{BASE}/u/{u}"))
+            # AJAX call: return JSON. Browser nav: redirect.
+            accept = self.headers.get("Accept", "")
+            if "application/json" in accept or "fetch" in self.headers.get("Sec-Fetch-Mode", ""):
+                self._json({"status": "ok", "rating": score})
+            else:
+                self._redirect(self.headers.get("Referer", f"{BASE}/u/{u}"))
             return
         elif p == "/datasets/download":
             if not active_job()[1]:
