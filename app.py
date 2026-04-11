@@ -1878,6 +1878,8 @@ def render_ratings(user):
         has_subs = bool(local_info.get("subtitles")) if local_info else False
         has_suggested = bool(local_info.get("suggested_sub")) if local_info else False
         sub_icon = "🗨" if has_subs else ("💬" if has_suggested else ('<a href="' + BASE + '/subs/' + iid + '" title="Find subtitles">🔤</a>' if iid in tmm else ""))
+        vsource = detect_video_source(tmm.get(iid, {}).get("path", "")) if iid in tmm else ""
+        vsource_icon = SOURCE_ICONS.get(vsource, "")
         local = ('💾' + vsource_icon + ' ' + sub_icon) if iid in tmm else ""
         tooltip = f' title="{t.get("overview","")[:200]}"' if t.get("overview") else ""
         awards_badge = " 🏆" if t.get("awards") and ("Oscar" in t.get("awards","") or "Won" in t.get("awards","")) else ""
