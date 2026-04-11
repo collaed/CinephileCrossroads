@@ -2127,6 +2127,72 @@ def analyze_library(user):
         "no_subs": no_subs,
     }
 
+
+# ── Title/Path Mismatch Detection ─────────────────────────────────────
+import re as _re
+import unicodedata as _ud
+
+def _normalize(s):
+    """Normalize a string for fuzzy comparison: lowercase, strip tags, accents, punctuation."""
+    s = s.lower()
+    # Remove common tags
+    for tag in ["1080p","720p","480p","2160p","4k","uhd","hdr","bluray","blu-ray","webrip",
+                "brrip","dvdrip","hdtv","aac","ac3","dts","x264","x265","hevc","h264",
+                "mbps","telesync","remastered","extended","directors.cut","unrated"]:
+        s = s.replace(tag.lower(), "")
+    # Strip accents
+    s = "".join(c for c in _ud.normalize("NFD", s) if _ud.category(c) != "Mn")
+    # Remove punctuation, underscores, dots, parens, brackets, year
+    s = _re.sub(r"[()\[\]{}_.,:;!?\x27\x22-]", " ", s)
+    s = _re.sub(r"(19|20)\d{2}", "", s)  # remove years
+    s = _re.sub(r"\s+", " ", s).strip()
+    return s
+
+def _extract_title_from_path(path):
+    """Extract likely title from a file path."""
+    parts = path.replace("\\", "/").split("/")
+    # Skip generic filenames
+    fname = parts[-1] if parts else ""
+    if fname.lower() in ("video_ts.ifo","index.bdmv","movieobject.bdmv",""):
+        # Use parent or grandparent directory
+        fname = parts[-3] if len(parts) >= 3 else parts[-2] if len(parts) >= 2 else ""
+    else:
+        fname = fname.rsplit(".", 1)[0]  # remove extension
+    return _normalize(fname)
+
+def _fuzzy_match(a, b):
+    """Simple fuzzy match: ratio of common words."""
+    wa = set(a.split())
+    wb = set(b.split())
+    if not wa or not wb: return 0
+    common = wa & wb
+    return len(common) / max(len(wa), len(wb))
+
+def find_mismatches(user, threshold=0.3):
+    """Find titles where the IMDB title doesn't match the filename."""
+    library = load_user_tmm(user)
+    titles = load_titles()
+    mismatches = []
+    for iid, info in library.items():
+        if iid.startswith("_") or not isinstance(info, dict): continue
+        path = info.get("path", "")
+        if not path: continue
+        t = titles.get(iid, {})
+        db_title = t.get("title", "")
+        if not db_title: continue
+        path_title = _extract_title_from_path(path)
+        norm_db = _normalize(db_title)
+        if not path_title or not norm_db: continue
+        score = _fuzzy_match(norm_db, path_title)
+        if score < threshold:
+            mismatches.append({
+                "iid": iid, "db_title": db_title, "year": t.get("year",""),
+                "path_title": path_title, "path": path,
+                "match": round(score, 2),
+            })
+    mismatches.sort(key=lambda x: x["match"])
+    return mismatches
+
 def analyze_show(show_name, seasons_data):
     """Analyze a TV show for gaps, quality issues, and completion."""
     analysis = {"gaps": [], "quality_issues": [], "completion": {}, "next_episode": None}
@@ -2337,6 +2403,7 @@ def render_library_nav(user, active="library"):
         ("tvshows", "📺 TV Shows", f"{BASE}/tvshows/{user}"),
         ("scraper", "🔍 Scraper", f"{BASE}/scraper/{user}"),
         ("org", "🗂 Organize", f"{BASE}/library/org/{user}"),
+        ("confirm", "⚠ Confirm", f"{BASE}/confirm/{user}"),
     ], active)
 
 def render_library(user):
@@ -3126,6 +3193,31 @@ button{{padding:12px 30px;background:#4fc3f7;border:none;border-radius:8px;curso
             if iid in wl: wl.remove(iid)
             save_watchlist(u, wl)
             self._redirect(self.headers.get("Referer", f"{BASE}/u/{u}"))
+            return
+        elif p.startswith("/confirm/"):
+            u = parts[-1]
+            mismatches = find_mismatches(u)
+            rows = ""
+            for m in mismatches[:200]:
+                short_path = m["path"].split("/")[-1] if "/" in m["path"] else m["path"].split(chr(92))[-1]
+                if short_path.lower() in ("video_ts.ifo","index.bdmv"):
+                    parts_p = m["path"].replace(chr(92),"/").split("/")
+                    short_path = "/".join(parts_p[-3:]) if len(parts_p)>=3 else short_path
+                match_color = "#d72" if m["match"] < 0.1 else "#f90" if m["match"] < 0.2 else "#aaa"
+                rows += '<tr><td><a href="' + BASE + '/title/' + m["iid"] + '">' + m["db_title"] + '</a> (' + str(m.get('year','')) + ')</td>'
+                rows += '<td style="font-size:.85em;color:var(--muted);max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + m["path"] + '">' + short_path + '</td>'
+                rows += '<td style="color:' + match_color + '">' + str(int(m["match"]*100)) + '%</td>'
+                rows += '<td><a href="' + BASE + '/scraper-match/' + u + '/' + m["iid"] + '?q=' + m["db_title"].replace(" ","+") + '" class="btn">🔍 Re-match</a></td></tr>'
+            html = page_head(f"To Be Confirmed - {u}")
+            html += nav_bar("library", u)
+            html += '<div class="page">'
+            html += f'<h2>⚠ To Be Confirmed — {len(mismatches)} mismatches</h2>'
+            html += '<p style="color:var(--muted)">Titles where the IMDB match doesn\'t match the filename. Low % = likely wrong match.</p>'
+            html += '<table><thead><tr><th onclick="sortTable(0)">IMDB Title</th><th>Filename</th><th onclick="sortTable(2)">Match</th><th></th></tr></thead>'
+            html += '<tbody>' + rows + '</tbody></table>'
+            html += '<script>function sortTable(n){const tb=document.querySelector("tbody"),rows=[...tb.rows],dir=tb.dataset.sort==n?-1:1;tb.dataset.sort=dir==1?n:"";rows.sort((a,b)=>{let x=a.cells[n].textContent,y=b.cells[n].textContent;return(!isNaN(x)&&!isNaN(y)?(x-y):x.localeCompare(y))*dir});rows.forEach(r=>tb.appendChild(r))}</script>'
+            html += '</div>' + page_foot()
+            self._page(html, "library", u)
             return
         elif p.startswith("/title/"):
             iid = parts[-1]
