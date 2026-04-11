@@ -72,6 +72,65 @@ def safe_json_save(path, data):
 PORT = 8000
 AGENT_TOKEN = os.environ.get("AGENT_TOKEN", "")
 BASE = "/imdb"
+
+# ── Shared UI ─────────────────────────────────────────────────────────
+def nav_bar(active="ratings", user=""):
+    u = user or (list_users() or ["default"])[0]
+    sections = [("ratings", "Ratings", f"{BASE}/u/{u}"), ("discover", "Discover", f"{BASE}/recs/{u}"),
+                ("library", "Library", f"{BASE}/library/{u}"), ("social", "Social", f"{BASE}/feed"),
+                ("setup", "Setup", f"{BASE}/setup/{u}")]
+    links = ""
+    for key, label, href in sections:
+        cls = "nav-active" if key == active else ""
+        links += f'<a href="{href}" class="nav-link {cls}">{label}</a>'
+    return f'<nav class="top-nav"><div class="nav-links">{links}</div>{render_user_bar(u)}</nav>'
+
+def sub_nav(items, active=""):
+    links = ""
+    for key, label, href in items:
+        cls = "sub-active" if key == active else ""
+        links += f'<a href="{href}" class="sub-link {cls}">{label}</a>'
+    return f'<div class="sub-nav">{links}</div>'
+
+SHARED_CSS = """
+:root{--bg:#1a1a2e;--fg:#eee;--card:#16213e;--border:#333;--accent:#4fc3f7;--accent2:#2d7;--warn:#d72;--muted:#888}
+.light{--bg:#f5f5f5;--fg:#222;--card:#fff;--border:#ddd;--accent:#0077cc}
+body{font-family:-apple-system,sans-serif;background:var(--bg);color:var(--fg);margin:0}
+.top-nav{background:var(--card);padding:8px 20px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border);position:sticky;top:0;z-index:100}
+.nav-links{display:flex;gap:4px}.nav-link{padding:8px 14px;border-radius:6px;color:var(--muted);text-decoration:none;font-size:.9em}
+.nav-link:hover{background:var(--bg);color:var(--fg)}.nav-active{background:var(--accent);color:#1a1a2e!important;font-weight:600}
+.sub-nav{padding:8px 20px;background:var(--card);border-bottom:1px solid var(--border);display:flex;gap:4px}
+.sub-link{padding:5px 12px;border-radius:4px;color:var(--muted);text-decoration:none;font-size:.85em}
+.sub-active{color:var(--accent)!important;border-bottom:2px solid var(--accent)}
+.page{padding:20px;max-width:1400px;margin:0 auto}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:15px;margin-bottom:20px}
+.card{background:var(--card);padding:15px;border-radius:10px}
+table{border-collapse:collapse;width:100%}th,td{padding:6px 10px;text-align:left;border-bottom:1px solid var(--border)}
+th{background:var(--card);position:sticky;top:88px;cursor:pointer}tr:hover{background:var(--card)}
+a{color:var(--accent);text-decoration:none}img{border-radius:4px}
+.btn{display:inline-block;padding:6px 14px;border-radius:6px;background:var(--card);border:1px solid var(--border);color:var(--fg);text-decoration:none;font-size:.85em;margin:2px}
+.btn:hover{border-color:var(--accent);color:var(--accent)}.btn-primary{background:var(--accent);color:#1a1a2e;border-color:var(--accent)}
+.x{font-size:.8em;color:var(--muted)}
+@media(max-width:768px){.top-nav{flex-direction:column;gap:8px;padding:8px}.page{padding:10px}table{font-size:.8em}th,td{padding:4px 6px}img{height:50px!important}.x{display:none}}
+"""
+
+def page_head(title, extra_css=""):
+    return f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>{title}</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>{SHARED_CSS}{extra_css}</style>
+<script>if(localStorage.getItem("theme")==="light")document.body.classList.add("light")</script></head><body>"""
+
+def page_foot():
+    return "</body></html>"
+
+def wrap_page(html, section="ratings", user=""):
+    if "top-nav" in html: return html
+    nav = nav_bar(section, user)
+    if "<body>" in html:
+        html = html.replace("<body>", "<body>" + nav + '<div class="page">', 1)
+        html = html.replace("</body>", "</div></body>", 1)
+    return html
+
 PROVIDER_ICONS = {"Netflix": "🟥", "Amazon Prime Video": "📦", "Disney Plus": "🏰", "Max": "🟪", "Apple TV Plus": "🍎"}
 LU_PROVIDER_IDS = {"Netflix": 8, "Amazon Prime Video": 119, "Disney Plus": 337}  # TMDB provider IDs per country
 
