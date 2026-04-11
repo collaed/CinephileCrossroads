@@ -1900,10 +1900,12 @@ def render_recs(user):
     top_kw = sorted(profile["keywords"].items(), key=lambda x: x[1], reverse=True)[:12]
     top_g = sorted(profile["genres"].items(), key=lambda x: x[1], reverse=True)[:6]
     top_d = sorted(profile["directors"].items(), key=lambda x: x[1], reverse=True)[:5]
+    top_a = sorted(profile["actors"].items(), key=lambda x: x[1], reverse=True)[:8]
     
     taste_kw = " ".join('<span style="background:#16213e;padding:2px 8px;border-radius:10px;font-size:.8em">' + k + '</span>' for k, v in top_kw)
     taste_g = " ".join('<span style="background:#1a3a5e;padding:2px 8px;border-radius:10px;font-size:.8em">' + k + '</span>' for k, v in top_g)
     taste_d = " ".join('<span style="background:#3a1a5e;padding:2px 8px;border-radius:10px;font-size:.8em">' + k + '</span>' for k, v in top_d)
+    taste_a = " ".join('<span style="background:#1a3a3a;padding:2px 8px;border-radius:10px;font-size:.8em">' + k + '</span>' for k, v in top_a)
     
     cat_meta = [
         ("dna", "🧬 Deep Cuts for You", "Based on your keyword DNA — themes, moods, plot elements"),
@@ -1950,11 +1952,12 @@ def render_recs(user):
     html += '@media(max-width:768px){div[style*="grid"]{grid-template-columns:1fr!important}}'
     html += '</style><script>if(localStorage.getItem("theme")==="light")document.body.classList.add("light")</script></head><body>'
     html += '<div style="display:flex;justify-content:space-between;align-items:center">'
-    html += '<h2>🎯 Recommendations for ' + user + '</h2>' + user_bar + '</div>'
+    html += '<h2>🎯 Recommendations for ' + user + '</h2><span style="color:#888;font-size:.85em">Movies & TV shows</span>' + user_bar + '</div>'
     html += '<details style="margin-bottom:20px"><summary style="cursor:pointer;color:#4fc3f7">Your taste profile</summary>'
     html += '<p><b>Keywords:</b> ' + taste_kw + '</p>'
     html += '<p><b>Genres:</b> ' + taste_g + '</p>'
-    html += '<p><b>Directors:</b> ' + taste_d + '</p></details>'
+    html += '<p><b>Directors:</b> ' + taste_d + '</p>'
+    html += '<p><b>Actors:</b> ' + taste_a + '</p></details>'
     html += sections
     html += '<p style="margin-top:20px"><a href="' + BASE + '/tonight/' + user + '">🎲 Pick one for tonight</a> · '
     html += '<a href="' + BASE + '/u/' + user + '">← Ratings</a></p></body></html>'
@@ -2261,6 +2264,7 @@ def render_tvshows(user):
     html += 'input{padding:6px;border-radius:4px;border:1px solid #444;background:#16213e;color:#eee;width:250px}'
     html += '</style>'
     html += '<script>function f(){const q=document.getElementById("s").value.toLowerCase();document.querySelectorAll("tbody tr").forEach(r=>r.style.display=r.textContent.toLowerCase().includes(q)?"":"none")}</script>'
+    html += '<script>function sortTable(n){const tb=document.querySelector("tbody"),rows=[...tb.rows],dir=tb.dataset.sort==n?-1:1;tb.dataset.sort=dir==1?n:"";rows.sort((a,b)=>{let x=a.cells[n].textContent,y=b.cells[n].textContent;return(!isNaN(x)&&!isNaN(y)?(x-y):x.localeCompare(y))*dir});rows.forEach(r=>tb.appendChild(r))}</script>'
     html += '</head><body>'
     html += '<h2>📺 TV Shows — ' + user + '</h2>'
 
@@ -2280,7 +2284,7 @@ def render_tvshows(user):
 
     # Show list
     html += '<div style="margin-bottom:10px"><input id="s" onkeyup="f()" placeholder="Search shows..."></div>'
-    html += '<table><thead><tr><th>Show</th><th>Seasons</th><th>Episodes</th><th>Watched</th><th>Quality</th><th>Codecs</th><th>Intel</th></tr></thead>'
+    html += '<table><thead><tr><th onclick="sortTable(0)">Show</th><th onclick="sortTable(1)">Seasons</th><th onclick="sortTable(2)">Episodes</th><th>Watched</th><th onclick="sortTable(4)">Quality</th><th>Codecs</th><th>Intel</th></tr></thead>'
     html += '<tbody>' + show_rows + '</tbody></table>'
 
     # Duplicate episodes
