@@ -3619,6 +3619,37 @@ def _discover_highly_rated():
     save_titles(titles)
     print(f"Discovery: added {added} new titles. Total: {len(titles)}")
 
+def _resolve_from_imdb_dataset():
+    """Resolve library titles without metadata from IMDB dataset."""
+    titles = load_titles()
+    for u in list_users():
+        lib = load_user_tmm(u)
+        items = {k: v for k, v in lib.items() if not k.startswith("_") and isinstance(v, dict)}
+        unresolved = [k for k in items if k not in titles]
+        if not unresolved: continue
+        unresolved_set = set(unresolved)
+        resolved = 0
+        basics = os.path.join(IMDB_DATASET_DIR, "title.basics.tsv")
+        if os.path.exists(basics):
+            with open(basics, encoding="utf-8") as f:
+                reader = csv.DictReader(f, delimiter="\t")
+                for row in reader:
+                    iid = row.get("tconst", "")
+                    if iid in unresolved_set:
+                        titles[iid] = {"title": row.get("primaryTitle",""), "year": row.get("startYear","") if row.get("startYear") != "\\N" else "",
+                            "type": row.get("titleType",""), "genres": row.get("genres","").replace(",",", ") if row.get("genres") != "\\N" else ""}
+                        resolved += 1
+                        unresolved_set.discard(iid)
+        # Fallback: library title
+        for iid in list(unresolved_set):
+            info = items.get(iid, {})
+            if info.get("title"):
+                titles[iid] = {"title": info["title"], "year": info.get("year","")}
+                resolved += 1
+        if resolved:
+            save_titles(titles)
+            print(f"Resolved {resolved} titles for {u}")
+
 def _scheduler():
     """Background scheduler: enrichment daily 3am, catalog+discovery weekly Sunday 4am."""
     import datetime
