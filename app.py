@@ -1895,6 +1895,7 @@ def render_recs(user):
     titles = load_titles()
     cats, profile = get_5cat_recommendations(user, titles, n_per_cat=6)
     watchlist = set(load_watchlist(user))
+    user_ratings = load_user_ratings(user)
     
     top_kw = sorted(profile["keywords"].items(), key=lambda x: x[1], reverse=True)[:12]
     top_g = sorted(profile["genres"].items(), key=lambda x: x[1], reverse=True)[:6]
@@ -1923,7 +1924,12 @@ def render_recs(user):
             wl = '<a href="' + BASE + '/watchlist/add/' + iid + '">🤍</a>' if iid not in watchlist else '<a href="' + BASE + '/watchlist/rm/' + iid + '">❤️</a>'
             trailer = ' <a href="' + t.get("trailer","") + '" target="_blank">▶️</a>' if t.get("trailer") else ""
             diverge = ' <span title="Score divergence detected" style="color:#d72">⚠</span>' if score_divergence(t) else ""
-            stars = "".join('<a href="' + BASE + '/rate/' + user + '/' + iid + '/' + str(s) + '" style="text-decoration:none;color:gold" title="' + str(s) + '">' + ("★" if s <= 5 else "☆") + '</a>' for s in range(1, 11))
+            # For rewatch items, show previous rating in blue, allow re-rating
+            prev_rating = user_ratings.get(iid, {}).get("rating", 0) if cat_key == "rewatch" else 0
+            if prev_rating:
+                stars = "".join('<a href="' + BASE + '/rate/' + user + '/' + iid + '/' + str(s) + '" style="text-decoration:none;color:' + ('#4fc3f7' if s <= prev_rating else '#444') + '" title="' + ('Previous: ' if s <= prev_rating else 'Rate ') + str(s) + '">' + "★" + '</a>' for s in range(1, 11))
+            else:
+                stars = "".join('<a href="' + BASE + '/rate/' + user + '/' + iid + '/' + str(s) + '" style="text-decoration:none;color:gold" title="' + str(s) + '">' + ("★" if s <= 5 else "☆") + '</a>' for s in range(1, 11))
             tooltip = t.get("overview","")[:150]
             cards += '<div style="background:var(--card,#16213e);border-radius:10px;padding:12px;display:flex;gap:12px;align-items:start">'
             cards += poster
@@ -2642,7 +2648,7 @@ input{{padding:6px;border-radius:4px;border:1px solid #444;background:#16213e;co
 </head><body><h2>📺 Streaming Catalog — {WATCH_COUNTRY} — {data["count"]} titles</h2>
 <div style="margin-bottom:15px;display:flex;gap:12px"><input id="s" onkeyup="f()" placeholder="Search...">
 <a href="{BASE}/catalog/fetch">↻ Refresh</a> <a href="{BASE}/">← Ratings</a></div>
-{leaving_html}<table><thead><tr><th></th><th>Title</th><th>Year</th><th>TMDB</th><th>On</th><th>Type</th></tr></thead>
+{leaving_html}<table><thead><tr><th></th><th onclick="sortTable(1)">Title</th><th onclick="sortTable(2)">Year</th><th onclick="sortTable(3)">TMDB</th><th>On</th><th onclick="sortTable(5)">Type</th></tr></thead>
 <tbody>{rows}</tbody></table></body></html>"""
 
 # ── HTTP Server ───────────────────────────────────────────────────────
@@ -3016,8 +3022,9 @@ td{{padding:8px;border-bottom:1px solid #333}}a{{color:#4fc3f7;text-decoration:n
             html += nav_bar("ratings", u)
             html += '<div class="page">'
             html += f'<h2>Watched but unrated - {len(unrated)} titles</h2>'
+            html += '<script>function sortTable(n){const tb=document.querySelector("tbody"),rows=[...tb.rows],dir=tb.dataset.sort==n?-1:1;tb.dataset.sort=dir==1?n:"";rows.sort((a,b)=>{let x=a.cells[n].textContent,y=b.cells[n].textContent;return(!isNaN(x)&&!isNaN(y)?(x-y):x.localeCompare(y))*dir});rows.forEach(r=>tb.appendChild(r))}</script>'
             html += '<p style="color:var(--muted)">Movies you watched in Kodi or Trakt but never rated. Click stars to rate.</p>'
-            html += '<table><thead><tr><th></th><th>Title</th><th>Year</th><th>IMDB</th><th>Source</th><th>Plays</th><th>Rate</th></tr></thead>'
+            html += '<table><thead><tr><th></th><th onclick="sortTable(1)">Title</th><th onclick="sortTable(2)">Year</th><th onclick="sortTable(3)">IMDB</th><th onclick="sortTable(4)">Source</th><th onclick="sortTable(5)">Plays</th><th>Rate</th></tr></thead>'
             html += '<tbody>' + rows + '</tbody></table>'
             html += '</div>' + page_foot()
             self._page(html, "ratings", u)
