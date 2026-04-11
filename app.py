@@ -534,8 +534,12 @@ def tmdb_enrich(imdb_id):
     # Cast (top 5 actors)
     credits = api_get(f"https://api.themoviedb.org/3/{kind}/{tmdb_id}/credits?api_key={TMDB_KEY}")
     if credits:
-        cast = [c["name"] for c in (credits.get("cast") or [])[:5]]
+        cast = [c["name"] for c in (credits.get("cast") or [])[:8]]
         if cast: result["cast"] = ", ".join(cast)
+        # Writers (Screenplay, Writer, Story)
+        crew = credits.get("crew") or []
+        writers = [c["name"] for c in crew if c.get("job") in ("Screenplay", "Writer", "Story", "Novel")][:3]
+        if writers: result["writers"] = ", ".join(writers)
         directors = [c["name"] for c in (credits.get("crew") or []) if c.get("job") == "Director"]
         if directors: result["directors"] = ", ".join(directors)
     # Trailer
@@ -1211,7 +1215,7 @@ def trakt_sync_push(user, ratings, titles):
 # ── Recommendation engine ─────────────────────────────────────────────
 def build_taste_profile(user_ratings, titles):
     """Build weighted taste profile from highly-rated titles (6+)."""
-    keyword_scores, genre_scores, director_scores, actor_scores = {}, {}, {}, {}
+    keyword_scores, genre_scores, director_scores, actor_scores, writer_scores = {}, {}, {}, {}, {}
     for iid, r in user_ratings.items():
         if r["rating"] < 6: continue
         t = titles.get(iid, {})
@@ -1227,8 +1231,11 @@ def build_taste_profile(user_ratings, titles):
         for a in (t.get("cast") or "").split(","):
             a = a.strip()
             if a: actor_scores[a] = actor_scores.get(a, 0) + weight
+        for w in (t.get("writers") or "").split(","):
+            w = w.strip()
+            if w: writer_scores[w] = writer_scores.get(w, 0) + weight
     return {"keywords": keyword_scores, "genres": genre_scores,
-            "directors": director_scores, "actors": actor_scores}
+            "directors": director_scores, "actors": actor_scores, "writers": writer_scores}
 
 def score_divergence(title):
     """Detect suspicious score manipulation. Returns True if scores diverge >2.0."""
@@ -1432,7 +1439,7 @@ def anti_recommendations(user, titles, n=10):
     return anti[:n]
 
 def _richness(t):
-    """Score how complete a title's metadata is (0-8). Used to prioritize re-enrichment."""
+    """Score how complete a title's metadata is (0-10). Used to prioritize re-enrichment."""
     score = 0
     if t.get("poster"): score += 2
     if t.get("overview") or t.get("plot"): score += 1
@@ -1441,6 +1448,8 @@ def _richness(t):
     if t.get("tmdb_rating"): score += 1
     if t.get("providers"): score += 1
     if t.get("keywords"): score += 1
+    if t.get("cast"): score += 1
+    if t.get("writers"): score += 1
     return score
 
 def enrich_titles(jid=None, fast=False):
@@ -3106,7 +3115,7 @@ button{{padding:12px 30px;background:#4fc3f7;border:none;border-radius:8px;curso
             iid = parts[-1]
             titles = load_titles()
             t = titles.get(iid, {})
-            results = tastedive_similar(imdb_id, t.get("title", ""))
+            results = tastedive_similar(iid, t.get("title", ""))
             rows = "".join("<tr><td><b>" + r["title"] + "</b></td><td>" + r.get("description","")[:200] + "</td></tr>" for r in results)
             self._html(f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>Similar</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
