@@ -1611,6 +1611,77 @@ def import_letterboxd(user, text):
     print(f"Letterboxd: imported {imported} ratings for {user}")
     return imported
 
+def import_streaming_history(user, service, text):
+    """Import watch history from streaming services into user history."""
+    history = load_user_history(user) or {}
+    titles = load_titles()
+    imported = 0
+    
+    if service == "netflix":
+        # Netflix CSV: Title, Date
+        for row in csv.DictReader(io.StringIO(text)):
+            title = row.get("Title", "")
+            date = row.get("Date", "")
+            if not title: continue
+            # Search TMDB for IMDB ID
+            if TMDB_KEY:
+                data = api_get(f"https://api.themoviedb.org/3/search/multi?api_key={TMDB_KEY}&query={urllib.parse.quote(title[:60])}")
+                if data and data.get("results"):
+                    r = data["results"][0]
+                    kind = r.get("media_type", "movie")
+                    ext = api_get(f"https://api.themoviedb.org/3/{kind}/{r['id']}/external_ids?api_key={TMDB_KEY}")
+                    if ext and ext.get("imdb_id"):
+                        iid = ext["imdb_id"]
+                        history[iid] = {"date": date, "source": "netflix", "title": title}
+                        if iid not in titles:
+                            titles[iid] = {"title": r.get("title") or r.get("name",""), "year": (r.get("release_date") or r.get("first_air_date",""))[:4], "type": kind}
+                        imported += 1
+                time.sleep(0.2)
+    
+    elif service == "prime":
+        # Amazon CSV or JSON
+        if text.strip().startswith("["):
+            for item in json.loads(text):
+                title = item.get("title", "")
+                if title and TMDB_KEY:
+                    data = api_get(f"https://api.themoviedb.org/3/search/multi?api_key={TMDB_KEY}&query={urllib.parse.quote(title[:60])}")
+                    if data and data.get("results"):
+                        r = data["results"][0]
+                        ext = api_get(f"https://api.themoviedb.org/3/{r.get('media_type','movie')}/{r['id']}/external_ids?api_key={TMDB_KEY}")
+                        if ext and ext.get("imdb_id"):
+                            history[ext["imdb_id"]] = {"date": item.get("date",""), "source": "prime", "title": title}
+                            imported += 1
+                    time.sleep(0.2)
+        else:
+            for row in csv.DictReader(io.StringIO(text)):
+                title = row.get("Title", row.get("title", ""))
+                if title:
+                    history["_prime_" + title[:50]] = {"source": "prime", "title": title}
+                    imported += 1
+    
+    elif service == "letterboxd":
+        import_letterboxd(user, text)
+        return 0
+    
+    else:
+        # Generic: one title per line or CSV with Title column
+        if "," in text.split("\n")[0]:
+            for row in csv.DictReader(io.StringIO(text)):
+                title = row.get("Title", row.get("title", row.get("Name", "")))
+                if title:
+                    history["_" + service + "_" + title[:50]] = {"source": service, "title": title}
+                    imported += 1
+        else:
+            for line in text.strip().split("\n"):
+                line = line.strip()
+                if line:
+                    history["_" + service + "_" + line[:50]] = {"source": service, "title": line}
+                    imported += 1
+    
+    save_user_history(user, history)
+    save_titles(titles)
+    return imported
+
 def import_csv(user, text):
     """Import IMDB CSV export. Splits data into shared titles + user ratings."""
     titles = load_titles(); ratings = {}
@@ -1888,6 +1959,11 @@ def render_setup(user):
     # Agent Status
     html += '<h3>Agent Status</h3>'
     html += _render_agent_status()
+    html += '<hr>'
+    
+    # Streaming History Import
+    html += '<h3>Import Streaming History</h3>'
+    html += '<p><a href="' + BASE + '/import/streaming/' + user + '" class="btn btn-primary">Import Netflix / Prime / Disney+ / HBO history</a></p>'
     html += '<hr>'
     
     # Streaming Region
@@ -2779,6 +2855,26 @@ td{{padding:8px;border-bottom:1px solid #333}}a{{color:#4fc3f7;text-decoration:n
             html += '</div>' + page_foot()
             self._page(html, "library", u)
             return
+        elif p.startswith("/import/streaming/"):
+            u = parts[-1]
+            html = page_head(f"Import Streaming History - {u}")
+            html += nav_bar("setup", u)
+            html += '<div class="page"><h2>Import Streaming History</h2>'
+            html += '<div class="grid">'
+            for svc, desc, fmt in [
+                ("netflix", "Netflix", "Download from netflix.com/account → Profile → Viewing Activity → Download all"),
+                ("prime", "Amazon Prime", "Download from amazon.com/gp/video/settings → Download watch history"),
+                ("disney", "Disney+", "Request data export from Disney+ account settings"),
+                ("hbo", "HBO Max", "Request data export from HBO Max account settings"),
+                ("letterboxd", "Letterboxd", "Export from letterboxd.com/settings/data/"),
+            ]:
+                html += f'<div class="card"><h3>{svc.title()}</h3><p style="color:var(--muted);font-size:.85em">{desc}</p>'
+                html += f'<form method="POST" action="{BASE}/import/streaming/{u}/{svc}" enctype="multipart/form-data">'
+                html += f'<input type="file" name="file" accept=".csv,.json,.txt" style="margin:8px 0">'
+                html += f'<button type="submit" class="btn btn-primary">Import</button></form></div>'
+            html += '</div></div>' + page_foot()
+            self._page(html, "setup", u)
+            return
         elif p.startswith("/scraper/"):
             u = parts[-1]
             self._page(render_scraper(u), "library", u)
@@ -2830,6 +2926,42 @@ td{{padding:8px;border-bottom:1px solid #333}}a{{color:#4fc3f7;text-decoration:n
                                 "poster": f"https://image.tmdb.org/t/p/w185{detail['poster_path']}" if detail.get("poster_path") else ""}
                             save_titles(titles)
             self._redirect(f"{BASE}/scraper/{u}")
+            return
+        elif p.startswith("/unrated/"):
+            u = parts[-1]
+            titles = load_titles()
+            ratings = load_user_ratings(u)
+            library = load_user_tmm(u)
+            history = load_user_history(u) if hasattr(__import__('builtins'), '__builtins__') else {}
+            # Combine watched sources
+            watched_ids = set()
+            for iid, info in library.items():
+                if iid.startswith("_") or not isinstance(info, dict): continue
+                if info.get("playcount", 0) > 0 or info.get("watched"): watched_ids.add(iid)
+            for iid in (history or {}):
+                watched_ids.add(iid)
+            unrated = watched_ids - set(ratings.keys())
+            # Build rows
+            rows = ""
+            for iid in sorted(unrated, key=lambda x: titles.get(x, {}).get("title", x)):
+                t = titles.get(iid, {})
+                lib_info = library.get(iid, {})
+                poster = f'<img src="{t["poster"]}" height="60" loading="lazy">' if t.get("poster") else ""
+                imdb = str(t.get("imdb_rating", "")) if t.get("imdb_rating") else ""
+                source = lib_info.get("source", "")
+                plays = lib_info.get("playcount", "")
+                # Inline rating stars
+                stars = "".join('<a href="' + BASE + '/rate/' + u + '/' + iid + '/' + str(s) + '" style="text-decoration:none;color:gold" title="' + str(s) + '">' + ("★" if s <= 5 else "☆") + '</a>' for s in range(1, 11))
+                rows += f'<tr><td>{poster}</td><td><a href="https://www.imdb.com/title/{iid}/" target="_blank">{t.get("title",iid)}</a></td><td>{t.get("year","")}</td><td>{imdb}</td><td>{source}</td><td>{plays}</td><td>{stars}</td></tr>'
+            html = page_head(f"Unrated - {u}")
+            html += nav_bar("ratings", u)
+            html += '<div class="page">'
+            html += f'<h2>Watched but unrated - {len(unrated)} titles</h2>'
+            html += '<p style="color:var(--muted)">Movies you watched in Kodi or Trakt but never rated. Click stars to rate.</p>'
+            html += '<table><thead><tr><th></th><th>Title</th><th>Year</th><th>IMDB</th><th>Source</th><th>Plays</th><th>Rate</th></tr></thead>'
+            html += '<tbody>' + rows + '</tbody></table>'
+            html += '</div>' + page_foot()
+            self._page(html, "ratings", u)
             return
         elif p.startswith("/stats/"):
             u = parts[-1]
@@ -3225,6 +3357,21 @@ button{{padding:10px 20px;background:#4fc3f7;border:none;border-radius:6px;curso
             # Auto-generate tasks for the agent
             task_count = generate_tasks_for_library(user)
             self._json({"status": "ok", "count": len(library), "tasks_generated": task_count})
+            return
+        elif self.path.startswith("/import/streaming/"):
+            # /import/streaming/<user>/<service>
+            user = parts[-2]
+            service = parts[-1]
+            boundary = self.headers["Content-Type"].split("boundary=")[1].encode()
+            raw = b""
+            for part in body.split(b"--" + boundary):
+                if b'name="file"' in part:
+                    raw = part.split(b"\r\n\r\n", 1)[1].rsplit(b"\r\n", 1)[0]
+            if raw:
+                text = raw.decode("utf-8-sig")
+                imported = import_streaming_history(user, service, text)
+                print(f"Imported {imported} from {service} for {user}")
+            self._redirect(f"{BASE}/unrated/{user}")
             return
         elif self.path.startswith("/keys"):
             params = urllib.parse.parse_qs(body.decode())
