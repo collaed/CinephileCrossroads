@@ -551,7 +551,7 @@ def tmdb_enrich(imdb_id):
     kw = api_get(f"https://api.themoviedb.org/3/{kind}/{tmdb_id}/keywords?api_key={TMDB_KEY}")
     if kw:
         kw_list = kw.get("keywords") or kw.get("results") or []
-        result["keywords"] = [k["name"] for k in kw_list[:20]]
+        result["keywords"] = [k["name"] for k in kw_list[:40]]
     # TMDB-recommended similar titles (used to expand recommendation pool)
     sim = api_get(f"https://api.themoviedb.org/3/{kind}/{tmdb_id}/recommendations?api_key={TMDB_KEY}&page=1")
     if sim:
@@ -1257,11 +1257,25 @@ def score_title(title, profile, seasonal=None):
     score = 0
     kw_prof = profile["keywords"]
     g_prof = profile["genres"]
+    # Keywords: full weight (themes, moods, plot elements)
     for kw in title.get("keywords", []):
         score += kw_prof.get(kw, 0)
+    # Genres: half weight (broader, less specific)
     for g in (title.get("genres") or "").split(","):
         g = g.strip()
         if g: score += g_prof.get(g, 0) * 0.5
+    # Directors: strong signal
+    for d in (title.get("directors") or "").split(","):
+        d = d.strip()
+        if d: score += profile.get("directors", {}).get(d, 0) * 2.0
+    # Actors: moderate signal
+    for a in (title.get("cast") or "").split(","):
+        a = a.strip()
+        if a: score += profile.get("actors", {}).get(a, 0) * 1.5
+    # Writers: moderate signal
+    for w in (title.get("writers") or "").split(","):
+        w = w.strip()
+        if w: score += profile.get("writers", {}).get(w, 0) * 1.5
     # Boost for high IMDB/TMDB ratings
     if title.get("imdb_rating"): score *= (0.5 + title["imdb_rating"] / 20)
     if title.get("tmdb_rating"): score *= (0.5 + title["tmdb_rating"] / 20)
@@ -1944,7 +1958,7 @@ def render_recs(user):
             cards += poster
             cards += '<div style="flex:1;min-width:0;overflow:hidden">'
             cards += '<div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis"><b><a href="https://www.imdb.com/title/' + iid + '/" target="_blank" title="' + t.get("overview","")[:150] + '">' + t.get("title","?") + '</a></b> ' + wl + trailer + '</div>'
-            cards += '<div style="color:#888;font-size:.8em">' + str(t.get("year","")) + ' · ' + provs + ' · ' + str(t.get("imdb_rating","")) + '</div>'
+            cards += '<div style="color:#888;font-size:.8em">' + str(t.get("year","")) + ' · ' + provs + ' · ' + str(t.get("imdb_rating","")) + ' · <span style="color:var(--accent)">' + str(score) + '</span></div>'
             cards += '<div style="font-size:.75em">' + stars + '</div>'
             cards += '</div></div>'
         columns += '<div style="min-width:0"><h4 style="margin:0 0 5px;white-space:nowrap">' + cat_title + '</h4>'
@@ -1953,15 +1967,10 @@ def render_recs(user):
     sections = '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:20px;align-items:start">' + columns + '</div>'
     
     user_bar = render_user_bar(user, "recs", False)
-    html = '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Recommendations for ' + user + '</title>'
-    html += '<meta name="viewport" content="width=device-width,initial-scale=1">'
-    html += '<style>body{font-family:-apple-system,sans-serif;margin:20px;background:var(--bg,#1a1a2e);color:var(--fg,#eee)}'
-    html += ':root{--bg:#1a1a2e;--fg:#eee;--card:#16213e}.light{--bg:#f5f5f5;--fg:#222;--card:#fff}'
-    html += 'a{color:#4fc3f7;text-decoration:none}h3{margin-bottom:5px}'
-    html += '@media(max-width:768px){div[style*="grid"]{grid-template-columns:1fr!important}}'
-    html += '</style><script>if(localStorage.getItem("theme")==="light")document.body.classList.add("light")</script></head><body>'
-    html += '<div style="display:flex;justify-content:space-between;align-items:center">'
-    html += '<h2>🎯 Recommendations for ' + user + '</h2><span style="color:#888;font-size:.85em">Movies & TV shows</span>' + user_bar + '</div>'
+    html = page_head("Recommendations for " + user)
+    html += nav_bar("discover", user)
+    html += '<div class="page">'
+    html += '<h2>🎯 Recommendations <span style="color:var(--muted);font-weight:normal;font-size:.6em">Movies & TV shows</span></h2>'
     html += '<details style="margin-bottom:20px"><summary style="cursor:pointer;color:#4fc3f7">Your taste profile</summary>'
     html += '<p><b>Keywords:</b> ' + taste_kw + '</p>'
     html += '<p><b>Genres:</b> ' + taste_g + '</p>'
@@ -1969,7 +1978,7 @@ def render_recs(user):
     html += '<p><b>Actors:</b> ' + taste_a + '</p></details>'
     html += sections
     html += '<p style="margin-top:20px"><a href="' + BASE + '/tonight/' + user + '">🎲 Pick one for tonight</a> · '
-    html += '<a href="' + BASE + '/u/' + user + '">← Ratings</a></p></body></html>'
+    html += '<a href="' + BASE + '/u/' + user + '">← Ratings</a></p></div>' + page_foot()
     return html
 
 
@@ -3110,6 +3119,78 @@ button{{padding:12px 30px;background:#4fc3f7;border:none;border-radius:8px;curso
             if iid in wl: wl.remove(iid)
             save_watchlist(u, wl)
             self._redirect(self.headers.get("Referer", f"{BASE}/u/{u}"))
+            return
+        elif p.startswith("/title/"):
+            iid = parts[-1]
+            titles = load_titles()
+            t = titles.get(iid, {})
+            ratings = load_user_ratings(user)
+            r = ratings.get(iid, {})
+            library = load_user_tmm(user)
+            lib_info = library.get(iid, {})
+            poster = f'<img src="{t.get("poster","")}" style="border-radius:8px;max-height:350px;float:left;margin-right:20px">' if t.get("poster") else ""
+            provs = " ".join(PROVIDER_ICONS.get(p,"") + " " + p for p in t.get("providers", []))
+            watch_link = f'<a href="{t.get("watch_link","")}" target="_blank" class="btn btn-primary">Watch now</a>' if t.get("watch_link") else ""
+            trailer = f'<a href="{t.get("trailer","")}" target="_blank" class="btn">▶️ Trailer</a>' if t.get("trailer") else ""
+            # Rating history
+            rating_html = ""
+            if r:
+                prev = r.get("rating", 0)
+                stars = "".join('<a href="' + BASE + '/rate/' + user + '/' + iid + '/' + str(s) + '" style="text-decoration:none;color:' + ('#4fc3f7' if s <= prev else '#444') + ';font-size:1.5em">' + "★" + '</a>' for s in range(1, 11))
+                rating_html = f'<div style="margin:15px 0"><b>Your rating:</b> {prev}/10 on {r.get("date","?")}<br>{stars}</div>'
+            else:
+                stars = "".join('<a href="' + BASE + '/rate/' + user + '/' + iid + '/' + str(s) + '" style="text-decoration:none;color:gold;font-size:1.5em">' + ("★" if s <= 5 else "☆") + '</a>' for s in range(1, 11))
+                rating_html = f'<div style="margin:15px 0"><b>Rate this:</b><br>{stars}</div>'
+            # Scores
+            scores = []
+            if t.get("imdb_rating"): scores.append(f'IMDB: {t["imdb_rating"]}')
+            if t.get("tmdb_rating"): scores.append(f'TMDB: {t["tmdb_rating"]}')
+            if t.get("rotten_tomatoes"): scores.append(f'🍅 {t["rotten_tomatoes"]}')
+            if t.get("metacritic"): scores.append(f'Metacritic: {t["metacritic"]}')
+            # Local info
+            local_html = ""
+            if lib_info:
+                local_html = '<div class="card" style="margin-top:15px"><h4>💾 Local Library</h4>'
+                local_html += f'<p>Source: {lib_info.get("source","")}'
+                if lib_info.get("quality") or lib_info.get("video_height"): local_html += f' · {lib_info.get("video_height") or lib_info.get("quality","")}p'
+                if lib_info.get("video_codec"): local_html += f' · {lib_info.get("video_codec","")}'
+                if lib_info.get("file_size"): local_html += f' · {int(lib_info["file_size"])/(1024**3):.1f} GB'
+                local_html += '</p>'
+                if lib_info.get("audio"):
+                    audio = lib_info["audio"]
+                    if isinstance(audio, list):
+                        local_html += '<p>Audio: ' + ", ".join(f'{a.get("codec","")} {a.get("channels","")}ch {a.get("language","")}' for a in audio[:4]) + '</p>'
+                if lib_info.get("subtitles"):
+                    subs = lib_info["subtitles"]
+                    if isinstance(subs, list):
+                        local_html += '<p>Subs: ' + ", ".join(s.get("language","") for s in subs[:6]) + '</p>'
+                local_html += '</div>'
+            html = page_head(t.get("title", iid))
+            html += nav_bar("ratings", user)
+            html += '<div class="page">'
+            html += f'<div style="overflow:hidden">{poster}<div>'
+            html += f'<h1>{t.get("title","?")} <span style="color:var(--muted);font-weight:normal">({t.get("year","")})</span></h1>'
+            html += f'<p style="color:var(--muted)">{t.get("genres","")}</p>'
+            html += f'<p>{t.get("overview","") or t.get("plot","")}</p>'
+            # Compute match score for this title
+            profile = build_taste_profile(ratings, titles)
+            
+            match = round(score_title(t, profile), 1) if profile.get("keywords") else 0
+            if match: scores.append(f'Match: <span style="color:var(--accent)">{match}</span>')
+            html += f'<p style="font-size:1.1em">{" · ".join(scores)}</p>\n' 
+            if t.get("awards"): html += f'<p>🏆 {t["awards"]}</p>'
+            if t.get("directors"): html += f'<p><b>Director:</b> {t["directors"]}</p>'
+            if t.get("cast"): html += f'<p><b>Cast:</b> {t["cast"]}</p>'
+            if t.get("writers"): html += f'<p><b>Writers:</b> {t["writers"]}</p>'
+            html += f'<p>{provs}</p>'
+            html += f'<div style="display:flex;gap:8px;margin:10px 0">{watch_link} {trailer} <a href="{BASE}/similar/{iid}" class="btn">🔗 Similar</a> <a href="https://www.imdb.com/title/{iid}/" target="_blank" class="btn">IMDB</a></div>'
+            html += rating_html
+            html += '</div></div>'
+            html += local_html
+            if t.get("keywords"):
+                html += '<p style="margin-top:15px;color:var(--muted);font-size:.85em">Keywords: ' + ", ".join(t["keywords"][:15]) + '</p>'
+            html += '</div>' + page_foot()
+            self._page(html, "ratings", user)
             return
         elif p.startswith("/similar/"):
             iid = parts[-1]
