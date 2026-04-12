@@ -335,16 +335,25 @@ def _apply_task_result(task, result):
                     if lib_info.get("path") == path:
                         lib_info.update({k: v for k, v in info.items() if v})
                         updated = True
-        elif ttype == "exec_code" and task.get("id", "").startswith("nfo_"):
+        elif ttype == "exec_code" and (task.get("id", "").startswith("nfo_") or task_id.startswith("nfo_batch_")):
             # NFO scan results: {dir_path: imdb_id}
+            # Reverse path mappings: //zeus/Movies -> nfs://192.168.0.235/volume1/Movies
+            PATH_MAP = {"//zeus/Movies": "nfs://192.168.0.235/volume1/Movies",
+                        "//zeus/TVShows": "nfs://192.168.0.235/volume1/TVShows",
+                        "//zeus/V_HD": "nfs://192.168.0.235/volume1/V_HD"}
             titles = load_titles()
             for dir_path, iid in data.items():
                 if not iid or not iid.startswith("tt"): continue
-                # Match to library by path prefix
+                # Convert Windows path to NFS path
+                nfs_path = dir_path.replace("\\", "/")
+                for smb, nfs in PATH_MAP.items():
+                    if nfs_path.startswith(smb):
+                        nfs_path = nfs + nfs_path[len(smb):]
+                        break
                 for lib_iid, lib_info in list(library.items()):
                     if lib_iid.startswith("_") or not isinstance(lib_info, dict): continue
-                    lib_path = lib_info.get("path", "").replace("/", os.sep).replace("\\", os.sep)
-                    if dir_path.replace("/", os.sep).replace("\\", os.sep) in lib_path and lib_iid != iid:
+                    lib_path = lib_info.get("path", "")
+                    if nfs_path in lib_path and lib_iid != iid:
                         info = library.pop(lib_iid)
                         info["nfo_matched"] = True
                         library[iid] = info
