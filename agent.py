@@ -512,6 +512,7 @@ def daemon_mode(args, config):
     import threading
     
     base_url = args.server.rstrip("/")
+    config["_server"] = base_url
     headers = {"Content-Type": "application/json", "User-Agent": "CinephileAgent/2.0"}
     
     def sync_loop():
@@ -562,7 +563,7 @@ def daemon_mode(args, config):
         _bg_task["cancel"] = False
         log(f"[bg] Starting {ttype} ({tid})")
         try:
-            result = run_task(ttype, params, config, base_url)
+            result = run_task(ttype, params, config)
             report_result(tid, result)
         except Exception as e:
             log(f"[bg] Error: {e}")
@@ -622,7 +623,7 @@ def daemon_mode(args, config):
                     log(f"[task] {ttype} ({tid})")
                     _last_activity["task"] = ttype
                     _last_activity["time"] = time.strftime("%H:%M:%S")
-                    result = run_task(ttype, params, config, base_url)
+                    result = run_task(ttype, params, config)
                     report_result(tid, result)
                     break  # One task per poll cycle
             except Exception as e:
@@ -648,7 +649,7 @@ def daemon_mode(args, config):
     threading.Thread(target=sync_loop, daemon=True).start()
     task_loop()  # Run task loop in main thread
 
-def run_task(ttype, params, config, base_url=""):
+def run_task(ttype, params, config):
     """Execute a single task from the server."""
     try:
         if ttype == "size_files":
@@ -706,7 +707,7 @@ def run_task(ttype, params, config, base_url=""):
                 print(f"\r[exec] {msg}    ", end="", flush=True)
                 _last_activity["task"] = f"exec: {msg}"
                 _last_activity["time"] = time.strftime("%H:%M:%S")
-            local_vars = {"config": config, "base_url": base_url, "os": os, "json": json, "re": __import__("re"),
+            local_vars = {"config": config, "base_url": config.get("_server", ""), "os": os, "json": json, "re": __import__("re"),
                           "result": {}, "progress": _progress, "log": log}
             exec(code, local_vars)
             print()  # newline after \r progress
