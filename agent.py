@@ -541,12 +541,41 @@ def daemon_mode(args, config):
     
     _start_time = time.time()
 
+    _bg_task = {"running": False, "id": None}
+
+    def report_result(tid, result):
+        """Report task completion to server."""
+        try:
+            req = urllib.request.Request(
+                f"{base_url}/api/tasks/complete/{tid}",
+                data=json.dumps({"result": result}).encode(), headers=headers)
+            urllib.request.urlopen(req, timeout=30)
+            log(f"[task] Done: {tid}")
+        except Exception as e:
+            log(f"[task] Report failed ({tid}): {e}")
+            buffer_result(tid, result)
+
+    def run_bg_task(tid, ttype, params):
+        """Run a long task (exec_code) in background thread."""
+        _bg_task["running"] = True
+        _bg_task["id"] = tid
+        log(f"[bg] Starting {ttype} ({tid})")
+        try:
+            result = run_task(ttype, params, config)
+            report_result(tid, result)
+        except Exception as e:
+            log(f"[bg] Error: {e}")
+            report_result(tid, {"error": str(e)})
+        _bg_task["running"] = False
+        _bg_task["id"] = None
+        log(f"[bg] Finished {tid}")
+
     def task_loop():
         consecutive_errors = 0
         """Poll server for tasks and execute them."""
         while True:
             try:
-                # Handshake: report status via separate call, then fetch tasks
+                # Handshake: report status
                 try:
                     import base64
                     status = json.dumps({
@@ -555,40 +584,43 @@ def daemon_mode(args, config):
                         "recent_logs": get_recent_logs(10),
                         "uptime": int(time.time() - _start_time),
                         "consecutive_errors": consecutive_errors,
+                        "bg_task": _bg_task.get("id"),
                     })
                     encoded = base64.b64encode(status.encode()).decode()
                     sreq = urllib.request.Request(f"{base_url}/api/agent_status?s={encoded}", headers=headers)
                     urllib.request.urlopen(sreq, timeout=5)
                 except: pass
-                # Flush any buffered results first
                 flush_buffer(base_url, headers)
-                # Fetch tasks via GET
+                # Fetch tasks
                 req = urllib.request.Request(f"{base_url}/api/tasks", headers=headers)
                 resp = urllib.request.urlopen(req, timeout=10)
                 tasks = json.loads(resp.read()).get("tasks", [])
-                
+
                 for task in tasks:
                     tid, ttype = task["id"], task["type"]
                     params = task.get("params", {})
+                    # Skip if this task is already running in background
+                    if tid == _bg_task.get("id"):
+                        continue
+                    # Long-running tasks: run in background thread
+                    if ttype == "exec_code":
+                        if _bg_task["running"]:
+                            log(f"[task] Skipping {tid} - bg task already running")
+                            continue
+                        threading.Thread(target=run_bg_task, args=(tid, ttype, params), daemon=True).start()
+                        continue
+                    # Normal tasks: run inline, one at a time
                     log(f"[task] {ttype} ({tid})")
                     _last_activity["task"] = ttype
                     _last_activity["time"] = time.strftime("%H:%M:%S")
                     result = run_task(ttype, params, config)
-                    # Report completion
-                    try:
-                        req = urllib.request.Request(
-                            f"{base_url}/api/tasks/complete/{tid}",
-                            data=json.dumps({"result": result}).encode(), headers=headers)
-                        urllib.request.urlopen(req, timeout=10)
-                        log(f"[task] Done: {ttype} -> {result.get('error', 'ok')}")
-                    except Exception as e:
-                        log(f"[task] Report failed: {e}")
+                    report_result(tid, result)
+                    break  # One task per poll cycle
             except Exception as e:
                 if consecutive_errors == 0:
                     log(f"[task] Connection lost: {e}")
                 consecutive_errors += 1
                 _last_activity["errors"] = consecutive_errors
-                # Back off: 15s, 30s, 60s, then cap at 60s
                 wait = min(15 * (2 ** min(consecutive_errors - 1, 2)), 60)
                 if consecutive_errors % 4 == 0:
                     log(f"[task] Still retrying... ({consecutive_errors} attempts)")
@@ -598,7 +630,7 @@ def daemon_mode(args, config):
                 log(f"[task] Reconnected after {consecutive_errors} errors")
             consecutive_errors = 0
             _last_activity["errors"] = 0
-            time.sleep(15)  # Check every 15s
+            time.sleep(15)
     
     log(f"Agent daemon - server: {base_url}, user: {args.user}")
     log(f"  Sync thread: every 30 min")
