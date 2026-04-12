@@ -118,7 +118,7 @@ a{color:var(--accent);text-decoration:none}img{border-radius:4px}
 
 SHARED_JS = ('<script>'
     'if(localStorage.getItem("theme")==="light")document.body.classList.add("light");'
-    'function sortTable(n){var tb=document.querySelector("tbody");if(!tb)return;var rows=[].slice.call(tb.rows),dir=tb.dataset.sort==n?-1:1;tb.dataset.sort=dir==1?n:"";rows.sort(function(a,b){var x=a.cells[n].dataset.sort||a.cells[n].textContent,y=b.cells[n].dataset.sort||b.cells[n].textContent;return(!isNaN(x)&&!isNaN(y)?(x-y):x.localeCompare(y))*dir});rows.forEach(function(r){tb.appendChild(r)})}'
+    'function sortTable(n){var tb=document.querySelector("tbody");if(!tb)return;var rows=[].slice.call(tb.rows),dir=tb.dataset.sort==n?-1:1;tb.dataset.sort=dir==1?n:"";rows.sort(function(a,b){var x=a.cells[n].dataset.sort||a.cells[n].textContent,y=b.cells[n].dataset.sort||b.cells[n].textContent;x=isNaN(x)?x:Number(x);y=isNaN(y)?y:Number(y);return(typeof x==="number"&&typeof y==="number"?(x-y):(String(x)).localeCompare(String(y),undefined,{numeric:true}))*dir});rows.forEach(function(r){tb.appendChild(r)})}'
     'function filterTable(){var q=(document.getElementById("s")||{}).value;q=q?q.toLowerCase():"";var rows=document.querySelectorAll("tbody tr");rows.forEach(function(r){r.style.display=r.textContent.toLowerCase().indexOf(q)>=0?"":"none"})}'
     '</script>')
 
@@ -1909,7 +1909,7 @@ input,select{{padding:6px;border-radius:4px;border:1px solid #444;background:#16
 <script>function f(){{const q=document.getElementById('s').value.toLowerCase(),g=document.getElementById('g').value,mr=document.getElementById('mr').value,st=document.getElementById('st').value,dec=document.getElementById('dec').value;
 document.querySelectorAll('tbody tr').forEach(r=>r.style.display=(r.textContent.toLowerCase().includes(q)&&(!g||r.dataset.g.includes(g))&&(!mr||parseInt(r.dataset.r)>=parseInt(mr))&&(!st||r.dataset.s.includes(st))&&(!dec||r.dataset.d===dec)&&(!vs||r.dataset.vs===vs))?'':'none')}}
 function sortTable(n){{const tb=document.querySelector('tbody'),rows=[...tb.rows],dir=tb.dataset.sort==n?-1:1;tb.dataset.sort=dir==1?n:'';
-rows.sort((a,b)=>{{let x=a.cells[n].textContent,y=b.cells[n].textContent;return(!isNaN(x)&&!isNaN(y)?(x-y):x.localeCompare(y))*dir}});rows.forEach(r=>tb.appendChild(r))}}</script></head><body>
+rows.sort((a,b)=>{{let x=a.cells[n].textContent,y=b.cells[n].textContent;return(typeof x==="number"&&typeof y==="number"?(x-y):(String(x)).localeCompare(String(y),undefined,{numeric:true}))*dir}});rows.forEach(r=>tb.appendChild(r))}}</script></head><body>
 {job_banner}
 <div style="display:flex;justify-content:space-between;align-items:center"><h2>🎬 {user}'s Ratings — {len(ratings)} titles</h2>{render_user_bar(user)}</div>
 <div class="bar"><input id="s" onkeyup="f()" placeholder="Search..." style="width:220px">
@@ -2370,7 +2370,7 @@ def render_tvshows(user):
     html += render_library_nav(user, "tvshows")
     html += '<div class="page">'
     html += '<script>function f(){const q=document.getElementById("s").value.toLowerCase();document.querySelectorAll("tbody tr").forEach(r=>r.style.display=r.textContent.toLowerCase().includes(q)?"":"none")}</script>'
-    html += '<script>function sortTable(n){const tb=document.querySelector("tbody"),rows=[...tb.rows],dir=tb.dataset.sort==n?-1:1;tb.dataset.sort=dir==1?n:"";rows.sort((a,b)=>{let x=a.cells[n].textContent,y=b.cells[n].textContent;return(!isNaN(x)&&!isNaN(y)?(x-y):x.localeCompare(y))*dir});rows.forEach(r=>tb.appendChild(r))}'
+    html += '<script>function sortTable(n){const tb=document.querySelector("tbody"),rows=[...tb.rows],dir=tb.dataset.sort==n?-1:1;tb.dataset.sort=dir==1?n:"";rows.sort((a,b)=>{let x=a.cells[n].textContent,y=b.cells[n].textContent;return(typeof x==="number"&&typeof y==="number"?(x-y):(String(x)).localeCompare(String(y),undefined,{numeric:true}))*dir});rows.forEach(r=>tb.appendChild(r))}'
     html += 'function rate(el,user,iid,score){fetch("' + BASE + '/rate/"+user+"/"+iid+"/"+score).then(()=>{const row=el.closest("tr");const stars=row.querySelectorAll("a[href*=rate]");stars.forEach((s,i)=>{s.style.color=i<score?"#4fc3f7":"#444"});row.style.opacity="0.6"})}'
     html += '</script>'
     html += '</head><body>'
@@ -3138,7 +3138,7 @@ td{{padding:8px;border-bottom:1px solid #333}}a{{color:#4fc3f7;text-decoration:n
             html += nav_bar("ratings", u)
             html += '<div class="page">'
             html += f'<h2>Watched but unrated - {len(unrated)} titles</h2>'
-            html += '<script>function sortTable(n){const tb=document.querySelector("tbody"),rows=[...tb.rows],dir=tb.dataset.sort==n?-1:1;tb.dataset.sort=dir==1?n:"";rows.sort((a,b)=>{let x=a.cells[n].textContent,y=b.cells[n].textContent;return(!isNaN(x)&&!isNaN(y)?(x-y):x.localeCompare(y))*dir});rows.forEach(r=>tb.appendChild(r))}'
+            html += '<script>function sortTable(n){const tb=document.querySelector("tbody"),rows=[...tb.rows],dir=tb.dataset.sort==n?-1:1;tb.dataset.sort=dir==1?n:"";rows.sort((a,b)=>{let x=a.cells[n].textContent,y=b.cells[n].textContent;return(typeof x==="number"&&typeof y==="number"?(x-y):(String(x)).localeCompare(String(y),undefined,{numeric:true}))*dir});rows.forEach(r=>tb.appendChild(r))}'
             html += 'function rate(el,user,iid,score){fetch("' + BASE + '/rate/"+user+"/"+iid+"/"+score).then(()=>{const row=el.closest("tr");const stars=row.querySelectorAll("a[href*=rate]");stars.forEach((s,i)=>{s.style.color=i<score?"#4fc3f7":"#444"});row.style.opacity="0.6"})}'
             html += '</script>'
             html += '<p style="color:var(--muted)">Movies you watched in Kodi or Trakt but never rated. Click stars to rate.</p>'
@@ -3239,7 +3239,7 @@ button{{padding:12px 30px;background:#4fc3f7;border:none;border-radius:8px;curso
             html += '<p style="color:var(--muted)">Titles where the IMDB match doesn\'t match the filename. Low % = likely wrong match.</p>'
             html += '<table><thead><tr><th onclick="sortTable(0)">IMDB Title</th><th>Filename</th><th onclick="sortTable(2)">Match</th><th></th></tr></thead>'
             html += '<tbody>' + rows + '</tbody></table>'
-            html += '<script>function sortTable(n){const tb=document.querySelector("tbody"),rows=[...tb.rows],dir=tb.dataset.sort==n?-1:1;tb.dataset.sort=dir==1?n:"";rows.sort((a,b)=>{let x=a.cells[n].textContent,y=b.cells[n].textContent;return(!isNaN(x)&&!isNaN(y)?(x-y):x.localeCompare(y))*dir});rows.forEach(r=>tb.appendChild(r))}</script>'
+            html += '<script>function sortTable(n){const tb=document.querySelector("tbody"),rows=[...tb.rows],dir=tb.dataset.sort==n?-1:1;tb.dataset.sort=dir==1?n:"";rows.sort((a,b)=>{let x=a.cells[n].textContent,y=b.cells[n].textContent;return(typeof x==="number"&&typeof y==="number"?(x-y):(String(x)).localeCompare(String(y),undefined,{numeric:true}))*dir});rows.forEach(r=>tb.appendChild(r))}</script>'
             html += '</div>' + page_foot()
             self._page(html, "library", u)
             return
