@@ -629,7 +629,7 @@ def parse_movie_filename(filename):
     else:
         title = name
     title = _re.sub(r"[\.\-_]", " ", title).strip()
-    title = _re.sub(r"\s+", " ", title)
+    title = _re.sub(r"\s+", " ", title).rstrip("( ")
     return {"title": title, "year": year, "quality": quality, "is_3d": is_3d, "filename": filename}
 
 def identify_movie(parsed, imdb_cache=None):
@@ -2615,6 +2615,13 @@ def render_scraper(user):
         parsed = parse_movie_filename(info.get("path", "")) if info.get("path") else {"title": "", "year": ""}
         unmatched.append((iid, info, parsed))
     
+    # Try auto-matching unmatched against IMDB dataset
+    imdb_by_title = {}
+    if hasattr(parse_movie_filename, '__self__') or True:
+        for tid, t in (_imdb_cache or {}).items():
+            key = (t.get("title","").lower(), str(t.get("year","")))
+            imdb_by_title.setdefault(key, []).append((tid, t))
+
     rows = ""
     for iid, info, parsed in unmatched[:100]:
         path = info.get("path", "")
@@ -2623,9 +2630,16 @@ def render_scraper(user):
         year_guess = parsed.get("year", "")
         quality = parsed.get("quality", "")
         is_3d = parsed.get("is_3d", "")
-        search_q = urllib.parse.quote(f"{title_guess} {year_guess}".strip())
+        # Auto-proposal from IMDB dataset
+        proposal = ""
+        key = (title_guess.lower(), year_guess)
+        candidates = imdb_by_title.get(key, [])
+        if candidates:
+            best = candidates[0]
+            proposal = f'<a href="{BASE}/scraper-apply/{user}/{iid}/{best[0]}/imdb" class="btn" style="background:#2a5" title="{best[0]}">✅ {best[1].get("title","")} ({best[1].get("year","")})</a>'
         rows += f'<tr><td class="x" style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="{path}">{short_path}</td>'
         rows += f'<td>{title_guess}</td><td>{year_guess}</td><td>{quality} {is_3d or ""}</td>'
+        rows += f'<td>{proposal}</td>'
         rows += f'<td><form method="GET" action="{BASE}/scraper-match/{user}/{iid}" style="display:flex;gap:4px"><input name="q" value="{title_guess}" style="width:150px;padding:4px"><button type="submit" class="btn">🔍</button></form></td></tr>'
     
     html = page_head(f"Scraper - {user}")
@@ -2638,7 +2652,7 @@ def render_scraper(user):
     html += '<div class="page">'
     html += f'<div class="grid"><div class="card card-stat"><div class="num">{matched_count}</div>matched</div>'
     html += f'<div class="card card-stat"><div class="num" style="color:var(--warn)">{len(unmatched)}</div>unmatched</div></div>'
-    html += '<table><thead><tr><th>File</th><th>Title (guess)</th><th>Year</th><th>Quality</th><th>Match</th></tr></thead>'
+    html += '<table><thead><tr><th>File</th><th>Title (guess)</th><th>Year</th><th>Quality</th><th>Proposal</th><th>Search</th></tr></thead>'
     html += '<tbody>' + rows + '</tbody></table>'
     html += '</div>' + page_foot()
     return html
@@ -3076,8 +3090,19 @@ td{{padding:8px;border-bottom:1px solid #333}}a{{color:#4fc3f7;text-decoration:n
             # /scraper-apply/<user>/<library_imdb_id>/<tmdb_id>/<type>
             u = parts[-4]
             old_iid = parts[-3]
-            tmdb_id = int(parts[-2])
+            new_id = parts[-2]
             kind = parts[-1]
+            # Direct IMDB match (from dataset proposal)
+            if kind == "imdb":
+                library = load_user_tmm(u)
+                if old_iid in library:
+                    info = library.pop(old_iid)
+                    info["matched"] = True
+                    library[new_id] = info
+                    save_user_tmm(u, library)
+                self._redirect(f"{BASE}/scraper/{u}")
+                return
+            tmdb_id = int(new_id)
             # Look up IMDB ID from TMDB
             ext = api_get(f"https://api.themoviedb.org/3/{kind}/{tmdb_id}/external_ids?api_key={TMDB_KEY}")
             if ext and ext.get("imdb_id"):
