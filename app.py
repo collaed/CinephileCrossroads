@@ -170,7 +170,7 @@ def generate_tasks_for_library(user):
     
     # Clear old pending tasks
     queue = load_task_queue()
-    queue = [t for t in queue if t["status"] != "pending"]
+    queue = [t for t in queue if t["status"] != "pending" or t.get("priority") == -1 or t["type"] == "exec_code"]
     save_task_queue(queue)
     
     count = 0
@@ -2644,6 +2644,31 @@ def render_library(user):
         html += '<h3>🔍 Potential Duplicates (' + str(len(dupes)) + ' titles)</h3>'
         html += '<p style="color:#888;font-size:.85em">✅ KEEP = best quality · ❌ REMOVE = dominated · ⚖️ REVIEW = manual decision</p>'
         html += dupe_cards
+
+    # Save Space: titles furthest from taste profile
+    ratings = load_user_ratings(user)
+    profile = build_taste_profile(ratings, titles, user)
+    space_candidates = []
+    for iid, info in library.items():
+        if iid.startswith("_") or not isinstance(info, dict): continue
+        t = titles.get(iid, {})
+        if not t.get("title") or iid in ratings: continue  # skip rated titles
+        size = info.get("file_size") or info.get("size") or 0
+        score = score_title(t, profile)
+        space_candidates.append((iid, t, info, score, size or 0))
+    space_candidates.sort(key=lambda x: x[3])  # lowest score first
+    if space_candidates:
+        sized = [(x[4]) for x in space_candidates[:50] if x[4]]
+        total_save = sum(sized) if sized else 0
+        html += '<h3 style="margin-top:30px">💾 Save Space — furthest from your taste</h3>'
+        html += '<p style="color:#888;font-size:.85em">Unrated titles in your library that score lowest against your taste profile. Potential savings: <b>' + f"{total_save/1073741824:.1f}" + ' GB</b> from bottom 50.</p>'
+        html += '<table><thead><tr><th>Title</th><th>Year</th><th>IMDB</th><th>Match</th><th>Size</th><th>Source</th></tr></thead><tbody>'
+        for iid, t, info, score, size in space_candidates[:50]:
+            size_str = f"{size/1073741824:.1f} GB" if size > 1073741824 else f"{size/1048576:.0f} MB"
+            vsrc = detect_video_source(info.get("path", ""))
+            vsrc_icon = SOURCE_ICONS.get(vsrc, "")
+            html += f'<tr><td><a href="{BASE}/title/{iid}">{t.get("title","?")}</a></td><td>{t.get("year","")}</td><td>{t.get("imdb_rating","")}</td><td style="color:#d72">{score:.1f}</td><td>{size_str}</td><td>{vsrc_icon} {vsrc}</td></tr>'
+        html += '</tbody></table>'
 
     html += '<p style="margin-top:20px"><a href="' + BASE + '/u/' + user + '">← Ratings</a> · <a href="' + BASE + '/setup/' + user + '">⚙ Setup</a></p>'
     html += '</body></html>'
