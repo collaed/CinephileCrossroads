@@ -1530,13 +1530,29 @@ def enrich_titles(jid=None, fast=False):
     Saves incrementally every 50 titles. Runs as background job."""
     titles = load_titles()
     never = [(k, v) for k, v in titles.items() if not v.get("_enriched")]
-    partial = sorted([(k, v) for k, v in titles.items() if v.get("_enriched") and _richness(v) < 5],
+    # Priority: titles visible on recs/save-space that lack keywords or cast
+    visible_ids = set()
+    for user in list_users():
+        ratings = load_user_ratings(user)
+        profile = build_taste_profile(ratings, titles, user)
+        library = load_user_tmm(user)
+        for iid in library:
+            if iid.startswith("_") or iid in ratings: continue
+            visible_ids.add(iid)
+        for iid, t in titles.items():
+            if iid not in ratings and t.get("_enriched"):
+                visible_ids.add(iid)
+    visible = [(k, titles[k]) for k in visible_ids
+               if k in titles and titles[k].get("_enriched") and (not titles[k].get("keywords") or not titles[k].get("cast"))]
+    partial = sorted([(k, v) for k, v in titles.items() if v.get("_enriched") and _richness(v) < 5
+                      and k not in {x[0] for x in visible}],
                      key=lambda x: _richness(x[1]))
     # FIFO: re-enrich the 50 oldest-enriched titles regardless of age
     stale = sorted([(k, v) for k, v in titles.items()
                     if v.get("_enriched") and v.get("_enriched_ts") and _richness(v) >= 5],
                    key=lambda x: x[1].get("_enriched_ts", ""))[:50]
-    todo = never + partial + stale
+    todo = never + visible + partial + stale
+    print(f"  Enrich queue: {len(never)} new, {len(visible)} visible priority, {len(partial)} partial, {len(stale)} stale")
     total = len(todo)
     count = 0
     cache = load_imdb_cache()
@@ -1959,7 +1975,7 @@ input,select{{padding:6px;border-radius:4px;border:1px solid #444;background:#16
 <script>function f(){{const q=document.getElementById('s').value.toLowerCase(),g=document.getElementById('g').value,mr=document.getElementById('mr').value,st=document.getElementById('st').value,dec=document.getElementById('dec').value;
 document.querySelectorAll('tbody tr').forEach(r=>r.style.display=(r.textContent.toLowerCase().includes(q)&&(!g||r.dataset.g.includes(g))&&(!mr||parseInt(r.dataset.r)>=parseInt(mr))&&(!st||r.dataset.s.includes(st))&&(!dec||r.dataset.d===dec)&&(!vs||r.dataset.vs===vs))?'':'none')}}
 function sortTable(n){{const tb=document.querySelector('tbody'),rows=[...tb.rows],dir=tb.dataset.sort==n?-1:1;tb.dataset.sort=dir==1?n:'';
-rows.sort((a,b)=>{{let x=a.cells[n].textContent,y=b.cells[n].textContent;return(typeof x==="number"&&typeof y==="number"?(x-y):(String(x)).localeCompare(String(y),undefined,{numeric:true}))*dir}});rows.forEach(r=>tb.appendChild(r))}}</script></head><body>
+rows.sort((a,b)=>{{let x=a.cells[n].textContent,y=b.cells[n].textContent;return(typeof x==="number"&&typeof y==="number"?(x-y):(String(x)).localeCompare(String(y),undefined,{{numeric:true}}))*dir}});rows.forEach(r=>tb.appendChild(r))}}</script></head><body>
 {job_banner}
 <div style="display:flex;justify-content:space-between;align-items:center"><h2>🎬 {user}'s Ratings — {len(ratings)} titles</h2>{render_user_bar(user)}</div>
 <div class="bar"><input id="s" onkeyup="f()" placeholder="Search..." style="width:220px">
