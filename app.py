@@ -2609,7 +2609,7 @@ def render_scraper(user):
     matched_count = 0
     for iid, info in library.items():
         if iid.startswith("_") or not isinstance(info, dict): continue
-        if iid in titles and titles[iid].get("poster"):
+        if iid in titles and titles[iid].get("title"):
             matched_count += 1
             continue
         parsed = parse_movie_filename(info.get("path", "")) if info.get("path") else {"title": "", "year": ""}
