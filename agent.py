@@ -707,7 +707,7 @@ def run_task(ttype, params, config):
                 print(f"\r[exec] {msg}    ", end="", flush=True)
                 _last_activity["task"] = f"exec: {msg}"
                 _last_activity["time"] = time.strftime("%H:%M:%S")
-            local_vars = {"config": config, "base_url": config.get("_server", ""), "os": os, "json": json, "re": __import__("re"),
+            local_vars = {"config": config, "base_url": config.get("_server", ""), "agent_headers": {"Content-Type": "application/json", "User-Agent": "CinephileAgent/2.0"}, "os": os, "json": json, "re": __import__("re"),
                           "result": {}, "progress": _progress, "log": log}
             exec(code, local_vars)
             print()  # newline after \r progress
