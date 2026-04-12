@@ -290,6 +290,10 @@ def complete_task(task_id, result=None):
             t["result"] = result
             t["completed"] = time.strftime("%Y-%m-%d %H:%M:%S")
             task = t
+    # Handle NFO batch results (no matching task)
+    if not task and task_id.startswith("nfo_batch_") and result:
+        fake_task = {"id": task_id, "type": "exec_code", "params": {}}
+        _apply_task_result(fake_task, result)
     # Feed results back into library data
     if task and result and not result.get("error"):
         _apply_task_result(task, result)
