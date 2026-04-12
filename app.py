@@ -2628,7 +2628,7 @@ def render_scraper(user):
     library = load_user_tmm(user)
     titles = load_titles()
     
-    # Find unmatched: in library but not in titles store, or no poster
+    # Find unmatched: in library but not in titles store
     unmatched = []
     matched_count = 0
     for iid, info in library.items():
@@ -2638,6 +2638,21 @@ def render_scraper(user):
             continue
         parsed = parse_movie_filename(info.get("path", "")) if info.get("path") else {"title": "", "year": ""}
         unmatched.append((iid, info, parsed))
+    # Add fully-watched TV shows not linked to any tt ID
+    eps = library.get("_episodes", {})
+    show_stats = {}
+    for ep in eps.values():
+        if not isinstance(ep, dict): continue
+        show = ep.get("showtitle", "")
+        if not show: continue
+        show_stats.setdefault(show, [0, 0])
+        show_stats[show][0] += 1
+        if ep.get("playcount", 0) > 0: show_stats[show][1] += 1
+    title_to_iid = {t.get("title", "").lower(): iid for iid, t in titles.items() if t.get("type") in ("tvSeries", "tvMiniSeries", "tv")}
+    for show_name, (total, watched) in show_stats.items():
+        if show_name.lower() not in title_to_iid:
+            pct = watched * 100 // total if total else 0
+            unmatched.append(("_show_" + show_name, {"path": show_name, "show": True}, {"title": show_name, "year": "", "quality": f"📺 {watched}/{total} ({pct}%)", "is_3d": None}))
     
     # Try auto-matching unmatched against IMDB dataset
     imdb_by_title = {}
@@ -2658,6 +2673,8 @@ def render_scraper(user):
         proposal = ""
         key = (title_guess.lower(), year_guess)
         candidates = imdb_by_title.get(key, [])
+        if not candidates and not year_guess:
+            candidates = [(tid, t) for tid, t in (_imdb_cache or {}).items() if t.get("title","").lower() == title_guess.lower() and t.get("type") in ("tvSeries", "tvMiniSeries")][:1]
         if candidates:
             best = candidates[0]
             proposal = f'<a href="{BASE}/scraper-apply/{user}/{iid}/{best[0]}/imdb" class="btn" style="background:#2a5" title="{best[0]}">✅ {best[1].get("title","")} ({best[1].get("year","")})</a>'
