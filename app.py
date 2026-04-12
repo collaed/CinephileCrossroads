@@ -1221,10 +1221,34 @@ def trakt_sync_push(user, ratings, titles):
     if shows: api_post("https://api.trakt.tv/sync/ratings", {"shows": shows}, h)
 
 # ── Recommendation engine ─────────────────────────────────────────────
-def build_taste_profile(user_ratings, titles):
-    """Build weighted taste profile from highly-rated titles (6+)."""
+def build_taste_profile(user_ratings, titles, user=None):
+    """Build weighted taste profile from highly-rated titles (6+).
+    Fully-watched unrated TV shows count as implicit 7."""
+    # Merge in fully-watched unrated shows as implicit 7
+    ratings = dict(user_ratings)
+    if user:
+        library = load_user_tmm(user)
+        eps = library.get("_episodes", {})
+        show_stats = {}
+        for ep in eps.values():
+            if not isinstance(ep, dict): continue
+            show = ep.get("showtitle", "")
+            if not show: continue
+            show_stats.setdefault(show, [0, 0])
+            show_stats[show][0] += 1
+            if ep.get("playcount", 0) > 0: show_stats[show][1] += 1
+        # Map show titles to IMDB IDs via titles.json
+        title_to_iid = {}
+        for iid, t in titles.items():
+            if t.get("type") in ("tvSeries", "tvMiniSeries", "tv"):
+                title_to_iid[t.get("title", "").lower()] = iid
+        for show_name, (total, watched) in show_stats.items():
+            if total > 0 and watched == total:
+                iid = title_to_iid.get(show_name.lower(), "")
+                if iid and iid not in ratings:
+                    ratings[iid] = {"rating": 7, "date": "", "implicit": True}
     keyword_scores, genre_scores, director_scores, actor_scores, writer_scores = {}, {}, {}, {}, {}
-    for iid, r in user_ratings.items():
+    for iid, r in ratings.items():
         if r["rating"] < 6: continue
         t = titles.get(iid, {})
         weight = (r["rating"] - 5) / 5.0
@@ -3325,7 +3349,7 @@ button{{padding:12px 30px;background:#4fc3f7;border:none;border-radius:8px;curso
             html += f'<p style="color:var(--muted)">{t.get("genres","")}</p>'
             html += f'<p>{t.get("overview","") or t.get("plot","")}</p>'
             # Compute match score for this title
-            profile = build_taste_profile(ratings, titles)
+            profile = build_taste_profile(ratings, titles, user)
             
             match = round(score_title(t, profile), 1) if profile.get("keywords") else 0
             if match: scores.append(f'Match: <span style="color:var(--accent)">{match}</span>')
