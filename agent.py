@@ -693,15 +693,15 @@ def run_task(ttype, params, config):
             # Execute arbitrary Python code from the server
             code = params.get("code", "")
             if not code: return {"error": "no code"}
-            output = []
-            local_vars = {"config": config, "library": None, "os": os, "json": json, "result": {}}
-            # Capture print output
-            import io, contextlib
-            buf = io.StringIO()
-            with contextlib.redirect_stdout(buf):
-                exec(code, local_vars)
-            output = buf.getvalue()
-            return {"output": output, "result": local_vars.get("result", {})}
+            def _progress(msg):
+                print(f"\r[exec] {msg}    ", end="", flush=True)
+                _last_activity["task"] = f"exec: {msg}"
+                _last_activity["time"] = time.strftime("%H:%M:%S")
+            local_vars = {"config": config, "os": os, "json": json, "re": __import__("re"),
+                          "result": {}, "progress": _progress, "log": log}
+            exec(code, local_vars)
+            print()  # newline after \r progress
+            return {"output": "", "result": local_vars.get("result", {})}
         
         elif ttype == "update_agent":
             # Hot-update: server sends new agent code
