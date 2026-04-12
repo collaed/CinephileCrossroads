@@ -562,7 +562,7 @@ def daemon_mode(args, config):
         _bg_task["cancel"] = False
         log(f"[bg] Starting {ttype} ({tid})")
         try:
-            result = run_task(ttype, params, config)
+            result = run_task(ttype, params, config, base_url)
             report_result(tid, result)
         except Exception as e:
             log(f"[bg] Error: {e}")
@@ -622,7 +622,7 @@ def daemon_mode(args, config):
                     log(f"[task] {ttype} ({tid})")
                     _last_activity["task"] = ttype
                     _last_activity["time"] = time.strftime("%H:%M:%S")
-                    result = run_task(ttype, params, config)
+                    result = run_task(ttype, params, config, base_url)
                     report_result(tid, result)
                     break  # One task per poll cycle
             except Exception as e:
@@ -648,7 +648,7 @@ def daemon_mode(args, config):
     threading.Thread(target=sync_loop, daemon=True).start()
     task_loop()  # Run task loop in main thread
 
-def run_task(ttype, params, config):
+def run_task(ttype, params, config, base_url=""):
     """Execute a single task from the server."""
     try:
         if ttype == "size_files":
