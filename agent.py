@@ -541,7 +541,7 @@ def daemon_mode(args, config):
     
     _start_time = time.time()
 
-    _bg_task = {"running": False, "id": None}
+    _bg_task = {"running": False, "id": None, "cancel": False, "thread": None}
 
     def report_result(tid, result):
         """Report task completion to server."""
@@ -559,6 +559,7 @@ def daemon_mode(args, config):
         """Run a long task (exec_code) in background thread."""
         _bg_task["running"] = True
         _bg_task["id"] = tid
+        _bg_task["cancel"] = False
         log(f"[bg] Starting {ttype} ({tid})")
         try:
             result = run_task(ttype, params, config)
@@ -605,9 +606,17 @@ def daemon_mode(args, config):
                     # Long-running tasks: run in background thread
                     if ttype == "exec_code":
                         if _bg_task["running"]:
-                            log(f"[task] Skipping {tid} - bg task already running")
-                            continue
-                        threading.Thread(target=run_bg_task, args=(tid, ttype, params), daemon=True).start()
+                            if tid == _bg_task["id"]:
+                                continue  # same task, skip
+                            # New exec_code: cancel the old one
+                            log(f"[task] Cancelling bg task {_bg_task['id']} for {tid}")
+                            _bg_task["cancel"] = True
+                            if _bg_task.get("thread"):
+                                _bg_task["thread"].join(timeout=5)
+                            _bg_task["running"] = False
+                        t = threading.Thread(target=run_bg_task, args=(tid, ttype, params), daemon=True)
+                        _bg_task["thread"] = t
+                        t.start()
                         continue
                     # Normal tasks: run inline, one at a time
                     log(f"[task] {ttype} ({tid})")
