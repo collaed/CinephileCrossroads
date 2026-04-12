@@ -706,7 +706,7 @@ def run_task(ttype, params, config):
                 print(f"\r[exec] {msg}    ", end="", flush=True)
                 _last_activity["task"] = f"exec: {msg}"
                 _last_activity["time"] = time.strftime("%H:%M:%S")
-            local_vars = {"config": config, "os": os, "json": json, "re": __import__("re"),
+            local_vars = {"config": config, "base_url": base_url, "os": os, "json": json, "re": __import__("re"),
                           "result": {}, "progress": _progress, "log": log}
             exec(code, local_vars)
             print()  # newline after \r progress
