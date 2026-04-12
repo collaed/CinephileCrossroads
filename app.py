@@ -2640,7 +2640,9 @@ def render_scraper(user):
         rows += f'<tr><td class="x" style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="{path}">{short_path}</td>'
         rows += f'<td>{title_guess}</td><td>{year_guess}</td><td>{quality} {is_3d or ""}</td>'
         rows += f'<td>{proposal}</td>'
-        rows += f'<td><form method="GET" action="{BASE}/scraper-match/{user}/{iid}" style="display:flex;gap:4px"><input name="q" value="{title_guess}" style="width:150px;padding:4px"><button type="submit" class="btn">🔍</button></form></td></tr>'
+        rows += f'<td><form method="GET" action="{BASE}/scraper-match/{user}/{iid}" style="display:flex;gap:4px"><input name="q" value="{title_guess}" style="width:150px;padding:4px"><button type="submit" class="btn">🔍</button></form></td>'
+        lookup_q = urllib.parse.quote(f'{title_guess} {year_guess} movie'.strip())
+        rows += f'<td style="white-space:nowrap"><a href="https://www.imdb.com/find/?q={lookup_q}" target="_blank" title="IMDB">🔗</a> <a href="https://www.google.com/search?q={lookup_q}+site:imdb.com" target="_blank" title="Google">🌐</a></td></tr>'
     
     html = page_head(f"Scraper - {user}")
     html += nav_bar("library", user)
@@ -2652,7 +2654,7 @@ def render_scraper(user):
     html += '<div class="page">'
     html += f'<div class="grid"><div class="card card-stat"><div class="num">{matched_count}</div>matched</div>'
     html += f'<div class="card card-stat"><div class="num" style="color:var(--warn)">{len(unmatched)}</div>unmatched</div></div>'
-    html += '<table><thead><tr><th>File</th><th>Title (guess)</th><th>Year</th><th>Quality</th><th>Proposal</th><th>Search</th></tr></thead>'
+    html += '<table><thead><tr><th onclick="sortTable(0)">File</th><th onclick="sortTable(1)">Title (guess)</th><th onclick="sortTable(2)">Year</th><th onclick="sortTable(3)">Quality</th><th>Proposal</th><th>Search</th><th>Lookup</th></tr></thead>'
     html += '<tbody>' + rows + '</tbody></table>'
     html += '</div>' + page_foot()
     return html
