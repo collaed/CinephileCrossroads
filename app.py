@@ -3225,13 +3225,83 @@ td{{padding:8px;border-bottom:1px solid #333}}a{{color:#4fc3f7;text-decoration:n
 
             html += '<h3 style="margin-top:20px">🔄 Actions</h3>'
             html += '<div class="grid">'
-            html += f'<div class="card"><b>TMDB</b><br>You can contribute translations, keywords, and metadata directly.<br><a href="https://www.themoviedb.org/signup" target="_blank" class="btn" style="margin-top:8px">Create TMDB account</a></div>'
-            html += f'<div class="card"><b>Wikidata</b><br>Add structured movie data in any language.<br><a href="https://www.wikidata.org/wiki/Special:CreateAccount" target="_blank" class="btn" style="margin-top:8px">Create Wikidata account</a></div>'
-            html += f'<div class="card"><b>TVDB</b><br>Contribute TV show episodes, artwork, translations.<br><a href="https://thetvdb.com/auth/register" target="_blank" class="btn" style="margin-top:8px">Create TVDB account</a></div>'
+            html += f'<div class="card"><b>TMDB</b><br>'
+            html += f'<a href="{BASE}/contribute/pull/{u}/tmdb" class="btn" style="margin-top:8px">⬇ Pull from TMDB</a> '
+            html += f'<a href="https://www.themoviedb.org/signup" target="_blank" class="btn">Create account</a>'
+            html += f'<br><small style="color:var(--muted)">Pull: alt titles, keywords, cast for your library</small></div>'
+            html += f'<div class="card"><b>TVDB</b><br>'
+            html += f'<a href="{BASE}/contribute/pull/{u}/tvdb" class="btn" style="margin-top:8px">⬇ Pull from TVDB</a> '
+            html += f'<a href="https://thetvdb.com/auth/register" target="_blank" class="btn">Create account</a>'
+            html += f'<br><small style="color:var(--muted)">Pull: TV episode data, artwork</small></div>'
+            html += f'<div class="card"><b>Wikidata</b><br>'
+            html += f'<a href="{BASE}/contribute/pull/{u}/wikidata" class="btn" style="margin-top:8px">⬇ Pull from Wikidata</a>'
+            html += f'<br><small style="color:var(--muted)">Pull: multilingual titles for matching</small></div>'
             html += '</div>'
 
             html += '</div>' + page_foot()
             self._page(html, "setup", u)
+            return
+        elif p.startswith("/contribute/pull/"):
+            u = parts[-2]
+            source = parts[-1]
+            titles = load_titles()
+            ratings = load_user_ratings(u)
+            library = load_user_tmm(u)
+            updated = 0
+            if source == "tmdb" and TMDB_KEY:
+                # Pull alt_titles + missing keywords for library titles
+                for iid in list(library.keys())[:200]:
+                    if iid.startswith("_") or not isinstance(library[iid], dict): continue
+                    t = titles.get(iid, {})
+                    tmdb_id = t.get("tmdb_id")
+                    if not tmdb_id: continue
+                    if not t.get("alt_titles"):
+                        kind = "tv" if t.get("type") in ("tvSeries","tvMiniSeries","tv") else "movie"
+                        alt = api_get(f"https://api.themoviedb.org/3/{kind}/{tmdb_id}/alternative_titles?api_key={TMDB_KEY}")
+                        if alt:
+                            alt_list = alt.get("titles") or alt.get("results") or []
+                            if alt_list:
+                                t["alt_titles"] = [a["title"] for a in alt_list if a.get("title")][:15]
+                                updated += 1
+                    time.sleep(0.1)
+                    if updated >= 50: break
+                save_titles(titles)
+            elif source == "tvdb" and TVDB_KEY:
+                # Pull TV show data from TVDB
+                for iid in list(library.keys())[:100]:
+                    if iid.startswith("_"): continue
+                    t = titles.get(iid, {})
+                    if t.get("type") in ("tvSeries","tvMiniSeries","tv") and not t.get("tvdb_id"):
+                        data = tvdb_enrich(iid)
+                        if data:
+                            t.update({k:v for k,v in data.items() if v})
+                            updated += 1
+                    if updated >= 30: break
+                save_titles(titles)
+            elif source == "wikidata":
+                # Pull multilingual titles from Wikidata
+                for iid in list(ratings.keys())[:50]:
+                    t = titles.get(iid, {})
+                    if t.get("alt_titles"): continue
+                    title = t.get("title","")
+                    if not title: continue
+                    try:
+                        wd = api_get(f"https://www.wikidata.org/w/api.php?action=wbsearchentities&search={urllib.parse.quote(title)}&language=en&format=json&type=item&limit=1")
+                        if wd and wd.get("search"):
+                            qid = wd["search"][0]["id"]
+                            entity = api_get(f"https://www.wikidata.org/w/api.php?action=wbgetentities&ids={qid}&format=json&props=labels")
+                            if entity and entity.get("entities",{}).get(qid):
+                                labels = entity["entities"][qid].get("labels",{})
+                                alt = [v["value"] for v in labels.values() if v["value"] != title][:10]
+                                if alt:
+                                    t.setdefault("alt_titles", []).extend(alt)
+                                    t["alt_titles"] = list(set(t["alt_titles"]))[:15]
+                                    updated += 1
+                    except: pass
+                    time.sleep(0.2)
+                    if updated >= 20: break
+                save_titles(titles)
+            self._redirect(f"{BASE}/contribute/{u}?pulled={source}&count={updated}")
             return
         elif p.startswith("/ai-friend/"):
             u = parts[-1]
