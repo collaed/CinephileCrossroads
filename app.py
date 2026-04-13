@@ -1601,7 +1601,7 @@ def enrich_titles(jid=None, fast=False):
         if TMDB_KEY:
             for k, v in tmdb_enrich(iid).items():
                 if v: t[k] = v
-        if OMDB_KEY and omdb_calls < 500 and not fast:
+        if OMDB_KEY and omdb_calls < 100 and not fast:
             o = omdb_enrich(iid)
             omdb_calls += 1
             for k in ("rotten_tomatoes", "metacritic", "plot", "awards"):
@@ -4167,7 +4167,7 @@ def _scheduler():
     while True:
         now = datetime.datetime.now()
         # Enrichment every 90 minutes
-        if time.time() - last_enrich_time > 5400:
+        if time.time() - last_enrich_time > 7200:
             print("Scheduled: enrichment")
             try:
                 enrich_titles(fast=False)
