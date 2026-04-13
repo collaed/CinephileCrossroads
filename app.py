@@ -2949,6 +2949,88 @@ td{{padding:8px;border-bottom:1px solid #333}}a{{color:#4fc3f7;text-decoration:n
 <table>{rows if rows else "<tr><td>No watchlisted titles currently available</td></tr>"}</table>
 <p style="margin-top:15px"><a href="{BASE}/u/{u}">← Back</a></p></body></html>""")
             return
+        elif p.startswith("/contribute/"):
+            u = parts[-1]
+            titles = load_titles()
+            ratings = load_user_ratings(u)
+
+            # Sample 20 rated titles and compare our data vs TMDB/Wikidata
+            import random
+            rated_ids = [iid for iid in ratings if titles.get(iid, {}).get("tmdb_id")]
+            sample = random.sample(rated_ids, min(20, len(rated_ids)))
+
+            rows = ""
+            we_have_more = 0
+            they_have_more = 0
+            for iid in sample:
+                t = titles.get(iid, {})
+                tmdb_id = t.get("tmdb_id")
+                our_fields = sum(1 for k in ("keywords","cast","directors","writers","overview","poster","trailer","rotten_tomatoes","metacritic") if t.get(k))
+                # Check what TMDB has
+                tmdb_data = api_get(f"https://api.themoviedb.org/3/movie/{tmdb_id}?api_key={TMDB_KEY}&append_to_response=credits,keywords,alternative_titles") if TMDB_KEY and tmdb_id else {}
+                tmdb_fields = 0
+                gaps_us = []  # we are missing
+                gaps_them = []  # they are missing
+                if tmdb_data:
+                    if tmdb_data.get("overview"): tmdb_fields += 1
+                    elif t.get("overview"): gaps_them.append("overview")
+                    if tmdb_data.get("poster_path"): tmdb_fields += 1
+                    kw_them = len(tmdb_data.get("keywords",{}).get("keywords",[]))
+                    kw_us = len(t.get("keywords",[]))
+                    if kw_them > kw_us + 5: gaps_us.append(f"keywords ({kw_us} vs {kw_them})")
+                    elif kw_us > kw_them + 5: gaps_them.append(f"keywords ({kw_them} vs {kw_us})")
+                    cast_them = len(tmdb_data.get("credits",{}).get("cast",[]))
+                    cast_us = len((t.get("cast","") or "").split(","))
+                    alt_them = len(tmdb_data.get("alternative_titles",{}).get("titles",[]))
+                    alt_us = len(t.get("alt_titles",[]))
+                    if alt_them and not alt_us: gaps_us.append(f"alt_titles (0 vs {alt_them})")
+                    if t.get("rotten_tomatoes") and not tmdb_data.get("vote_average"): gaps_them.append("RT score")
+
+                if gaps_them: we_have_more += 1
+                if gaps_us: they_have_more += 1
+
+                gap_us_html = " ".join(f'<span style="color:#f90;font-size:.8em">{g}</span>' for g in gaps_us) or '<span style="color:#4c8;font-size:.8em">complete</span>'
+                gap_them_html = " ".join(f'<span style="color:#4c8;font-size:.8em">{g}</span>' for g in gaps_them) or "-"
+
+                rows += f'<tr><td><a href="{BASE}/title/{iid}">{t.get("title","")}</a></td><td>{t.get("year","")}</td>'
+                rows += f'<td>{our_fields}</td><td>{gap_us_html}</td><td>{gap_them_html}</td></tr>'
+                time.sleep(0.15)  # Rate limit
+
+            # Wikidata: check how many of our titles have Wikidata entries
+            wd_count = 0
+            wd_sample = random.sample(list(ratings.keys()), min(10, len(ratings)))
+            for iid in wd_sample:
+                try:
+                    wd = api_get(f"https://www.wikidata.org/w/api.php?action=wbgetentities&sites=enwiki&format=json&props=labels&titles={urllib.parse.quote(titles.get(iid,{}).get('title',''))}")
+                    if wd and wd.get("entities") and "-1" not in wd.get("entities",{}):
+                        wd_count += 1
+                except: pass
+
+            html = page_head(f"Contribute - {u}")
+            html += nav_bar("setup", u)
+            html += '<div class="page">'
+            html += '<h2>🌍 Contribute to Movie Databases</h2>'
+            html += f'<p style="color:var(--muted)">Comparing your data with TMDB for {len(sample)} titles. Wikidata coverage: ~{wd_count*10}% of your rated titles.</p>'
+
+            html += '<div class="grid" style="margin-bottom:20px">'
+            html += f'<div class="card" style="text-align:center"><div style="font-size:2em;color:#4c8">{we_have_more}</div>We have more</div>'
+            html += f'<div class="card" style="text-align:center"><div style="font-size:2em;color:#f90">{they_have_more}</div>They have more</div>'
+            html += f'<div class="card" style="text-align:center"><div style="font-size:2em">{len(sample)-we_have_more-they_have_more}</div>Equal</div>'
+            html += '</div>'
+
+            html += '<h3>📊 Data Comparison (sample of 20)</h3>'
+            html += '<table><thead><tr><th>Title</th><th>Year</th><th>Our fields</th><th>We need</th><th>We can give</th></tr></thead>'
+            html += '<tbody>' + rows + '</tbody></table>'
+
+            html += '<h3 style="margin-top:20px">🔄 Actions</h3>'
+            html += '<div class="grid">'
+            html += f'<div class="card"><b>TMDB</b><br>You can contribute translations, keywords, and metadata directly.<br><a href="https://www.themoviedb.org/signup" target="_blank" class="btn" style="margin-top:8px">Create TMDB account</a></div>'
+            html += f'<div class="card"><b>Wikidata</b><br>Add structured movie data in any language.<br><a href="https://www.wikidata.org/wiki/Special:CreateAccount" target="_blank" class="btn" style="margin-top:8px">Create Wikidata account</a></div>'
+            html += '</div>'
+
+            html += '</div>' + page_foot()
+            self._page(html, "setup", u)
+            return
         elif p.startswith("/ai-friend/"):
             u = parts[-1]
             titles = load_titles()
