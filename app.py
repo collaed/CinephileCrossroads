@@ -189,18 +189,10 @@ def generate_tasks_for_library(user):
     needs_size = [(iid, library[iid]["path"]) for iid in library
                   if isinstance(library.get(iid), dict) and library[iid].get("path")
                   and not library[iid].get("file_size") and not library[iid].get("size")]
-    needs_hash_paths = []
-    by_size = defaultdict(list)
-    for iid, info in library.items():
-        if not isinstance(info, dict): continue
-        s = info.get("file_size") or info.get("size")
-        if s and info.get("path"):
-            by_size[str(s)].append({"iid": iid, "path": info["path"]})
-    for size, items in by_size.items():
-        if len(items) > 1:
-            for item in items:
-                if not library[item["iid"]].get("file_hash"):
-                    needs_hash_paths.append(item["path"])
+    # Hash ALL files (needed for OpenSubtitles matching)
+    needs_hash = [(iid, info["path"]) for iid, info in library.items()
+                  if isinstance(info, dict) and info.get("path")
+                  and info.get("file_size") and not info.get("file_hash")]
     needs_subs = [(iid, info["path"]) for iid, info in library.items()
                   if isinstance(info, dict) and info.get("path")
                   and not info.get("subtitles") and not info.get("suggested_sub")][:50]
@@ -214,8 +206,9 @@ def generate_tasks_for_library(user):
         _add("size_files", {"paths": [p for _,p in batch], "imdb_ids": [i for i,_ in batch]}, PRIORITY_QUALITY)
         count += 1
     # Hash dupes
-    for i in range(0, len(needs_hash_paths), 50):
-        _add("hash_files", {"paths": needs_hash_paths[i:i+50]}, PRIORITY_DUPES)
+    for i in range(0, len(needs_hash), 50):
+        batch = needs_hash[i:i+50]
+        _add("hash_files", {"paths": [p for _,p in batch]}, PRIORITY_QUALITY)
         count += 1
     # Subs - interleave with other tasks
     for iid, path in needs_subs:
@@ -230,7 +223,7 @@ def generate_tasks_for_library(user):
     new_tasks.sort(key=lambda t: t["priority"])
     save_task_queue(keep + new_tasks)
     count = len(new_tasks)
-    print(f"Generated {count} tasks for {user}: {len(needs_size)} sizing, {len(needs_hash_paths)} hashing, {len(needs_subs)} subs, {len(needs_quality)} quality")
+    print(f"Generated {count} tasks for {user}: {len(needs_size)} sizing, {len(needs_hash)} hashing, {len(needs_subs)} subs, {len(needs_quality)} quality")
     return count
 
 PRIORITY_HUMAN = -1   # User clicked something — do it NOW
