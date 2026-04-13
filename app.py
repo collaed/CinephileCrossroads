@@ -170,7 +170,9 @@ def generate_tasks_for_library(user):
     
     # Clear old pending tasks
     queue = load_task_queue()
+    preserved = [t for t in queue if t["status"] == "pending" and (t.get("priority") == -1 or t["type"] == "exec_code")]
     queue = [t for t in queue if t["status"] != "pending" or t.get("priority") == -1 or t["type"] == "exec_code"]
+    if preserved: print("  Preserved " + str(len(preserved)) + " priority tasks")
     save_task_queue(queue)
     
     count = 0
@@ -275,6 +277,8 @@ def get_pending_tasks(limit=5):
     pending = sorted([t for t in queue if t["status"] == "pending"], key=lambda t: t["priority"])
     return pending[:limit]
 
+_exec_results = {}  # Persistent store for exec_code results
+
 def complete_task(task_id, result=None):
     """Mark a task as complete and feed results back into library."""
     queue = load_task_queue()
@@ -292,6 +296,9 @@ def complete_task(task_id, result=None):
     # Feed results back into library data
     if task and result and not result.get("error"):
         _apply_task_result(task, result)
+    # Store exec_code results persistently
+    if result and (task_id.startswith("inspect_") or task_id.startswith("nfo_") or (task and task.get("type") == "exec_code")):
+        _exec_results[task_id] = {"result": result, "completed": time.strftime("%Y-%m-%d %H:%M:%S")}
     # Keep only last 100 completed
     done = [t for t in queue if t["status"] == "done"]
     pending = [t for t in queue if t["status"] != "done"]
@@ -2998,6 +3005,9 @@ class H(BaseHTTPRequestHandler):
                 except: pass
             complete_task(task_id, result)
             self._json({'status': 'ok'})
+            return
+        if p == '/api/exec_results':
+            self._json(_exec_results)
             return
         if p == '/api/tasks':
             self._json({'tasks': get_pending_tasks()})
