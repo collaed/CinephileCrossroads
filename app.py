@@ -348,6 +348,22 @@ def _apply_task_result(task, result):
                     if lib_info.get("path") == path:
                         lib_info.update({k: v for k, v in info.items() if v})
                         updated = True
+        elif task_id.startswith("thumb_"):
+            # Thumbnail results: {nfs_path: base64_jpg}
+            PATH_MAP = {"//zeus/Movies": "nfs://192.168.0.235/volume1/Movies",
+                        "//zeus/TVShows": "nfs://192.168.0.235/volume1/TVShows",
+                        "//zeus/V_HD": "nfs://192.168.0.235/volume1/V_HD"}
+            for path, b64 in data.items():
+                nfs_path = path.replace("\\", "/")
+                for smb, nfs in PATH_MAP.items():
+                    if nfs_path.startswith(smb):
+                        nfs_path = nfs + nfs_path[len(smb):]
+                        break
+                for lib_iid, lib_info in library.items():
+                    if isinstance(lib_info, dict) and nfs_path in lib_info.get("path", ""):
+                        lib_info["thumbnail"] = b64[:50000]  # cap at 50KB
+                        updated = True
+                        break
         elif ttype == "exec_code" and (task.get("id", "").startswith("nfo_") or task_id.startswith("nfo_batch_")):
             # NFO scan results: {dir_path: imdb_id}
             # Reverse path mappings: //zeus/Movies -> nfs://192.168.0.235/volume1/Movies
@@ -2644,6 +2660,10 @@ def render_library(user):
             dupe_cards += '<div style="font-size:.85em;color:#888">Subs: ' + sub_str + '</div>'
             dupe_cards += badge
             dupe_cards += '<div style="margin-top:6px">' + open_btn + '</div>'
+            thumb_img = ''
+            if entry.get("thumbnail"):
+                thumb_img = '<img src="data:image/jpeg;base64,' + entry["thumbnail"] + '" style="max-width:280px;border-radius:4px;margin-top:6px">'
+            dupe_cards += thumb_img
             dupe_cards += '<div style="font-size:.75em;color:#8ab;margin-top:4px;word-break:break-all;font-family:monospace">' + path.split("/")[-2] + '/' + path.split("/")[-1] + '</div>'
             dupe_cards += '</div>'
 
