@@ -3164,8 +3164,10 @@ td{{padding:8px;border-bottom:1px solid #333}}a{{color:#4fc3f7;text-decoration:n
             library = load_user_tmm(u)
             updated = 0
             if source == "tmdb" and TMDB_KEY:
-                # Pull alt_titles for titles that need them
-                need = [iid for iid in library if not iid.startswith("_") and isinstance(library.get(iid), dict)
+                # Pull alt_titles - use specific IDs if provided, else find from library
+                specific = qs.get("ids", [""])[0].split(",") if qs.get("ids") else []
+                specific = [i for i in specific if i.startswith("tt")]
+                need = specific if specific else [iid for iid in library if not iid.startswith("_") and isinstance(library.get(iid), dict)
                         and titles.get(iid, {}).get("tmdb_id") and not titles.get(iid, {}).get("alt_titles")]
                 for iid in need[:50]:
                     t = titles[iid]
@@ -3297,7 +3299,7 @@ td{{padding:8px;border-bottom:1px solid #333}}a{{color:#4fc3f7;text-decoration:n
             html += '<h3 style="margin-top:20px">🔄 Actions</h3>'
             html += '<div class="grid">'
             html += f'<div class="card"><b>TMDB</b><br>'
-            html += f'<button onclick="doPull(\'tmdb\')" class="btn" style="margin-top:8px">⬇ Pull alt titles</button>'
+            html += '<button onclick="doPull(\'tmdb\',\' ' + ','.join(iid for iid in [s[0] if isinstance(s,tuple) else s for s in sample] if not titles.get(s,{}).get("alt_titles")) + '\')">⬇ Pull alt titles</button>'
             html += f'<br><small style="color:var(--muted)">Fetches alternative titles + missing keywords</small><div id="tmdb_status"></div></div>'
             html += f'<div class="card"><b>TVDB</b><br>'
             html += f'<button onclick="doPull(\'tvdb\')" class="btn" style="margin-top:8px">⬇ Pull TV data</button>'
@@ -3306,7 +3308,7 @@ td{{padding:8px;border-bottom:1px solid #333}}a{{color:#4fc3f7;text-decoration:n
             html += f'<button onclick="doPull(\'wikidata\')" class="btn" style="margin-top:8px">⬇ Pull translations</button>'
             html += f'<br><small style="color:var(--muted)">Multilingual titles for matching</small><div id="wikidata_status"></div></div>'
             html += '</div>'
-            html += '<script>function doPull(src){var el=document.getElementById(src+"_status");el.innerHTML="<br>Pulling...";fetch("' + BASE + '/contribute/pull/' + u + '/"+src).then(function(r){return r.text()}).then(function(t){var m=t.match(/count=(\d+)/);el.innerHTML="<br>Updated "+(m?m[1]:"0")+" titles"})}</script>'
+            html += '<script>function doPull(src,ids){var el=document.getElementById(src+"_status");el.innerHTML="<br>Pulling...";fetch("' + BASE + '/contribute/pull/' + u + '/"+src+(ids?"&ids="+ids:"")).then(function(r){return r.text()}).then(function(t){var m=t.match(/count=(\d+)/);el.innerHTML="<br>Updated "+(m?m[1]:"0")+" titles"})}</script>'
 
             html += '</div>' + page_foot()
             self._page(html, "setup", u)
