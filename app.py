@@ -3235,6 +3235,95 @@ td{{padding:8px;border-bottom:1px solid #333}}a{{color:#4fc3f7;text-decoration:n
 <table>{rows if rows else "<tr><td>No watchlisted titles currently available</td></tr>"}</table>
 <p style="margin-top:15px"><a href="{BASE}/u/{u}">← Back</a></p></body></html>""")
             return
+        elif p.startswith("/ai-friend/"):
+            u = parts[-1]
+            titles = load_titles()
+            ratings = load_user_ratings(u)
+            library = load_user_tmm(u)
+            profile = build_taste_profile(ratings, titles, u)
+
+            # Hidden gems: in library, unrated, high taste score
+            gems = []
+            # Why do I have this: low taste + low IMDB
+            why = []
+            # Guilty pleasures: you loved it, critics hated it
+            guilty = []
+            # Blind spots: top profile directors/actors with few titles
+            for iid, info in library.items():
+                if iid.startswith("_") or not isinstance(info, dict): continue
+                t = titles.get(iid, {})
+                if not t.get("title"): continue
+                score = score_title(t, profile) if (t.get("keywords") or t.get("genres")) else 0
+                imdb_r = t.get("imdb_rating", 0) or 0
+                if iid not in ratings and score > 50 and imdb_r >= 6.5:
+                    gems.append((iid, t, score, imdb_r))
+                if iid not in ratings and score < 2 and imdb_r and imdb_r < 5.5:
+                    why.append((iid, t, score, imdb_r))
+                if iid in ratings:
+                    my_r = ratings[iid].get("rating", 0)
+                    rt = t.get("rotten_tomatoes", "")
+                    rt_val = int(str(rt).replace("%","")) if rt and "%" in str(rt) else 0
+                    if my_r >= 8 and rt_val > 0 and rt_val < 35:
+                        guilty.append((iid, t, my_r, rt_val))
+
+            gems.sort(key=lambda x: x[2], reverse=True)
+            why.sort(key=lambda x: x[3])
+            guilty.sort(key=lambda x: x[3])
+
+            # Top directors you love but have < 3 titles from
+            dir_counts = {}
+            for iid, r in ratings.items():
+                if r["rating"] >= 8:
+                    for d in (titles.get(iid, {}).get("directors") or "").split(","):
+                        d = d.strip()
+                        if d: dir_counts[d] = dir_counts.get(d, 0) + 1
+            blind_dirs = [(d, c) for d, c in sorted(dir_counts.items(), key=lambda x: x[1], reverse=True) if c >= 3][:10]
+
+            html = page_head(f"AI Friend - {u}")
+            html += nav_bar("discover", u)
+            html += '<div class="page">'
+            html += '<h2>🤖 My AI Friend Recommends</h2>'
+            html += '<p style="color:var(--muted)">Based on your ' + str(len(ratings)) + ' ratings and ' + str(len(profile["keywords"])) + ' taste keywords.</p>'
+
+            # Hidden Gems
+            html += '<h3>💎 Hidden Gems in Your Library</h3>'
+            html += '<p style="color:var(--muted);font-size:.85em">You own these but have not rated them. Your taste profile says you will love them.</p>'
+            html += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px">'
+            for iid, t, score, imdb_r in gems[:20]:
+                poster = f'<img src="{t.get("poster","")}" style="width:100%;border-radius:6px">' if t.get("poster") else ""
+                html += f'<a href="{BASE}/title/{iid}" style="text-decoration:none;color:var(--fg)"><div class="card" style="padding:8px;text-align:center">{poster}<div style="font-size:.85em;margin-top:4px">{t["title"]}</div><div style="font-size:.75em;color:var(--muted)">{t.get("year","")} · IMDB {imdb_r}</div><div style="font-size:.75em;color:#4c8">Match: {score:.0f}</div></div></a>'
+            html += '</div>'
+
+            # Why do I have this
+            if why:
+                html += '<h3 style="margin-top:30px">🤔 Why Do I Have This?</h3>'
+                html += '<p style="color:var(--muted);font-size:.85em">Low taste match AND low IMDB rating. Prime candidates for cleanup.</p>'
+                html += '<table><thead><tr><th>Title</th><th>Year</th><th>IMDB</th><th>Match</th></tr></thead><tbody>'
+                for iid, t, score, imdb_r in why[:20]:
+                    html += f'<tr><td><a href="{BASE}/title/{iid}">{t["title"]}</a></td><td>{t.get("year","")}</td><td style="color:#d72">{imdb_r}</td><td>{score:.1f}</td></tr>'
+                html += '</tbody></table>'
+
+            # Guilty Pleasures
+            if guilty:
+                html += '<h3 style="margin-top:30px">😈 Guilty Pleasures</h3>'
+                html += '<p style="color:var(--muted);font-size:.85em">You rated 8+ but critics gave < 35% on Rotten Tomatoes. Own it!</p>'
+                html += '<table><thead><tr><th>Title</th><th>Your ★</th><th>🍅</th></tr></thead><tbody>'
+                for iid, t, my_r, rt_val in guilty[:15]:
+                    html += f'<tr><td><a href="{BASE}/title/{iid}">{t["title"]}</a></td><td style="color:#4c8">{my_r}</td><td style="color:#d72">{rt_val}%</td></tr>'
+                html += '</tbody></table>'
+
+            # Directors you love
+            if blind_dirs:
+                html += '<h3 style="margin-top:30px">🎬 Directors You Love</h3>'
+                html += '<p style="color:var(--muted);font-size:.85em">Directors with 3+ titles you rated 8+.</p>'
+                html += '<div style="display:flex;flex-wrap:wrap;gap:8px">'
+                for d, c in blind_dirs:
+                    html += f'<span class="card" style="padding:6px 12px;font-size:.9em">{d} <b>({c})</b></span>'
+                html += '</div>'
+
+            html += '</div>' + page_foot()
+            self._page(html, "discover", u)
+            return
         elif p.startswith("/library/browse/"):
             u = parts[-1]
             library = load_user_tmm(u)
