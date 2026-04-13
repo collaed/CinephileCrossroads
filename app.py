@@ -625,6 +625,11 @@ def tmdb_enrich(imdb_id):
     sim = api_get(f"https://api.themoviedb.org/3/{kind}/{tmdb_id}/recommendations?api_key={TMDB_KEY}&page=1")
     if sim:
         result["similar_tmdb"] = [s["id"] for s in (sim.get("results") or [])[:10]]
+    # Alternative titles (for matching foreign/localized names)
+    alt = api_get(f"https://api.themoviedb.org/3/{kind}/{tmdb_id}/alternative_titles?api_key={TMDB_KEY}")
+    if alt:
+        alt_list = alt.get("titles") or alt.get("results") or []
+        result["alt_titles"] = [a["title"] for a in alt_list if a.get("title")][:15]
     return result
 
 def omdb_enrich(imdb_id):
@@ -713,7 +718,7 @@ def _fuzzy_match(a, b):
     common = wa & wb
     return len(common) / max(len(wa), len(wb))
 
-def find_mismatches(user, threshold=0.3):
+def find_mismatches(user, threshold=0.2):
     library = load_user_tmm(user)
     titles = load_titles()
     mismatches = []
@@ -3026,6 +3031,7 @@ td{{padding:8px;border-bottom:1px solid #333}}a{{color:#4fc3f7;text-decoration:n
             html += '<div class="grid">'
             html += f'<div class="card"><b>TMDB</b><br>You can contribute translations, keywords, and metadata directly.<br><a href="https://www.themoviedb.org/signup" target="_blank" class="btn" style="margin-top:8px">Create TMDB account</a></div>'
             html += f'<div class="card"><b>Wikidata</b><br>Add structured movie data in any language.<br><a href="https://www.wikidata.org/wiki/Special:CreateAccount" target="_blank" class="btn" style="margin-top:8px">Create Wikidata account</a></div>'
+            html += f'<div class="card"><b>TVDB</b><br>Contribute TV show episodes, artwork, translations.<br><a href="https://thetvdb.com/auth/register" target="_blank" class="btn" style="margin-top:8px">Create TVDB account</a></div>'
             html += '</div>'
 
             html += '</div>' + page_foot()
