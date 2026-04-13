@@ -1,0 +1,38 @@
+#!/bin/sh
+# Synology start-stop-status script for CinephileCrossroads
+
+PYTHON="/var/packages/Python3.12/target/bin/python3"
+APP_DIR="/var/packages/CinephileCrossroads/target"
+DATA_DIR="/var/packages/CinephileCrossroads/target/data"
+PID_FILE="/var/run/cinecross.pid"
+LOG_FILE="/var/log/cinecross.log"
+
+case "$1" in
+    start)
+        mkdir -p "$DATA_DIR"
+        cd "$APP_DIR"
+        $PYTHON app.py >> "$LOG_FILE" 2>&1 &
+        echo $! > "$PID_FILE"
+        # Start agent if Kodi/media servers configured
+        if [ -f "$DATA_DIR/users/*/media_servers.json" ]; then
+            USER=$(ls "$DATA_DIR/users/" | head -1)
+            $PYTHON agent.py --server http://localhost:8000 --user "$USER" --daemon >> "$LOG_FILE" 2>&1 &
+        fi
+        ;;
+    stop)
+        if [ -f "$PID_FILE" ]; then
+            kill $(cat "$PID_FILE") 2>/dev/null
+            rm -f "$PID_FILE"
+        fi
+        pkill -f "agent.py.*--daemon" 2>/dev/null
+        ;;
+    status)
+        if [ -f "$PID_FILE" ] && kill -0 $(cat "$PID_FILE") 2>/dev/null; then
+            exit 0
+        fi
+        exit 1
+        ;;
+    log)
+        echo "$LOG_FILE"
+        ;;
+esac

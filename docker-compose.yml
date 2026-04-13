@@ -1,21 +1,50 @@
 services:
-  cinephile:
+  cinecross:
     build: .
-    container_name: cinephile
+    container_name: cinecross
     restart: unless-stopped
     ports:
       - "8000:8000"
     environment:
-      - IMDB_UR=           # Your IMDB ur ID (e.g. ur1234567)
       - TMDB_KEY=          # themoviedb.org API key
       - OMDB_KEY=          # omdbapi.com API key
       - TVDB_KEY=          # thetvdb.com API key
       - TRAKT_ID=          # Trakt OAuth client ID
       - TRAKT_SECRET=      # Trakt OAuth client secret
-      - TRAKT_REDIRECT=https://your-domain.com/trakt/callback
-      - WATCH_COUNTRY=LU   # ISO 3166-1 country code for streaming availability
+      - TRAKT_REDIRECT=https://your-domain.com/cinecross/trakt/callback
+      - WATCH_COUNTRY=US   # ISO 3166-1 country code
+      # Agent mode: set to run agent alongside server
+      # - AGENT_MODE=1
+      # - AGENT_USER=yourname
     volumes:
       - data:/data
 
 volumes:
   data:
+
+# --- NFS Example ---
+# To mount NFS media shares directly in the container:
+#
+# services:
+#   cinecross:
+#     ...
+#     environment:
+#       - AGENT_MODE=1
+#       - AGENT_USER=yourname
+#     volumes:
+#       - data:/data
+#       - movies:/media/movies:ro
+#       - tvshows:/media/tvshows:ro
+#
+# volumes:
+#   data:
+#   movies:
+#     driver_opts:
+#       type: nfs
+#       o: addr=192.168.0.235,ro,nolock
+#       device: ":/volume1/Movies"
+#   tvshows:
+#     driver_opts:
+#       type: nfs
+#       o: addr=192.168.0.235,ro,nolock
+#       device: ":/volume1/TVShows"

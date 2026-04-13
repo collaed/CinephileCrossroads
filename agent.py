@@ -66,7 +66,7 @@ DEFAULT_CONFIG = {
 
 def log(msg):
     """Print and append to log file."""
-    line = time.strftime("%H:%M:%S") + " " + msg
+    line = time.strftime("%Y-%m-%d %H:%M:%S") + " " + msg
     print(line)
     try:
         with open(LOG_FILE, "a") as f:
@@ -562,8 +562,11 @@ def daemon_mode(args, config):
         _bg_task["id"] = tid
         _bg_task["cancel"] = False
         log(f"[bg] Starting {ttype} ({tid})")
+        t0 = time.time()
         try:
             result = run_task(ttype, params, config)
+            elapsed = time.time() - t0
+            log(f"[bg] Done in {elapsed:.0f}s ({tid})")
             report_result(tid, result)
         except Exception as e:
             log(f"[bg] Error: {e}")
@@ -623,7 +626,10 @@ def daemon_mode(args, config):
                     log(f"[task] {ttype} ({tid})")
                     _last_activity["task"] = ttype
                     _last_activity["time"] = time.strftime("%H:%M:%S")
+                    t0 = time.time()
                     result = run_task(ttype, params, config)
+                    elapsed = time.time() - t0
+                    log(f"[task] Done {ttype} in {elapsed:.1f}s ({tid})")
                     report_result(tid, result)
                     break  # One task per poll cycle
             except Exception as e:
