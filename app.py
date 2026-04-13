@@ -2466,14 +2466,14 @@ def render_ratings_nav(user, active="ratings"):
     return sub_nav([
         ("ratings", "📊 Ratings", f"{BASE}/u/{user}"),
         ("stats", "📈 Stats", f"{BASE}/stats/{user}"),
-        ("unrated", "❓ Unrated", f"{BASE}/unrated/{user}"),
+        ("unrated", "❓ Unrated", f"{BASE}/unrated/{user}"), ("history", "📜 History", f"{BASE}/history/{user}"),
     ], active)
 
 def render_discover_nav(user, active="recs"):
     return sub_nav([
         ("recs", "🎯 Recommendations", f"{BASE}/recs/{user}"),
         ("ai", "🤖 AI Friend", f"{BASE}/ai-friend/{user}"),
-        ("tonight", "🎲 Tonight", f"{BASE}/tonight/{user}"),
+        ("tonight", "🎲 Tonight", f"{BASE}/tonight/{user}"), ("random", "🎰 Random", f"{BASE}/random/{user}"),
         ("catalog", "📺 Catalog", f"{BASE}/catalog"),
         ("new", "🆕 New", f"{BASE}/new"),
         ("updates", "📋 Updates", f"{BASE}/updates"),
@@ -2492,7 +2492,7 @@ def render_setup_nav(user, active="setup"):
         ("setup", "⚙ Config", f"{BASE}/setup/{user}"),
         ("trakt", "↕ Trakt", f"{BASE}/trakt/sync/{user}"),
         ("export", "⬇ Export", f"{BASE}/export/{user}"),
-        ("rss", "📡 RSS", f"{BASE}/rss/{user}"),
+        ("import", "📥 Import", f"{BASE}/import/streaming/{user}"), ("rss", "📡 RSS", f"{BASE}/rss/{user}"),
     ], active)
 
 def render_library_nav(user, active="library"):
