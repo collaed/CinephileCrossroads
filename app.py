@@ -2325,7 +2325,7 @@ def find_mismatches(user, threshold=0.3):
     for iid, info in library.items():
         if iid.startswith("_") or not isinstance(info, dict): continue
         path = info.get("path", "")
-        if not path: continue
+        if not path or info.get("confirmed"): continue
         t = titles.get(iid, {})
         db_title = t.get("title", "")
         if not db_title: continue
@@ -2569,7 +2569,7 @@ def render_library(user):
         for entry in entries:
             if not isinstance(entry, dict): continue
             path = entry.get("path", "")
-            if not path: continue
+            if not path or info.get("confirmed"): continue
             t = (entry.get("title") or titles.get(iid, {}).get("title") or "").strip()
             y = str(entry.get("year") or titles.get(iid, {}).get("year") or "")
             key = (t.lower() + "|" + y) if t else iid
@@ -3638,7 +3638,7 @@ button{{padding:12px 30px;background:#4fc3f7;border:none;border-radius:8px;curso
                 rows += '<tr><td><a href="' + BASE + '/title/' + m["iid"] + '">' + m["db_title"] + '</a> (' + str(m.get('year','')) + ')</td>'
                 rows += '<td style="font-size:.85em;color:var(--muted);max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + m["path"] + '">' + short_path + '</td>'
                 rows += '<td style="color:' + match_color + '">' + str(int(m["match"]*100)) + '%</td>'
-                rows += '<td><a href="' + BASE + '/scraper-match/' + u + '/' + m["iid"] + '?q=' + m["db_title"].replace(" ","+") + '" class="btn">🔍 Re-match</a></td></tr>'
+                rows += '<td><a href="' + BASE + '/confirm-ok/' + u + '/' + m["iid"] + '" class="btn" style="background:#2a5">✅</a> <a href="' + BASE + '/scraper-match/' + u + '/' + m["iid"] + '?q=' + m["db_title"].replace(" ","+") + '" class="btn">🔍</a></td></tr>'
             html = page_head(f"To Be Confirmed - {u}")
             html += nav_bar("library", u)
             html += '<div class="page">'
@@ -3649,6 +3649,15 @@ button{{padding:12px 30px;background:#4fc3f7;border:none;border-radius:8px;curso
             html += '<script>function sortTable(n){const tb=document.querySelector("tbody"),rows=[...tb.rows],dir=tb.dataset.sort==n?-1:1;tb.dataset.sort=dir==1?n:"";rows.sort((a,b)=>{let x=a.cells[n].textContent,y=b.cells[n].textContent;return(typeof x==="number"&&typeof y==="number"?(x-y):(String(x)).localeCompare(String(y),undefined,{numeric:true}))*dir});rows.forEach(r=>tb.appendChild(r))}</script>'
             html += '</div>' + page_foot()
             self._page(html, "library", u)
+            return
+        elif p.startswith("/confirm-ok/"):
+            u = parts[-2]
+            iid = parts[-1]
+            library = load_user_tmm(u)
+            if iid in library and isinstance(library[iid], dict):
+                library[iid]["confirmed"] = True
+                save_user_tmm(u, library)
+            self._redirect(f"{BASE}/confirm/{u}")
             return
         elif p.startswith("/title/"):
             iid = parts[-1]
