@@ -3150,6 +3150,63 @@ td{{padding:8px;border-bottom:1px solid #333}}a{{color:#4fc3f7;text-decoration:n
 <table>{rows if rows else "<tr><td>No watchlisted titles currently available</td></tr>"}</table>
 <p style="margin-top:15px"><a href="{BASE}/u/{u}">← Back</a></p></body></html>""")
             return
+        elif p.startswith("/contribute/pull/"):
+            u = parts[-2]
+            source = parts[-1]
+            titles = load_titles()
+            ratings = load_user_ratings(u)
+            library = load_user_tmm(u)
+            updated = 0
+            if source == "tmdb" and TMDB_KEY:
+                # Pull alt_titles for titles that need them
+                need = [iid for iid in library if not iid.startswith("_") and isinstance(library.get(iid), dict)
+                        and titles.get(iid, {}).get("tmdb_id") and not titles.get(iid, {}).get("alt_titles")]
+                for iid in need[:50]:
+                    t = titles[iid]
+                    tmdb_id = t["tmdb_id"]
+                    kind = "tv" if t.get("type") in ("tvSeries","tvMiniSeries","tv") else "movie"
+                    alt = api_get(f"https://api.themoviedb.org/3/{kind}/{tmdb_id}/alternative_titles?api_key={TMDB_KEY}")
+                    alt_list = (alt.get("titles") or alt.get("results") or []) if alt else []
+                    t["alt_titles"] = [a["title"] for a in alt_list if a.get("title")][:15]
+                    updated += 1
+                    time.sleep(0.1)
+                save_titles(titles)
+            elif source == "tvdb" and TVDB_KEY:
+                # Pull TV show data from TVDB
+                for iid in list(library.keys())[:100]:
+                    if iid.startswith("_"): continue
+                    t = titles.get(iid, {})
+                    if t.get("type") in ("tvSeries","tvMiniSeries","tv") and not t.get("tvdb_id"):
+                        data = tvdb_enrich(iid)
+                        if data:
+                            t.update({k:v for k,v in data.items() if v})
+                            updated += 1
+                    if updated >= 30: break
+                save_titles(titles)
+            elif source == "wikidata":
+                # Pull multilingual titles from Wikidata
+                need_wd = [iid for iid in ratings if not titles.get(iid, {}).get("alt_titles") and titles.get(iid, {}).get("title")]
+                for iid in need_wd[:30]:
+                    t = titles.get(iid, {})
+                    title = t.get("title","")
+                    try:
+                        wd = api_get(f"https://www.wikidata.org/w/api.php?action=wbsearchentities&search={urllib.parse.quote(title)}&language=en&format=json&type=item&limit=1")
+                        if wd and wd.get("search"):
+                            qid = wd["search"][0]["id"]
+                            entity = api_get(f"https://www.wikidata.org/w/api.php?action=wbgetentities&ids={qid}&format=json&props=labels")
+                            if entity and entity.get("entities",{}).get(qid):
+                                labels = entity["entities"][qid].get("labels",{})
+                                alt = [v["value"] for v in labels.values() if v["value"] != title][:10]
+                                if alt:
+                                    t.setdefault("alt_titles", []).extend(alt)
+                                    t["alt_titles"] = list(set(t["alt_titles"]))[:15]
+                                    updated += 1
+                    except: pass
+                    time.sleep(0.2)
+                    if updated >= 20: break
+                save_titles(titles)
+            self._html(f"<html><body>pulled={source}&count={updated}</body></html>")
+            return
         elif p.startswith("/contribute/"):
             u = parts[-1]
             titles = load_titles()
@@ -3242,63 +3299,6 @@ td{{padding:8px;border-bottom:1px solid #333}}a{{color:#4fc3f7;text-decoration:n
 
             html += '</div>' + page_foot()
             self._page(html, "setup", u)
-            return
-        elif p.startswith("/contribute/pull/"):
-            u = parts[-2]
-            source = parts[-1]
-            titles = load_titles()
-            ratings = load_user_ratings(u)
-            library = load_user_tmm(u)
-            updated = 0
-            if source == "tmdb" and TMDB_KEY:
-                # Pull alt_titles for titles that need them
-                need = [iid for iid in library if not iid.startswith("_") and isinstance(library.get(iid), dict)
-                        and titles.get(iid, {}).get("tmdb_id") and not titles.get(iid, {}).get("alt_titles")]
-                for iid in need[:50]:
-                    t = titles[iid]
-                    tmdb_id = t["tmdb_id"]
-                    kind = "tv" if t.get("type") in ("tvSeries","tvMiniSeries","tv") else "movie"
-                    alt = api_get(f"https://api.themoviedb.org/3/{kind}/{tmdb_id}/alternative_titles?api_key={TMDB_KEY}")
-                    alt_list = (alt.get("titles") or alt.get("results") or []) if alt else []
-                    t["alt_titles"] = [a["title"] for a in alt_list if a.get("title")][:15]
-                    updated += 1
-                    time.sleep(0.1)
-                save_titles(titles)
-            elif source == "tvdb" and TVDB_KEY:
-                # Pull TV show data from TVDB
-                for iid in list(library.keys())[:100]:
-                    if iid.startswith("_"): continue
-                    t = titles.get(iid, {})
-                    if t.get("type") in ("tvSeries","tvMiniSeries","tv") and not t.get("tvdb_id"):
-                        data = tvdb_enrich(iid)
-                        if data:
-                            t.update({k:v for k,v in data.items() if v})
-                            updated += 1
-                    if updated >= 30: break
-                save_titles(titles)
-            elif source == "wikidata":
-                # Pull multilingual titles from Wikidata
-                need_wd = [iid for iid in ratings if not titles.get(iid, {}).get("alt_titles") and titles.get(iid, {}).get("title")]
-                for iid in need_wd[:30]:
-                    t = titles.get(iid, {})
-                    title = t.get("title","")
-                    try:
-                        wd = api_get(f"https://www.wikidata.org/w/api.php?action=wbsearchentities&search={urllib.parse.quote(title)}&language=en&format=json&type=item&limit=1")
-                        if wd and wd.get("search"):
-                            qid = wd["search"][0]["id"]
-                            entity = api_get(f"https://www.wikidata.org/w/api.php?action=wbgetentities&ids={qid}&format=json&props=labels")
-                            if entity and entity.get("entities",{}).get(qid):
-                                labels = entity["entities"][qid].get("labels",{})
-                                alt = [v["value"] for v in labels.values() if v["value"] != title][:10]
-                                if alt:
-                                    t.setdefault("alt_titles", []).extend(alt)
-                                    t["alt_titles"] = list(set(t["alt_titles"]))[:15]
-                                    updated += 1
-                    except: pass
-                    time.sleep(0.2)
-                    if updated >= 20: break
-                save_titles(titles)
-            self._html(f"<html><body>pulled={source}&count={updated}</body></html>")
             return
         elif p.startswith("/ai-friend/"):
             u = parts[-1]
