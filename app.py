@@ -78,9 +78,11 @@ APP_BANNER = '<div style="background:var(--card);padding:6px 20px;border-bottom:
 
 def nav_bar(active="ratings", user=""):
     u = user or (list_users() or ["default"])[0]
-    sections = [("ratings", "Ratings", f"{BASE}/u/{u}"), ("discover", "Discover", f"{BASE}/recs/{u}"),
-                ("library", "Library", f"{BASE}/library/{u}"), ("social", "Social", f"{BASE}/feed"), ("ai", "🤖 AI", f"{BASE}/ai-friend/{u}"),
-                ("setup", "Setup", f"{BASE}/setup/{u}"), ("contribute", "🌍 Contribute", f"{BASE}/contribute/{u}")]
+    sections = [("ratings", "⭐ Ratings", f"{BASE}/u/{u}"),
+                ("discover", "🎯 Discover", f"{BASE}/recs/{u}"),
+                ("library", "📚 Library", f"{BASE}/library/{u}"),
+                ("social", "👥 Social", f"{BASE}/feed"),
+                ("setup", "⚙ Setup", f"{BASE}/setup/{u}")]
     links = ""
     for key, label, href in sections:
         cls = "nav-active" if key == active else ""
@@ -2192,6 +2194,7 @@ def render_setup(user):
     # Build page with concatenation (avoids f-string issues with JS braces)
     html = page_head(f"Setup - {user}")
     html += nav_bar("setup", user)
+    html += render_setup_nav(user, "setup")
     html += '<div class="page"><div style="max-width:600px;margin:0 auto"><style>input,textarea{background:var(--card)!important;color:var(--fg)!important;border-color:var(--border)!important}button{background:var(--accent);color:#fff;border:none;padding:10px 30px;border-radius:6px;cursor:pointer}</style>'
     html += '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap">'
     html += '<h2>Setup — ' + user + '</h2>' + user_bar + '</div>'
@@ -2458,6 +2461,39 @@ def render_tvshows(user):
     html += '</body></html>'
     return html
 
+
+def render_ratings_nav(user, active="ratings"):
+    return sub_nav([
+        ("ratings", "📊 Ratings", f"{BASE}/u/{user}"),
+        ("stats", "📈 Stats", f"{BASE}/stats/{user}"),
+        ("unrated", "❓ Unrated", f"{BASE}/unrated/{user}"),
+    ], active)
+
+def render_discover_nav(user, active="recs"):
+    return sub_nav([
+        ("recs", "🎯 Recommendations", f"{BASE}/recs/{user}"),
+        ("ai", "🤖 AI Friend", f"{BASE}/ai-friend/{user}"),
+        ("tonight", "🎲 Tonight", f"{BASE}/tonight/{user}"),
+        ("catalog", "📺 Catalog", f"{BASE}/catalog"),
+        ("new", "🆕 New", f"{BASE}/new"),
+        ("updates", "📋 Updates", f"{BASE}/updates"),
+    ], active)
+
+def render_social_nav(user, active="feed"):
+    return sub_nav([
+        ("feed", "📡 Feed", f"{BASE}/feed"),
+        ("compare", "🤝 Compare", f"{BASE}/compare/"),
+        ("alerts", "🔔 Alerts", f"{BASE}/alerts/{user}"),
+        ("contribute", "🌍 Contribute", f"{BASE}/contribute/{user}"),
+    ], active)
+
+def render_setup_nav(user, active="setup"):
+    return sub_nav([
+        ("setup", "⚙ Config", f"{BASE}/setup/{user}"),
+        ("trakt", "↕ Trakt", f"{BASE}/trakt/sync/{user}"),
+        ("export", "⬇ Export", f"{BASE}/export/{user}"),
+        ("rss", "📡 RSS", f"{BASE}/rss/{user}"),
+    ], active)
 
 def render_library_nav(user, active="library"):
     return sub_nav([
@@ -2837,6 +2873,7 @@ def render_stats(user):
     dir_list = "".join("<tr><td>" + d + "</td><td>" + str(c) + "</td></tr>" for d, c in top_dirs)
     html = page_head(f"Stats - {user}")
     html += nav_bar("ratings", user)
+    html += render_ratings_nav(user, "stats")
     html += '<div class="page">'
     html += '<h2>📊 ' + user + " Stats</h2>"
     html += '<div style="display:flex;gap:20px;margin-bottom:20px;flex-wrap:wrap">'
@@ -2859,6 +2896,7 @@ def render_compare(u1, u2):
     disagree_rows = "".join("<tr><td>" + t + "</td><td>" + str(a) + "</td><td>" + str(b) + "</td><td>" + str(d) + "</td></tr>" for t,a,b,d in disagree[:15])
     html = page_head("Compare Users")
     html += nav_bar("social", "")
+    html += render_social_nav("", "compare")
     html += '<div class="page">'
     html += '<h2>' + u1 + ' vs ' + u2 + '</h2>'
     html += '<div class="card"><div style="font-size:2em">' + str(len(common)) + '</div>both rated</div>'
@@ -3138,7 +3176,7 @@ th,td{{padding:6px 10px;text-align:left;border-bottom:1px solid #333}}th{{backgr
                 poster = titles.get(f["id"],{}).get("poster","")
                 img = '<img src="' + poster + '" height="40" style="border-radius:4px">' if poster else ""
                 rows += '<tr><td>' + img + '</td><td><b>' + f["user"] + '</b> rated <a href="https://www.imdb.com/title/' + f["id"] + '/" target="_blank">' + f["title"] + '</a></td><td style="font-weight:bold">' + str(f["rating"]) + '/10</td><td style="color:#888">' + f["date"] + '</td></tr>'
-            self._html(page_head("Activity Feed") + nav_bar("social", "") + f"""<div class="page"><h2>📡 Activity Feed</h2><table>{rows}</table></div>""" + page_foot())
+            self._html(page_head("Activity Feed") + nav_bar("social", "") + render_social_nav("", "feed") + f"""<div class="page"><h2>📡 Activity Feed</h2><table>{rows}</table></div>""" + page_foot())
             return
         elif p.startswith("/alerts/"):
             u = parts[-1]
@@ -3281,7 +3319,8 @@ td{{padding:8px;border-bottom:1px solid #333}}a{{color:#4fc3f7;text-decoration:n
                 except: pass
 
             html = page_head(f"Contribute - {u}")
-            html += nav_bar("setup", u)
+            html += nav_bar("social", u)
+            html += render_social_nav(u, "contribute")
             html += '<div class="page">'
             html += '<h2>🌍 Contribute to Movie Databases</h2>'
             html += f'<p style="color:var(--muted)">Comparing your data with TMDB for {len(sample)} titles. Wikidata coverage: ~{wd_count*10}% of your rated titles.</p>'
@@ -3360,6 +3399,7 @@ td{{padding:8px;border-bottom:1px solid #333}}a{{color:#4fc3f7;text-decoration:n
 
             html = page_head(f"AI Friend - {u}")
             html += nav_bar("discover", u)
+            html += render_discover_nav(u, "ai")
             html += '<div class="page">'
             html += '<h2>🤖 My AI Friend Recommends</h2>'
             html += '<p style="color:var(--muted)">Based on your ' + str(len(ratings)) + ' ratings and ' + str(len(profile["keywords"])) + ' taste keywords.</p>'
@@ -3939,6 +3979,7 @@ button{{padding:10px 20px;background:#4fc3f7;border:none;border-radius:6px;curso
 
             html = page_head("Recent Updates")
             html += nav_bar("discover", "")
+            html += render_discover_nav("", "updates")
             html += '<div class="page">'
             html += f'<h2>📋 Recent Enrichment Updates</h2>'
             html += f'<p style="color:var(--muted)">{len(changelog)} changes tracked. Page {page_num}/{total_pages}.</p>'

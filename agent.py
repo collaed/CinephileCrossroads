@@ -662,11 +662,30 @@ def run_task(ttype, params, config):
     try:
         if ttype == "size_files":
             paths = params.get("paths", [])
+            mapped = [(p, map_path(p, config)) for p in paths]
             data = {}
-            for p in paths:
-                mp = map_path(p, config)
-                if os.path.isfile(mp):
-                    data[p] = os.path.getsize(mp)
+            if os.name == "nt":
+                # Batch via PowerShell - one process for all files
+                mp_list = [mp for _, mp in mapped]
+                try:
+                    cmd = ["powershell", "-c", "Get-Item -LiteralPath " + ",".join("'" + m + "'" for m in mp_list) + " -ErrorAction SilentlyContinue | Select-Object -Property FullName,Length | ConvertTo-Json"]
+                    out = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+                    import json as _j
+                    results = _j.loads(out.stdout) if out.stdout.strip() else []
+                    if isinstance(results, dict): results = [results]
+                    size_map = {r["FullName"]: r["Length"] for r in results if r.get("Length")}
+                    for orig, mp in mapped:
+                        if mp in size_map: data[orig] = size_map[mp]
+                        elif mp.replace("/", os.sep) in size_map: data[orig] = size_map[mp.replace("/", os.sep)]
+                except Exception as e:
+                    log(f"[size] PowerShell batch failed: {e}, falling back")
+                    for orig, mp in mapped:
+                        try: data[orig] = os.path.getsize(mp)
+                        except: pass
+            else:
+                for orig, mp in mapped:
+                    try: data[orig] = os.path.getsize(mp)
+                    except: pass
             return {"sized": len(data), "data": data}
         
         elif ttype == "hash_files":
