@@ -3220,11 +3220,16 @@ td{{padding:8px;border-bottom:1px solid #333}}a{{color:#4fc3f7;text-decoration:n
 
             # Find titles with actual data gaps (not random)
             rated_ids = [iid for iid in ratings if titles.get(iid, {}).get("tmdb_id")]
-            # Prioritize: titles missing alt_titles, keywords, or cast
+            import random, hashlib
+            # Rotate through titles based on time (different set each visit)
+            seed = int(time.time()) // 60  # changes every minute
+            random.seed(seed)
             gap_ids = [iid for iid in rated_ids if not titles.get(iid,{}).get("alt_titles") or not titles.get(iid,{}).get("keywords")]
             ok_ids = [iid for iid in rated_ids if iid not in gap_ids]
-            import random
-            sample = gap_ids[:15] + random.sample(ok_ids, min(5, len(ok_ids)))
+            random.shuffle(gap_ids)
+            random.shuffle(ok_ids)
+            sample = gap_ids[:12] + ok_ids[:8]
+            random.seed()  # reset
 
             rows = ""
             we_have_more = 0
