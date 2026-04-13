@@ -2252,6 +2252,58 @@ def render_setup(user):
 
 # ── Library Organization ──────────────────────────────────────────────
 
+def analyze_show(show_name, seasons_data):
+    """Analyze a TV show for gaps, quality issues, and completion."""
+    analysis = {"gaps": [], "quality_issues": [], "completion": {}, "next_episode": None}
+    all_watched = []
+    
+    for season_num in sorted(seasons_data.keys()):
+        eps = seasons_data[season_num]
+        if season_num == 0: continue  # Skip specials
+        ep_nums = sorted(set(ep.get("episode", 0) for ep in eps))
+        
+        # Episode gaps: find missing numbers in sequence
+        if ep_nums:
+            expected = set(range(1, max(ep_nums) + 1))
+            missing = sorted(expected - set(ep_nums))
+            if missing:
+                analysis["gaps"].append({"season": season_num, "missing": missing})
+        
+        # Season completion
+        watched_in_season = sum(1 for ep in eps if ep.get("playcount", 0) > 0)
+        analysis["completion"][season_num] = {
+            "total": len(eps), "watched": watched_in_season,
+            "pct": round(watched_in_season / len(eps) * 100) if eps else 0
+        }
+        
+        # Quality consistency: flag mixed resolutions within a season
+        heights = set(ep.get("video_height", 0) for ep in eps if ep.get("video_height"))
+        if len(heights) > 1:
+            analysis["quality_issues"].append({
+                "season": season_num, "type": "mixed_resolution",
+                "values": sorted(heights, reverse=True)
+            })
+        
+        # Track watched episodes for next-episode prediction
+        for ep in eps:
+            if ep.get("playcount", 0) > 0:
+                all_watched.append((season_num, ep.get("episode", 0)))
+    
+    # Next episode prediction: find the first unwatched after last watched
+    if all_watched:
+        last_s, last_e = max(all_watched)
+        for season_num in sorted(seasons_data.keys()):
+            if season_num < last_s: continue
+            for ep in sorted(seasons_data[season_num], key=lambda x: x.get("episode", 0)):
+                s, e = season_num, ep.get("episode", 0)
+                if (s, e) > (last_s, last_e) and ep.get("playcount", 0) == 0:
+                    analysis["next_episode"] = {"season": s, "episode": e, "title": ep.get("title", "")}
+                    break
+            if analysis["next_episode"]: break
+    
+    return analysis
+
+
 def render_tvshows(user):
     """TV Shows screen: episodes grouped by show/season, quality, duplicates."""
     library = load_user_tmm(user)
