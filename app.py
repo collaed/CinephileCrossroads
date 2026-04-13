@@ -699,6 +699,7 @@ def _normalize(s):
     import re as _re
     s = _re.sub(r"[()\[\]{}_.,:;!?\-'\"]", " ", s)
     s = _re.sub(r"\b(19|20)\d{2}\b", "", s)
+    s = _re.sub(r"\b\d{1,3}\b", "", s)  # strip standalone numbers (bitrate remnants)
     s = _re.sub(r"\s+", " ", s).strip()
     return s
 
