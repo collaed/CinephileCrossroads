@@ -2086,22 +2086,9 @@ def render_ratings(user):
         rows += f'<tr data-g="{t.get("genres","")}" data-r="{r["rating"]}" data-s="{" ".join(provs)}" data-d="{str(t.get("year",""))[:3]}0" data-vs="{vsource}"><td>{poster}</td><td><a href="https://www.imdb.com/title/{iid}/" target="_blank"{tooltip}>{t.get("title",iid)}</a>{awards_badge}{trailer_link}{similar_link}</td><td>{t.get("year","")}</td><td style="font-weight:bold;color:{c}">{r["rating"]}</td><td>{imdb}</td><td class="x">{" ".join(scores)}</td><td>{stream}</td><td class="x">{t.get("genres","")}</td><td class="x">{r.get("date","")}</td><td>{local}</td></tr>'
     jb = active_job()[1]
     job_banner = f'<div id="jb" style="background:#1a3a1a;padding:8px 15px;border-radius:6px;margin-bottom:10px"><span id="jm">⏳ {jb["name"]}: {jb["message"]}</span> <progress id="jp" max="100" value="{jb["progress"]/max(jb["total"],1)*100 if jb else 0}" style="vertical-align:middle"></progress></div><script>setInterval(()=>fetch("{BASE}/jobs").then(r=>r.json()).then(d=>{{let a=Object.values(d).find(j=>j.status=="running");if(a){{document.getElementById("jb").style.display="block";document.getElementById("jm").textContent="⏳ "+a.name+": "+a.message;document.getElementById("jp").value=a.total?a.progress/a.total*100:0}}else{{document.getElementById("jb").style.display="none"}}}}),3000)</script>' if jb else ""
-    return f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>{user}'s Ratings ({len(ratings)})</title>
-<style>body{{font-family:-apple-system,sans-serif;margin:20px;background:var(--bg,#1a1a2e);color:var(--fg,#eee)}}
-:root{{--bg:#1a1a2e;--fg:#eee;--card:#16213e;--border:#333;--accent:#4fc3f7}}
-.light{{--bg:#f5f5f5;--fg:#222;--card:#fff;--border:#ddd;--accent:#0077cc}}
-@media(max-width:768px){{table{{font-size:.8em}}th,td{{padding:4px 6px}}img{{height:50px!important}}.bar{{flex-direction:column}}.x{{display:none}}}}
-table{{border-collapse:collapse;width:100%}}th,td{{padding:6px 10px;text-align:left;border-bottom:1px solid #333}}
-th{{background:#16213e;position:sticky;top:0;cursor:pointer;white-space:nowrap}}th:hover{{background:#1a3a5e}}
-tr:hover{{background:#16213e}}a{{color:#4fc3f7;text-decoration:none}}img{{border-radius:4px}}.x{{font-size:.8em;color:#aaa}}
-.bar{{display:flex;gap:10px;align-items:center;margin-bottom:15px;flex-wrap:wrap}}
-input,select{{padding:6px;border-radius:4px;border:1px solid #444;background:#16213e;color:#eee}}</style>
-<script>function f(){{const q=document.getElementById('s').value.toLowerCase(),g=document.getElementById('g').value,mr=document.getElementById('mr').value,st=document.getElementById('st').value,dec=document.getElementById('dec').value;
-document.querySelectorAll('tbody tr').forEach(r=>r.style.display=(r.textContent.toLowerCase().includes(q)&&(!g||r.dataset.g.includes(g))&&(!mr||parseInt(r.dataset.r)>=parseInt(mr))&&(!st||r.dataset.s.includes(st))&&(!dec||r.dataset.d===dec)&&(!vs||r.dataset.vs===vs))?'':'none')}}
-function sortTable(n){{const tb=document.querySelector('tbody'),rows=[...tb.rows],dir=tb.dataset.sort==n?-1:1;tb.dataset.sort=dir==1?n:'';
-rows.sort((a,b)=>{{let x=a.cells[n].textContent,y=b.cells[n].textContent;return(typeof x==="number"&&typeof y==="number"?(x-y):(String(x)).localeCompare(String(y),undefined,{{numeric:true}}))*dir}});rows.forEach(r=>tb.appendChild(r))}}</script></head><body>
+    return page_head(f"{user}'s Ratings ({len(ratings)})") + nav_bar("ratings", user) + f"""<div class="page">
 {job_banner}
-<div style="display:flex;justify-content:space-between;align-items:center"><h2>🎬 {user}'s Ratings — {len(ratings)} titles</h2>{render_user_bar(user)}</div>
+<h2>🎬 {user}'s Ratings — {len(ratings)} titles</h2>
 <div class="bar"><input id="s" onkeyup="f()" placeholder="Search..." style="width:220px">
 <select id="g" onchange="f()"><option value="">All genres</option>{genre_opts}</select>
 <select id="mr" onchange="f()"><option value="">Min ★</option>{''.join(f'<option value="{i}">{i}+</option>' for i in range(10,0,-1))}</select>
@@ -2112,7 +2099,7 @@ rows.sort((a,b)=>{{let x=a.cells[n].textContent,y=b.cells[n].textContent;return(
 <button onclick="document.body.classList.toggle('light');localStorage.setItem('theme',document.body.classList.contains('light')?'light':'dark')" style="background:none;border:1px solid #444;border-radius:4px;cursor:pointer;padding:2px 8px;color:var(--fg)" title="Toggle dark/light theme">🌓</button> <span style="color:#666;font-size:.8em">{" ".join(services)}</span></div>
 <div style="margin-bottom:10px;font-size:1.2em">Mood: <a href="{BASE}/mood/{user}/light" title="Light" style="text-decoration:none">☀️</a><a href="{BASE}/mood/{user}/intense" title="Intense" style="text-decoration:none">🔥</a><a href="{BASE}/mood/{user}/funny" title="Funny" style="text-decoration:none">😂</a><a href="{BASE}/mood/{user}/mind-bending" title="Mind-Bending" style="text-decoration:none">🌀</a><a href="{BASE}/mood/{user}/dark" title="Dark" style="text-decoration:none">🌑</a><a href="{BASE}/mood/{user}/epic" title="Epic" style="text-decoration:none">⚔️</a><a href="{BASE}/mood/{user}/romantic" title="Romantic" style="text-decoration:none">💕</a><a href="{BASE}/mood/{user}/scary" title="Scary" style="text-decoration:none">👻</a><a href="{BASE}/mood/{user}/inspiring" title="Inspiring" style="text-decoration:none">✨</a></div>
 <table><thead><tr><th></th><th onclick="sortTable(1)">Title</th><th onclick="sortTable(2)">Year</th><th onclick="sortTable(3)">★</th><th onclick="sortTable(4)">IMDB</th><th>Scores</th><th>Stream</th><th onclick="sortTable(7)">Genres</th><th onclick="sortTable(8)">Rated</th><th>💾</th></tr></thead>
-<tbody>{rows}</tbody></table></div></body></html>"""
+<tbody>{rows}</tbody></table></div>""" + page_foot()
 
 def render_recs(user):
     titles = load_titles()
@@ -2722,7 +2709,7 @@ input{{padding:6px;border-radius:4px;border:1px solid #444;background:#16213e;co
 <div style="margin-bottom:15px;display:flex;gap:12px"><input id="s" onkeyup="f()" placeholder="Search...">
 <a href="{BASE}/catalog/fetch">↻ Refresh</a> <a href="{BASE}/">← Ratings</a></div>
 {leaving_html}<table><thead><tr><th></th><th onclick="sortTable(1)">Title</th><th onclick="sortTable(2)">Year</th><th onclick="sortTable(3)">TMDB</th><th>On</th><th onclick="sortTable(5)">Type</th></tr></thead>
-<tbody>{rows}</tbody></table></div></body></html>"""
+<tbody>{rows}</tbody></table></div>""" + page_foot()
 
 # ── HTTP Server ───────────────────────────────────────────────────────
 class H(BaseHTTPRequestHandler):
