@@ -688,7 +688,7 @@ def detect_video_source(path):
 
 def _normalize(s):
     s = s.lower()
-    for src, dst in [("ae","a"),("oe","o"),("ue","u")]:
+    for src, dst in [("ae","a"),("oe","o"),("ue","u"),("/"," "),("&","and"),("-"," ")]:
         s = s.replace(src, dst)
     for tag in ["1080p","720p","480p","2160p","4k","uhd","hdr","bluray","blu-ray","webrip",
                 "brrip","dvdrip","hdtv","aac","ac3","dts","x264","x265","hevc","h264",
