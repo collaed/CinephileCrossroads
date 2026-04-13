@@ -79,7 +79,7 @@ APP_BANNER = '<div style="background:var(--card);padding:6px 20px;border-bottom:
 def nav_bar(active="ratings", user=""):
     u = user or (list_users() or ["default"])[0]
     sections = [("ratings", "Ratings", f"{BASE}/u/{u}"), ("discover", "Discover", f"{BASE}/recs/{u}"),
-                ("library", "Library", f"{BASE}/library/{u}"), ("social", "Social", f"{BASE}/feed"),
+                ("library", "Library", f"{BASE}/library/{u}"), ("social", "Social", f"{BASE}/feed"), ("ai", "🤖 AI", f"{BASE}/ai-friend/{u}"),
                 ("setup", "Setup", f"{BASE}/setup/{u}")]
     links = ""
     for key, label, href in sections:
@@ -2181,7 +2181,7 @@ def render_setup(user):
     # Build page with concatenation (avoids f-string issues with JS braces)
     html = page_head(f"Setup - {user}")
     html += nav_bar("setup", user)
-    html += '<div class="page"><div style="max-width:600px;margin:0 auto">'
+    html += '<div class="page"><div style="max-width:600px;margin:0 auto"><style>input,textarea{background:var(--card)!important;color:var(--fg)!important;border-color:var(--border)!important}button{background:var(--accent);color:#fff;border:none;padding:10px 30px;border-radius:6px;cursor:pointer}</style>'
     html += '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap">'
     html += '<h2>Setup — ' + user + '</h2>' + user_bar + '</div>'
     
