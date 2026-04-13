@@ -2647,12 +2647,28 @@ def render_library(user):
     html += '<div class="page">'
     html += '<h2>📚 Library Curation</h2>'
 
-    # Stats cards
+    # Comprehensive status
+    eps = library.get("_episodes", {})
+    ep_count = sum(1 for v in eps.values() if isinstance(v, dict))
+    sized = sum(1 for iid, info in library.items() if isinstance(info, dict) and not iid.startswith("_") and (info.get("file_size") or info.get("size")))
+    hashed = sum(1 for iid, info in library.items() if isinstance(info, dict) and not iid.startswith("_") and info.get("file_hash"))
+    with_subs_count = sum(1 for iid, info in library.items() if isinstance(info, dict) and not iid.startswith("_") and info.get("subtitles"))
+    scraped = sum(1 for iid in library if not iid.startswith("_") and isinstance(library[iid], dict) and iid in titles and titles[iid].get("title"))
+    nfo_matched = sum(1 for iid, info in library.items() if isinstance(info, dict) and info.get("nfo_matched"))
+    def pct(n, t): return f"{n*100//t}%" if t else "0%"
+    def bar(n, t, color="#4fc3f7"):
+        w = n*100//t if t else 0
+        return f'<div style="background:#333;border-radius:3px;height:8px;margin-top:4px"><div style="background:{color};height:8px;width:{w}%;border-radius:3px"></div></div>'
+
     html += '<div class="grid" style="margin-bottom:20px">'
-    html += '<div class="card" style="text-align:center"><div style="font-size:2.5em">' + str(total) + '</div>total titles</div>'
-    html += '<div class="card" style="text-align:center"><div style="font-size:2.5em">' + str(has_video) + '</div>with media info</div>'
-    html += '<div class="card" style="text-align:center"><div style="font-size:2.5em;color:#d72">' + str(no_subs) + '</div>missing subtitles</div>'
-    html += '<div class="card" style="text-align:center"><div style="font-size:2.5em;color:#f90">' + str(len(dupes)) + '</div>potential duplicates</div>'
+    html += '<div class="card" style="text-align:center"><div style="font-size:2.2em">' + str(total) + '</div>movies<br><small style="color:var(--muted)">' + str(ep_count) + ' TV episodes</small></div>'
+    html += '<div class="card"><b>Scraped</b> ' + str(scraped) + '/' + str(total) + ' (' + pct(scraped,total) + ')' + bar(scraped,total) + '</div>'
+    html += '<div class="card"><b>Sized</b> ' + str(sized) + '/' + str(total) + ' (' + pct(sized,total) + ')' + bar(sized,total,"#f90") + '</div>'
+    html += '<div class="card"><b>Hashed</b> ' + str(hashed) + '/' + str(total) + ' (' + pct(hashed,total) + ')' + bar(hashed,total,"#a6e") + '</div>'
+    html += '<div class="card"><b>Subtitles</b> ' + str(with_subs_count) + '/' + str(total) + ' (' + pct(with_subs_count,total) + ')' + bar(with_subs_count,total,"#4c8") + '</div>'
+    html += '<div class="card"><b>Media info</b> ' + str(has_video) + '/' + str(total) + ' (' + pct(has_video,total) + ')' + bar(has_video,total,"#48f") + '</div>'
+    html += '<div class="card" style="text-align:center"><div style="font-size:2.2em;color:#f90">' + str(len(dupes)) + '</div>duplicates</div>'
+    html += '<div class="card" style="text-align:center"><div style="font-size:2.2em;color:#d72">' + str(no_subs) + '</div>missing subs</div>'
     html += '</div>'
 
     # Quality & codec breakdown
