@@ -3267,7 +3267,7 @@ td{{padding:8px;border-bottom:1px solid #333}}a{{color:#4fc3f7;text-decoration:n
             ok_ids = [iid for iid in rated_ids if iid not in gap_ids]
             random.shuffle(gap_ids)
             random.shuffle(ok_ids)
-            sample = gap_ids[:12] + ok_ids[:8]
+            sample = gap_ids[:5] + ok_ids[:3]
             random.seed()  # reset
 
             rows = ""
@@ -3497,37 +3497,55 @@ td{{padding:8px;border-bottom:1px solid #333}}a{{color:#4fc3f7;text-decoration:n
             return
         elif p.startswith("/library/org/"):
             u = parts[-1]
-            analysis = analyze_library(u)
-            # Build drive table
-            drive_rows = ""
-            for path, info in analysis["drives"].items():
-                size_gb = info["size"] / (1024**3) if info["size"] else 0
-                drive_rows += "<tr><td>" + path[:60] + "</td><td>" + str(info["count"]) + "</td><td>" + f"{size_gb:.1f} GB" + "</td></tr>"
-            # Quality bars
-            max_q = max(analysis["quality"].values()) if analysis["quality"] else 1
-            q_bars = ""
-            for q in ["4K", "1080p", "720p", "SD"]:
-                c = analysis["quality"].get(q, 0)
-                if c: q_bars += '<div style="display:flex;gap:8px;align-items:center;margin:2px"><span style="width:50px;text-align:right">' + q + '</span><div style="background:var(--accent);height:16px;width:' + str(min(int(c/max_q*200),200)) + 'px;border-radius:3px"></div> ' + str(c) + '</div>'
-            html = page_head("Library Organization")
+            library = load_user_tmm(u)
+            titles = load_titles()
+            # Analyze by drive/folder
+            from collections import defaultdict
+            by_drive = defaultdict(lambda: {"count": 0, "size": 0})
+            by_decade = defaultdict(int)
+            by_genre = defaultdict(int)
+            for iid, info in library.items():
+                if iid.startswith("_") or not isinstance(info, dict): continue
+                path = info.get("path", "")
+                t = titles.get(iid, {})
+                # Drive = first path component after NFS root
+                parts_p = path.replace("\\", "/").split("/")
+                drive = "/".join(parts_p[:6]) if len(parts_p) > 5 else path[:30]
+                by_drive[drive]["count"] += 1
+                by_drive[drive]["size"] += info.get("file_size", 0) or 0
+                # Decade
+                year = str(t.get("year", ""))[:3] + "0s" if t.get("year") else "Unknown"
+                by_decade[year] += 1
+                # Genre
+                for g in (t.get("genres", "") or "").split(","):
+                    g = g.strip()
+                    if g: by_genre[g] += 1
+
+            html = page_head(f"Organize - {u}")
             html += nav_bar("library", u)
             html += render_library_nav(u, "org")
             html += '<div class="page">'
-            html += '<div class="grid">'
-            html += '<div class="card card-stat"><div class="num">' + str(analysis["total"]) + '</div>titles</div>'
-            html += '<div class="card card-stat"><div class="num" style="color:var(--warn)">' + str(analysis["orphans"]) + '</div>unmatched</div>'
-            html += '<div class="card card-stat"><div class="num" style="color:var(--warn)">' + str(analysis["duplicates"]) + '</div>duplicate sizes</div>'
-            html += '<div class="card card-stat"><div class="num">' + str(analysis["no_size"]) + '</div>unsized</div>'
-            html += '<div class="card card-stat"><div class="num">' + str(analysis["no_subs"]) + '</div>no subs</div>'
+            html += '<h2>🗂 Organize Library</h2>'
+
+            # By drive
+            html += '<h3>By Location</h3><table><thead><tr><th>Path</th><th>Files</th><th>Size</th></tr></thead><tbody>'
+            for drive, info in sorted(by_drive.items(), key=lambda x: x[1]["size"], reverse=True):
+                size_str = f'{info["size"]/1073741824:.1f} GB' if info["size"] else "-"
+                html += f'<tr><td style="font-family:monospace;font-size:.85em">{drive}</td><td>{info["count"]}</td><td>{size_str}</td></tr>'
+            html += '</tbody></table>'
+
+            # By decade
+            html += '<h3>By Decade</h3><div style="display:flex;flex-wrap:wrap;gap:8px">'
+            for dec in sorted(by_decade.keys()):
+                html += f'<span class="card" style="padding:6px 12px">{dec}: <b>{by_decade[dec]}</b></span>'
             html += '</div>'
-            html += '<div class="grid"><div class="card"><h3>Quality</h3>' + q_bars + '</div>'
-            html += '<div class="card"><h3>Drives</h3><table><tr><th>Path</th><th>Files</th><th>Size</th></tr>' + drive_rows + '</table></div></div>'
-            if analysis["dupe_details"]:
-                dupe_rows = ""
-                for size, entries in analysis["dupe_details"].items():
-                    for iid, path in entries:
-                        dupe_rows += "<tr><td>" + iid + "</td><td>" + path + "</td><td>" + str(int(int(size)/(1024*1024))) + " MB</td></tr>"
-                html += '<div class="card" style="margin-top:15px"><h3>Potential Duplicates (same file size)</h3><table><tr><th>ID</th><th>Path</th><th>Size</th></tr>' + dupe_rows + '</table></div>'
+
+            # By genre
+            html += '<h3>By Genre</h3><div style="display:flex;flex-wrap:wrap;gap:8px">'
+            for g, c in sorted(by_genre.items(), key=lambda x: x[1], reverse=True)[:20]:
+                html += f'<span class="card" style="padding:6px 12px">{g}: <b>{c}</b></span>'
+            html += '</div>'
+
             html += '</div>' + page_foot()
             self._page(html, "library", u)
             return
