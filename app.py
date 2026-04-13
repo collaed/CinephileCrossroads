@@ -2192,51 +2192,71 @@ def render_setup(user):
     # Build page with concatenation (avoids f-string issues with JS braces)
     html = page_head(f"Setup - {user}")
     html += nav_bar("setup", user)
-    html += '<div class="page">'
-    html += '<h2>📺 TV Shows — ' + user + '</h2>'
-
-    # Stats
-    html += '<div class="grid" style="margin-bottom:20px">'
-    html += '<div class="card"><div style="font-size:2.5em">' + str(total_shows) + '</div>shows</div>'
-    html += '<div class="card"><div style="font-size:2.5em">' + str(total_eps) + '</div>episodes</div>'
-    html += '<div class="card"><div style="font-size:2.5em">' + str(watched) + '</div>watched</div>'
-    html += '<div class="card"><div style="font-size:2.5em;color:#d72">' + str(no_subs) + '</div>no subs</div>'
-    html += '<div class="card"><div style="font-size:2.5em;color:#f90">' + str(len(dupes)) + '</div>duplicate eps</div>'
-    html += '</div>'
-
-    # Quality breakdown
-    html += '<div class="grid" style="margin-bottom:20px">'
-    html += '<div class="card"><h3>Resolution</h3>' + q_bars + '</div>'
-    html += '</div>'
-
-    # Show list
-    html += '<div style="margin-bottom:10px"><input id="s" onkeyup="f()" placeholder="Search shows..."></div>'
-    html += '<table><thead><tr><th onclick="sortTable(0)">Show</th><th onclick="sortTable(1)">Seasons</th><th onclick="sortTable(2)">Episodes</th><th onclick="sortTable(3)">Watched</th><th onclick="sortTable(4)">Quality</th><th>Codecs</th><th>Intel</th></tr></thead>'
-    html += '<tbody>' + show_rows + '</tbody></table>'
-
-    # Duplicate episodes
-    if dupes:
-        dupe_rows = ""
-        for gkey, eps in sorted(dupes.items()):
-            show, season, episode = gkey.split("|")
-            dupe_rows += '<tr style="background:#1a3a5e"><td colspan="7"><b>' + show + '</b> S' + season.zfill(2) + 'E' + episode.zfill(2) + ' — ' + str(len(eps)) + ' copies</td></tr>'
-            for ep in eps:
-                h = ep.get("video_height", "")
-                codec = ep.get("video_codec", "")
-                codec_display = codec_map.get(codec.lower(), codec) if codec else ""
-                audio = ep.get("audio", [])
-                audio_str = ", ".join(a.get("codec","") + " " + str(a.get("channels","")) + "ch" for a in audio[:3]) if audio else "—"
-                subs = ep.get("subtitles", [])
-                sub_str = ", ".join(s.get("language","") for s in subs[:4]) if subs else "none"
-                path = ep.get("path", "")
-                dupe_rows += '<tr><td>' + str(h) + 'p</td><td>' + codec_display + '</td><td>' + audio_str + '</td><td>' + sub_str + '</td><td style="font-size:.7em;color:#888">' + path[-60:] + '</td></tr>'
-        html += '<h3 style="margin-top:20px">🔍 Duplicate Episodes (' + str(len(dupes)) + ')</h3>'
-        html += '<table><thead><tr><th>Res</th><th>Codec</th><th>Audio</th><th>Subs</th><th>Path</th></tr></thead>'
-        html += '<tbody>' + dupe_rows + '</tbody></table>'
-
-    html += '<p style="margin-top:20px"><a href="' + BASE + '/u/' + user + '">← Ratings</a> · <a href="' + BASE + '/library/' + user + '">📚 Library</a></p>'
-    html += '</body></html>'
+    html += '<div class="page"><div style="max-width:600px;margin:0 auto">'
+    html += '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap">'
+    html += '<h2>Setup — ' + user + '</h2>' + user_bar + '</div>'
+    
+    # Upload CSV
+    html += '<h3>Upload IMDB CSV</h3>'
+    html += '<form method="POST" action="' + BASE + '/upload/' + user + '" enctype="multipart/form-data">'
+    html += '<input type="file" name="csv" accept=".csv"><button type="submit">Upload</button></form><hr>'
+    
+    # API Keys
+    html += '<h3>API Keys</h3>'
+    html += '<form method="POST" action="' + BASE + '/keys">'
+    html += '<label>TMDB</label><input name="tmdb" value="' + TMDB_KEY + '">'
+    html += '<label>OMDB</label><input name="omdb" value="' + OMDB_KEY + '">'
+    html += '<label>TVDB</label><input name="tvdb" value="' + TVDB_KEY + '">'
+    html += '<label>OpenSubtitles (<a href="https://www.opensubtitles.com/consumers" target="_blank">get key</a>)</label>'
+    html += '<input name="opensubs" placeholder="OpenSubtitles API key">'
+    html += '<button type="submit">Save</button></form><hr>'
+    
+    # Trakt
+    html += '<h3>Trakt</h3>' + trakt_section + '<hr>'
+    
+    # Media Servers + LAN Scanner
+    html += '<h3>Media Servers</h3>' + media_servers + '<hr>'
+    
+    # Local Library
+    html += '<h3>Local Library (TMM / file upload)</h3>'
+    html += '<form method="POST" action="' + BASE + '/tmm/' + user + '" enctype="multipart/form-data">'
+    html += '<input type="file" name="tmm" accept=".csv,.txt"><button type="submit">Upload</button></form><hr>'
+    
+    # Streaming Providers
+    html += '<h3>My Streaming Services</h3>' + provider_config + '<hr>'
+    
+    # IMDB Dataset
+    html += '<h3>Agent Token</h3>'
+    html += '<p>Token for the LAN agent to push library data. Set in agent.json as <code>token</code>.</p>'
+    html += '<form method="POST" action="' + BASE + '/keys">'
+    html += '<input name="agent_token" value="' + AGENT_TOKEN + '" placeholder="Generate a random token">'
+    html += '<button type="submit">Save</button></form><hr>'
+    html += '<h3>IMDB Dataset</h3>'
+    html += '<p>Download IMDB bulk data (200K+ titles, ~220MB). Eliminates most API calls.</p>'
+    html += '<a href="' + BASE + '/datasets/download" style="display:inline-block;padding:8px 16px;background:#1a1a2e;border:1px solid #4fc3f7;border-radius:6px;color:#4fc3f7;text-decoration:none">Download IMDB Datasets</a><hr>'
+    
+    # Agent Status
+    html += '<h3>Agent Status</h3>'
+    html += _render_agent_status()
+    html += '<hr>'
+    
+    # Streaming History Import
+    html += '<h3>Import Streaming History</h3>'
+    html += '<p><a href="' + BASE + '/import/streaming/' + user + '" class="btn btn-primary">Import Netflix / Prime / Disney+ / HBO history</a></p>'
+    html += '<hr>'
+    
+    # Streaming Region
+    html += '<h3>Streaming Region</h3>'
+    html += '<p>Region: <b>' + WATCH_COUNTRY + '</b> | <a href="' + BASE + '/catalog">Browse catalog</a></p>'
+    
+    html += '</div></div>' + page_foot()
     return html
+
+
+
+# ── TV Show Intelligence ──────────────────────────────────────────────
+
+# ── Library Organization ──────────────────────────────────────────────
 
 def render_library_nav(user, active="library"):
     return sub_nav([
