@@ -80,7 +80,7 @@ def nav_bar(active="ratings", user=""):
     u = user or (list_users() or ["default"])[0]
     sections = [("ratings", "Ratings", f"{BASE}/u/{u}"), ("discover", "Discover", f"{BASE}/recs/{u}"),
                 ("library", "Library", f"{BASE}/library/{u}"), ("social", "Social", f"{BASE}/feed"), ("ai", "🤖 AI", f"{BASE}/ai-friend/{u}"),
-                ("setup", "Setup", f"{BASE}/setup/{u}")]
+                ("setup", "Setup", f"{BASE}/setup/{u}"), ("contribute", "🌍 Contribute", f"{BASE}/contribute/{u}")]
     links = ""
     for key, label, href in sections:
         cls = "nav-active" if key == active else ""
