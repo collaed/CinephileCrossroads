@@ -2751,10 +2751,15 @@ def render_library(user):
     ratings = load_user_ratings(user)
     profile = build_taste_profile(ratings, titles, user)
     space_candidates = []
+    unenriched_count = 0
     for iid, info in library.items():
         if iid.startswith("_") or not isinstance(info, dict): continue
         t = titles.get(iid, {})
-        if not t.get("title") or iid in ratings: continue  # skip rated titles
+        if not t.get("title") or iid in ratings: continue
+        # Only include titles with enough data to score meaningfully
+        if not t.get("keywords") and not t.get("genres"):
+            unenriched_count += 1
+            continue
         size = info.get("file_size") or info.get("size") or 0
         score = score_title(t, profile)
         space_candidates.append((iid, t, info, score, size or 0))
@@ -2763,7 +2768,9 @@ def render_library(user):
         sized = [(x[4]) for x in space_candidates[:50] if x[4]]
         total_save = sum(sized) if sized else 0
         html += '<h3 style="margin-top:30px">💾 Save Space — furthest from your taste</h3>'
-        html += '<p style="color:#888;font-size:.85em">Unrated titles in your library that score lowest against your taste profile. Potential savings: <b>' + f"{total_save/1073741824:.1f}" + ' GB</b> from bottom 50.</p>'
+        if unenriched_count:
+            html += '<p style="color:var(--warn);font-size:.85em">⚠ ' + str(unenriched_count) + ' titles lack keywords/genres — enrichment needed before scoring. These are excluded below.</p>'
+        html += '<p style="color:#888;font-size:.85em">Unrated titles with the lowest taste match. Potential savings: <b>' + f"{total_save/1073741824:.1f}" + ' GB</b> from bottom 50.</p>'
         html += '<table><thead><tr><th>Title</th><th>Year</th><th>IMDB</th><th>Match</th><th>Size</th><th>Source</th></tr></thead><tbody>'
         for iid, t, info, score, size in space_candidates[:50]:
             size_str = f"{size/1073741824:.1f} GB" if size > 1073741824 else f"{size/1048576:.0f} MB"
