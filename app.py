@@ -3251,22 +3251,19 @@ td{{padding:8px;border-bottom:1px solid #333}}a{{color:#4fc3f7;text-decoration:n
             library = load_user_tmm(u)
             updated = 0
             if source == "tmdb" and TMDB_KEY:
-                # Pull alt_titles + missing keywords for library titles
-                for iid in list(library.keys())[:200]:
-                    if iid.startswith("_") or not isinstance(library[iid], dict): continue
-                    t = titles.get(iid, {})
-                    tmdb_id = t.get("tmdb_id")
-                    if not tmdb_id: continue
-                    if not t.get("alt_titles"):
-                        kind = "tv" if t.get("type") in ("tvSeries","tvMiniSeries","tv") else "movie"
-                        alt = api_get(f"https://api.themoviedb.org/3/{kind}/{tmdb_id}/alternative_titles?api_key={TMDB_KEY}")
-                        if alt:
-                            alt_list = alt.get("titles") or alt.get("results") or []
-                            if alt_list:
-                                t["alt_titles"] = [a["title"] for a in alt_list if a.get("title")][:15]
-                                updated += 1
+                # Pull alt_titles for titles that need them
+                need = [iid for iid in library if not iid.startswith("_") and isinstance(library.get(iid), dict)
+                        and titles.get(iid, {}).get("tmdb_id") and not titles.get(iid, {}).get("alt_titles")]
+                for iid in need[:50]:
+                    t = titles[iid]
+                    tmdb_id = t["tmdb_id"]
+                    kind = "tv" if t.get("type") in ("tvSeries","tvMiniSeries","tv") else "movie"
+                    alt = api_get(f"https://api.themoviedb.org/3/{kind}/{tmdb_id}/alternative_titles?api_key={TMDB_KEY}")
+                    if alt:
+                        alt_list = alt.get("titles") or alt.get("results") or []
+                        t["alt_titles"] = [a["title"] for a in alt_list if a.get("title")][:15]
+                        updated += 1
                     time.sleep(0.1)
-                    if updated >= 50: break
                 save_titles(titles)
             elif source == "tvdb" and TVDB_KEY:
                 # Pull TV show data from TVDB
@@ -3282,11 +3279,10 @@ td{{padding:8px;border-bottom:1px solid #333}}a{{color:#4fc3f7;text-decoration:n
                 save_titles(titles)
             elif source == "wikidata":
                 # Pull multilingual titles from Wikidata
-                for iid in list(ratings.keys())[:50]:
+                need_wd = [iid for iid in ratings if not titles.get(iid, {}).get("alt_titles") and titles.get(iid, {}).get("title")]
+                for iid in need_wd[:30]:
                     t = titles.get(iid, {})
-                    if t.get("alt_titles"): continue
                     title = t.get("title","")
-                    if not title: continue
                     try:
                         wd = api_get(f"https://www.wikidata.org/w/api.php?action=wbsearchentities&search={urllib.parse.quote(title)}&language=en&format=json&type=item&limit=1")
                         if wd and wd.get("search"):
