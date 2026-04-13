@@ -4160,16 +4160,20 @@ def _resolve_from_imdb_dataset():
             print(f"Resolved {resolved} titles for {u}")
 
 def _scheduler():
-    """Background scheduler: enrichment daily 3am, catalog+discovery weekly Sunday 4am."""
+    """Background scheduler: enrichment every 90min, catalog+discovery weekly Sunday 4am."""
     import datetime
     last_enrich = last_catalog = last_discover = None
+    last_enrich_time = 0
     while True:
         now = datetime.datetime.now()
-        # Daily enrichment at 3am
-        if now.hour == 3 and last_enrich != now.date():
+        # Enrichment every 90 minutes
+        if time.time() - last_enrich_time > 5400:
             print("Scheduled: enrichment")
-            enrich_titles(fast=False)
-            last_enrich = now.date()
+            try:
+                enrich_titles(fast=False)
+            except Exception as e:
+                print(f"Enrichment error: {e}")
+            last_enrich_time = time.time()
         # Weekly on Sundays at 4am: catalog refresh + discovery + re-seed
         if now.weekday() == 6 and now.hour == 4 and last_catalog != now.date():
             print("Scheduled: catalog refresh")
