@@ -3299,7 +3299,9 @@ td{{padding:8px;border-bottom:1px solid #333}}a{{color:#4fc3f7;text-decoration:n
             html += '<h3 style="margin-top:20px">🔄 Actions</h3>'
             html += '<div class="grid">'
             html += f'<div class="card"><b>TMDB</b><br>'
-            html += '<button onclick="doPull(\'tmdb\',\' ' + ','.join(iid for iid in [s[0] if isinstance(s,tuple) else s for s in sample] if not titles.get(s,{}).get("alt_titles")) + '\')">⬇ Pull alt titles</button>'
+            gap_list = [iid for iid in sample if not titles.get(iid,{}).get("alt_titles")]
+            html += '<button onclick="doPull(\'tmdb\',\'' + ",".join(gap_list) + '\')" class="btn" style="margin-top:8px">⬇ Pull alt titles (' + str(len(gap_list)) + ')</button>'
+            html += '<button onclick="doPull(\'"'tmdb\'"',\'"'' + ",".join(gap_list) + '\'"')">Pull alt titles (' + str(len(gap_list)) + ')</button>'
             html += f'<br><small style="color:var(--muted)">Fetches alternative titles + missing keywords</small><div id="tmdb_status"></div></div>'
             html += f'<div class="card"><b>TVDB</b><br>'
             html += f'<button onclick="doPull(\'tvdb\')" class="btn" style="margin-top:8px">⬇ Pull TV data</button>'
