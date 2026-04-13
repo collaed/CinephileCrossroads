@@ -174,55 +174,50 @@ def generate_tasks_for_library(user):
     save_task_queue(queue)
     
     count = 0
-    
-    # 1. Files without size — need sizing (priority 1)
-    needs_size = [iid for iid, info in library.items()
-                  if info.get("path") and not info.get("file_size") and not info.get("size")]
-    if needs_size:
-        # Batch into groups of 50
-        for i in range(0, len(needs_size), 20):  # Small batches = responsive
-            batch = needs_size[i:i+20]
-            paths = [library[iid]["path"] for iid in batch]
-            enqueue_task("size_files", {"paths": paths, "imdb_ids": batch}, priority=PRIORITY_QUALITY)
-            count += 1
-    
-    # 2. Potential duplicates — same title, need hash to confirm (priority 0)
     from collections import defaultdict
+    
+    # Collect all needs
+    needs_size = [(iid, library[iid]["path"]) for iid in library
+                  if isinstance(library.get(iid), dict) and library[iid].get("path")
+                  and not library[iid].get("file_size") and not library[iid].get("size")]
+    needs_hash_paths = []
     by_size = defaultdict(list)
     for iid, info in library.items():
+        if not isinstance(info, dict): continue
         s = info.get("file_size") or info.get("size")
         if s and info.get("path"):
             by_size[str(s)].append({"iid": iid, "path": info["path"]})
-    dupes_needing_hash = []
     for size, items in by_size.items():
         if len(items) > 1:
             for item in items:
                 if not library[item["iid"]].get("file_hash"):
-                    dupes_needing_hash.append(item["path"])
-    if dupes_needing_hash:
-        for i in range(0, len(dupes_needing_hash), 20):
-            enqueue_task("hash_files", {"paths": dupes_needing_hash[i:i+20]}, priority=PRIORITY_DUPES)
-            count += 1
-    
-    # 3. Files without subtitles — need sub search (priority 2)
-    needs_subs = [(iid, info) for iid, info in library.items()
-                  if info.get("path") and not info.get("subtitles") and not info.get("suggested_sub")]
-    for iid, info in needs_subs[:20]:  # Cap at 20 to avoid API spam
-        enqueue_task("download_subs", {
-            "imdb_id": iid, "path": info["path"],
-            "language": "en"
-        }, priority=PRIORITY_SUBS)
-        count += 1
-    
-    # 4. Files without quality info (priority 1)
+                    needs_hash_paths.append(item["path"])
+    needs_subs = [(iid, info["path"]) for iid, info in library.items()
+                  if isinstance(info, dict) and info.get("path")
+                  and not info.get("subtitles") and not info.get("suggested_sub")][:50]
     needs_quality = [info["path"] for iid, info in library.items()
-                     if info.get("path") and not info.get("video_codec") and not info.get("quality")]
-    if needs_quality:
-        for i in range(0, len(needs_quality), 20):
-            enqueue_task("check_quality", {"paths": needs_quality[i:i+20]}, priority=PRIORITY_QUALITY)
-            count += 1
-    
-    print(f"Generated {count} tasks for {user}: {len(needs_size)} sizing, {len(dupes_needing_hash)} hashing, {min(len(needs_subs),20)} subs, {len(needs_quality)} quality")
+                     if isinstance(info, dict) and info.get("path")
+                     and not info.get("video_codec") and not info.get("quality")]
+
+    # Batch sizing at 50 per task
+    for i in range(0, len(needs_size), 50):
+        batch = needs_size[i:i+50]
+        enqueue_task("size_files", {"paths": [p for _,p in batch], "imdb_ids": [i for i,_ in batch]}, priority=PRIORITY_QUALITY)
+        count += 1
+    # Hash dupes
+    for i in range(0, len(needs_hash_paths), 50):
+        enqueue_task("hash_files", {"paths": needs_hash_paths[i:i+50]}, priority=PRIORITY_DUPES)
+        count += 1
+    # Subs - interleave with other tasks
+    for iid, path in needs_subs:
+        enqueue_task("download_subs", {"imdb_id": iid, "path": path, "language": "en"}, priority=PRIORITY_SUBS)
+        count += 1
+    # Quality
+    for i in range(0, len(needs_quality), 50):
+        enqueue_task("check_quality", {"paths": needs_quality[i:i+50]}, priority=PRIORITY_QUALITY)
+        count += 1
+
+    print(f"Generated {count} tasks for {user}: {len(needs_size)} sizing, {len(needs_hash_paths)} hashing, {len(needs_subs)} subs, {len(needs_quality)} quality")
     return count
 
 PRIORITY_HUMAN = -1   # User clicked something — do it NOW
@@ -2501,6 +2496,7 @@ def render_tvshows(user):
 def render_library_nav(user, active="library"):
     return sub_nav([
         ("library", "📚 Library", f"{BASE}/library/{user}"),
+        ("browse", "📖 Browse", f"{BASE}/library/browse/{user}"),
         ("tvshows", "📺 TV Shows", f"{BASE}/tvshows/{user}"),
         ("scraper", "🔍 Scraper", f"{BASE}/scraper/{user}"),
         ("org", "🗂 Organize", f"{BASE}/library/org/{user}"),
@@ -2630,7 +2626,7 @@ def render_library(user):
             dupe_cards += '<div style="font-size:.85em;color:#888">Subs: ' + sub_str + '</div>'
             dupe_cards += badge
             dupe_cards += '<div style="margin-top:6px">' + open_btn + '</div>'
-            dupe_cards += '<div style="font-size:.65em;color:#555;margin-top:4px;word-break:break-all">' + path[-60:] + '</div>'
+            dupe_cards += '<div style="font-size:.75em;color:#8ab;margin-top:4px;word-break:break-all;font-family:monospace">' + path.split("/")[-2] + '/' + path.split("/")[-1] + '</div>'
             dupe_cards += '</div>'
 
         dupe_cards += '</div></div>'
@@ -2645,14 +2641,11 @@ def render_library(user):
     for c, n in sorted(codec_dist.items(), key=lambda x: x[1], reverse=True)[:8]:
         codec_bars += '<div style="display:flex;align-items:center;gap:8px;margin:2px 0"><span style="width:60px;text-align:right;font-size:.85em">' + c + '</span><div style="background:#4fc3f7;height:16px;width:' + str(min(n/max(codec_dist.values())*250, 250)) + 'px;border-radius:3px"></div><span style="color:#888">' + str(n) + '</span></div>'
 
-    html = '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Library Curation</title>'
-    html += '<meta name="viewport" content="width=device-width,initial-scale=1">'
-    html += '<style>body{font-family:-apple-system,sans-serif;background:#1a1a2e;color:#eee;margin:20px}'
-    html += '.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:15px}'
-    html += '.card{background:#16213e;padding:15px;border-radius:10px}'
-    html += 'table{border-collapse:collapse;width:100%}th,td{padding:4px 8px;text-align:left;border-bottom:1px solid #333;font-size:.85em}'
-    html += 'th{background:#16213e;position:sticky;top:0}a{color:#4fc3f7;text-decoration:none}</style></head><body>'
-    html += '<h2>📚 Library Curation — ' + user + '</h2>'
+    html = page_head(f"Library - {user}")
+    html += nav_bar("library", user)
+    html += render_library_nav(user, "library")
+    html += '<div class="page">'
+    html += '<h2>📚 Library Curation</h2>'
 
     # Stats cards
     html += '<div class="grid" style="margin-bottom:20px">'
@@ -2699,8 +2692,7 @@ def render_library(user):
             html += f'<tr><td><a href="{BASE}/title/{iid}">{t.get("title","?")}</a></td><td>{t.get("year","")}</td><td>{t.get("imdb_rating","")}</td><td style="color:#d72">{score:.1f}</td><td>{size_str}</td><td>{vsrc_icon} {vsrc}</td></tr>'
         html += '</tbody></table>'
 
-    html += '<p style="margin-top:20px"><a href="' + BASE + '/u/' + user + '">← Ratings</a> · <a href="' + BASE + '/setup/' + user + '">⚙ Setup</a></p>'
-    html += '</body></html>'
+    html += '</div>' + page_foot()
     return html
 
 def render_scraper(user):
@@ -2769,6 +2761,7 @@ def render_scraper(user):
     html += nav_bar("library", user)
     html += sub_nav([
         ("library", "📚 Library", f"{BASE}/library/{user}"),
+        ("browse", "📖 Browse", f"{BASE}/library/browse/{user}"),
         ("tvshows", "📺 TV Shows", f"{BASE}/tvshows/{user}"),
         ("scraper", "🔍 Scraper", f"{BASE}/scraper/{user}"),
     ], "scraper")
@@ -3131,6 +3124,59 @@ td{{padding:8px;border-bottom:1px solid #333}}a{{color:#4fc3f7;text-decoration:n
 <p style="color:#888">Titles from your watchlist now available on your streaming services</p>
 <table>{rows if rows else "<tr><td>No watchlisted titles currently available</td></tr>"}</table>
 <p style="margin-top:15px"><a href="{BASE}/u/{u}">← Back</a></p></body></html>""")
+            return
+        elif p.startswith("/library/browse/"):
+            u = parts[-1]
+            library = load_user_tmm(u)
+            titles = load_titles()
+            ratings = load_user_ratings(u)
+            page_num = int(qs.get("p", ["1"])[0])
+            search = qs.get("q", [""])[0].lower()
+            sort_by = qs.get("sort", ["title"])[0]
+            items = []
+            for iid, info in library.items():
+                if iid.startswith("_") or not isinstance(info, dict): continue
+                t = titles.get(iid, {})
+                title = t.get("title", "") or info.get("title", "")
+                if search and search not in title.lower() and search not in info.get("path","").lower(): continue
+                size = info.get("file_size") or info.get("size") or 0
+                vsrc = detect_video_source(info.get("path", ""))
+                r = ratings.get(iid, {}).get("rating", "")
+                items.append({"iid": iid, "title": title, "year": t.get("year",""),
+                    "quality": info.get("quality","") or (str(info.get("video_height",""))+"p" if info.get("video_height") else ""),
+                    "codec": info.get("video_codec",""), "size": size,
+                    "size_str": f"{size/1073741824:.1f}GB" if size > 1e9 else f"{size//1048576}MB" if size else "-",
+                    "vsrc": SOURCE_ICONS.get(vsrc,""), "rating": r,
+                    "subs": "yes" if info.get("subtitles") else "no",
+                    "path": info.get("path","").split("/")[-1]})
+            if sort_by == "size": items.sort(key=lambda x: x["size"], reverse=True)
+            elif sort_by == "year": items.sort(key=lambda x: str(x["year"]), reverse=True)
+            elif sort_by == "rating": items.sort(key=lambda x: x["rating"] or 0, reverse=True)
+            else: items.sort(key=lambda x: x["title"].lower())
+            per_page = 100
+            total_pages = max(1, (len(items) + per_page - 1) // per_page)
+            page_items = items[(page_num-1)*per_page : page_num*per_page]
+            rows = ""
+            for it in page_items:
+                rc = f' style="color:#4a4"' if it["rating"] else ""
+                rows += f'<tr><td><a href="{BASE}/title/{it["iid"]}">{it["title"]}</a></td><td>{it["year"]}</td><td>{it["quality"]}</td><td>{it["codec"]}</td><td>{it["size_str"]}</td><td>{it["vsrc"]}</td><td{rc}>{it["rating"] or "-"}</td><td>{it["subs"]}</td></tr>'
+            pager = ""
+            if total_pages > 1:
+                for pg in range(1, total_pages+1):
+                    if pg == page_num: pager += f' <b>[{pg}]</b>'
+                    else: pager += f' <a href="{BASE}/library/browse/{u}?p={pg}&q={search}&sort={sort_by}">{pg}</a>'
+            html = page_head(f"Browse Library - {u}")
+            html += nav_bar("library", u)
+            html += render_library_nav(u, "browse")
+            html += '<div class="page">'
+            html += f'<h2>📖 Browse Library — {len(items)} titles</h2>'
+            html += f'<div style="display:flex;gap:10px;margin-bottom:15px;flex-wrap:wrap"><form><input name="q" value="{search}" placeholder="Search..." style="padding:6px;border-radius:4px;border:1px solid var(--border);background:var(--card);color:var(--fg)"><button class="btn">🔍</button></form>'
+            html += f'<span style="color:var(--muted)">Sort: <a href="{BASE}/library/browse/{u}?sort=title&q={search}">Title</a> · <a href="{BASE}/library/browse/{u}?sort=size&q={search}">Size</a> · <a href="{BASE}/library/browse/{u}?sort=year&q={search}">Year</a> · <a href="{BASE}/library/browse/{u}?sort=rating&q={search}">Rating</a></span></div>'
+            html += '<table><thead><tr><th onclick="sortTable(0)">Title</th><th onclick="sortTable(1)">Year</th><th>Quality</th><th>Codec</th><th onclick="sortTable(4)">Size</th><th>Src</th><th>★</th><th>Subs</th></tr></thead>'
+            html += '<tbody>' + rows + '</tbody></table>'
+            html += '<div style="margin-top:15px;text-align:center">' + pager + '</div>'
+            html += '</div>' + page_foot()
+            self._page(html, "library", u)
             return
         elif p.startswith("/library/org/"):
             u = parts[-1]
