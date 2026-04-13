@@ -631,6 +631,8 @@ def daemon_mode(args, config):
                     elapsed = time.time() - t0
                     log(f"[task] Done {ttype} in {elapsed:.1f}s ({tid})")
                     report_result(tid, result)
+                    if result.get("_restart"):
+                        sys.exit(42)
                     break  # One task per poll cycle
             except Exception as e:
                 if consecutive_errors == 0:
@@ -730,7 +732,9 @@ def run_task(ttype, params, config):
                     shutil.copy(path, path + ".bak")
                 with open(path, "w") as f:
                     f.write(code)
-                return {"updated": path, "size": len(code)}
+                log(f"[update] Agent updated ({len(code)} bytes), restarting...")
+                # Report result before exiting
+                return {"updated": path, "size": len(code), "_restart": True}
             return {"error": "missing code or path"}
         
         elif ttype == "diag":
