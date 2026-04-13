@@ -3155,10 +3155,13 @@ td{{padding:8px;border-bottom:1px solid #333}}a{{color:#4fc3f7;text-decoration:n
             titles = load_titles()
             ratings = load_user_ratings(u)
 
-            # Sample 20 rated titles and compare our data vs TMDB/Wikidata
-            import random
+            # Find titles with actual data gaps (not random)
             rated_ids = [iid for iid in ratings if titles.get(iid, {}).get("tmdb_id")]
-            sample = random.sample(rated_ids, min(20, len(rated_ids)))
+            # Prioritize: titles missing alt_titles, keywords, or cast
+            gap_ids = [iid for iid in rated_ids if not titles.get(iid,{}).get("alt_titles") or not titles.get(iid,{}).get("keywords")]
+            ok_ids = [iid for iid in rated_ids if iid not in gap_ids]
+            import random
+            sample = gap_ids[:15] + random.sample(ok_ids, min(5, len(ok_ids)))
 
             rows = ""
             we_have_more = 0
@@ -3226,17 +3229,16 @@ td{{padding:8px;border-bottom:1px solid #333}}a{{color:#4fc3f7;text-decoration:n
             html += '<h3 style="margin-top:20px">🔄 Actions</h3>'
             html += '<div class="grid">'
             html += f'<div class="card"><b>TMDB</b><br>'
-            html += f'<a href="{BASE}/contribute/pull/{u}/tmdb" class="btn" style="margin-top:8px">⬇ Pull from TMDB</a> '
-            html += f'<a href="https://www.themoviedb.org/signup" target="_blank" class="btn">Create account</a>'
-            html += f'<br><small style="color:var(--muted)">Pull: alt titles, keywords, cast for your library</small></div>'
+            html += f'<button onclick="doPull(\'tmdb\')" class="btn" style="margin-top:8px">⬇ Pull alt titles</button>'
+            html += f'<br><small style="color:var(--muted)">Fetches alternative titles + missing keywords</small><div id="tmdb_status"></div></div>'
             html += f'<div class="card"><b>TVDB</b><br>'
-            html += f'<a href="{BASE}/contribute/pull/{u}/tvdb" class="btn" style="margin-top:8px">⬇ Pull from TVDB</a> '
-            html += f'<a href="https://thetvdb.com/auth/register" target="_blank" class="btn">Create account</a>'
-            html += f'<br><small style="color:var(--muted)">Pull: TV episode data, artwork</small></div>'
+            html += f'<button onclick="doPull(\'tvdb\')" class="btn" style="margin-top:8px">⬇ Pull TV data</button>'
+            html += f'<br><small style="color:var(--muted)">TV episode data, cross-references</small><div id="tvdb_status"></div></div>'
             html += f'<div class="card"><b>Wikidata</b><br>'
-            html += f'<a href="{BASE}/contribute/pull/{u}/wikidata" class="btn" style="margin-top:8px">⬇ Pull from Wikidata</a>'
-            html += f'<br><small style="color:var(--muted)">Pull: multilingual titles for matching</small></div>'
+            html += f'<button onclick="doPull(\'wikidata\')" class="btn" style="margin-top:8px">⬇ Pull translations</button>'
+            html += f'<br><small style="color:var(--muted)">Multilingual titles for matching</small><div id="wikidata_status"></div></div>'
             html += '</div>'
+            html += '<script>function doPull(src){{var el=document.getElementById(src+"_status");el.innerHTML="<br>Pulling...";fetch("{BASE}/contribute/pull/{u}/"+src).then(r=>r.text()).then(t=>{{var m=t.match(/count=(\\d+)/);el.innerHTML="<br>Updated "+(m?m[1]:"0")+" titles"}})}}</script>'
 
             html += '</div>' + page_foot()
             self._page(html, "setup", u)
@@ -3301,7 +3303,7 @@ td{{padding:8px;border-bottom:1px solid #333}}a{{color:#4fc3f7;text-decoration:n
                     time.sleep(0.2)
                     if updated >= 20: break
                 save_titles(titles)
-            self._redirect(f"{BASE}/contribute/{u}?pulled={source}&count={updated}")
+            self._html(f"<html><body>pulled={source}&count={updated}</body></html>")
             return
         elif p.startswith("/ai-friend/"):
             u = parts[-1]
