@@ -3763,7 +3763,12 @@ button{{padding:10px 20px;background:#4fc3f7;border:none;border-radius:6px;curso
             try:
                 data = json.loads(body.decode())
                 library = load_user_tmm(user)
-                library.update(data.get("library", {}))
+                # Merge: keep existing fields (file_size, file_hash, nfo_matched, etc.)
+                for iid, info in data.get("library", {}).items():
+                    if iid in library and isinstance(library[iid], dict) and isinstance(info, dict):
+                        library[iid].update(info)
+                    else:
+                        library[iid] = info
                 save_user_tmm(user, library)
                 task_count = generate_tasks_for_library(user)
                 self._json({"status": "ok", "count": len(library), "tasks_generated": task_count})
