@@ -667,6 +667,74 @@ def tvdb_enrich(imdb_id):
 # ── Movie Scraper ─────────────────────────────────────────────────────
 import re as _re
 
+SOURCE_ICONS = {"bluray": "💿", "dvd": "📀", "webrip": "🌐", "webdl": "🌐", "hdtv": "📡", "telesync": "📹", "cam": "📷", "remux": "💎"}
+
+def detect_video_source(path):
+    p = path.lower()
+    if "remux" in p: return "remux"
+    if "blu-ray" in p or "bluray" in p or "brrip" in p or "bdmv" in p or "bdrip" in p: return "bluray"
+    if "dvd" in p or "video_ts" in p: return "dvd"
+    if "webrip" in p or "web-rip" in p: return "webrip"
+    if "webdl" in p or "web-dl" in p or "web dl" in p: return "webdl"
+    if "hdtv" in p: return "hdtv"
+    if "telesync" in p: return "telesync"
+    if "cam" in p.split("_") or "camrip" in p: return "cam"
+    return ""
+
+def _normalize(s):
+    s = s.lower()
+    for tag in ["1080p","720p","480p","2160p","4k","uhd","hdr","bluray","blu-ray","webrip",
+                "brrip","dvdrip","hdtv","aac","ac3","dts","x264","x265","hevc","h264",
+                "mbps","telesync","remastered","extended","directors.cut","unrated"]:
+        s = s.replace(tag.lower(), "")
+    import unicodedata as _ud
+    s = "".join(c for c in _ud.normalize("NFD", s) if _ud.category(c) != "Mn")
+    import re as _re
+    s = _re.sub(r"[()\[\]{}_.,:;!?\-'\"]", " ", s)
+    s = _re.sub(r"\b(19|20)\d{2}\b", "", s)
+    s = _re.sub(r"\s+", " ", s).strip()
+    return s
+
+def _extract_title_from_path(path):
+    parts = path.replace("\\", "/").split("/")
+    fname = parts[-1] if parts else ""
+    if fname.lower() in ("video_ts.ifo","index.bdmv","movieobject.bdmv",""):
+        fname = parts[-3] if len(parts) >= 3 else parts[-2] if len(parts) >= 2 else ""
+    else:
+        fname = fname.rsplit(".", 1)[0]
+    return _normalize(fname)
+
+def _fuzzy_match(a, b):
+    wa = set(a.split())
+    wb = set(b.split())
+    if not wa or not wb: return 0
+    common = wa & wb
+    return len(common) / max(len(wa), len(wb))
+
+def find_mismatches(user, threshold=0.3):
+    library = load_user_tmm(user)
+    titles = load_titles()
+    mismatches = []
+    for iid, info in library.items():
+        if iid.startswith("_") or not isinstance(info, dict): continue
+        path = info.get("path", "")
+        if not path or info.get("confirmed"): continue
+        t = titles.get(iid, {})
+        db_title = t.get("title", "")
+        if not db_title: continue
+        path_title = _extract_title_from_path(path)
+        norm_db = _normalize(db_title)
+        if not path_title or not norm_db: continue
+        score = _fuzzy_match(norm_db, path_title)
+        orig = _normalize(t.get("originalTitle", "") or t.get("original_title", "") or "")
+        if orig and orig != norm_db:
+            score = max(score, _fuzzy_match(orig, path_title))
+        if score < threshold:
+            mismatches.append({"iid": iid, "db_title": db_title, "year": str(t.get("year","")),
+                "path_title": path_title, "path": path, "match": round(score, 2)})
+    mismatches.sort(key=lambda x: x["match"])
+    return mismatches
+
 def parse_movie_filename(filename):
     """Extract title, year, quality, 3D format from a media filename."""
     name = os.path.splitext(os.path.basename(filename))[0]
@@ -2122,380 +2190,9 @@ def render_setup(user):
     trakt_section = '<span style="color:#2d7">✓ Connected</span> <a href="' + BASE + '/trakt/auth/' + user + '">(reconnect)</a>' if has_trakt else ('<a href="' + BASE + '/trakt/auth/' + user + '"><button>Connect Trakt</button></a>' if TRAKT_ID else '')
     
     # Build page with concatenation (avoids f-string issues with JS braces)
-    html = '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Setup</title>'
-    html += '<meta name="viewport" content="width=device-width,initial-scale=1">'
-    html += '<style>body{font-family:sans-serif;background:#1a1a2e;color:#eee;display:flex;justify-content:center;padding-top:30px}'
-    html += '.box{background:#16213e;padding:30px;border-radius:12px;max-width:600px;width:100%}'
-    html += 'a{color:#4fc3f7}input,textarea{width:100%;padding:8px;border-radius:4px;border:1px solid #444;background:#1a1a2e;color:#eee;margin:8px 0;box-sizing:border-box}'
-    html += 'button{padding:10px 30px;background:#4fc3f7;border:none;border-radius:6px;cursor:pointer;font-size:1em;margin-top:10px}'
-    html += 'hr{border-color:#333;margin:20px 0}</style></head>'
-    html += '<body><div class="box">'
-    html += '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap">'
-    html += '<h2>Setup — ' + user + '</h2>' + user_bar + '</div>'
-    
-    # Upload CSV
-    html += '<h3>Upload IMDB CSV</h3>'
-    html += '<form method="POST" action="' + BASE + '/upload/' + user + '" enctype="multipart/form-data">'
-    html += '<input type="file" name="csv" accept=".csv"><button type="submit">Upload</button></form><hr>'
-    
-    # API Keys
-    html += '<h3>API Keys</h3>'
-    html += '<form method="POST" action="' + BASE + '/keys">'
-    html += '<label>TMDB</label><input name="tmdb" value="' + TMDB_KEY + '">'
-    html += '<label>OMDB</label><input name="omdb" value="' + OMDB_KEY + '">'
-    html += '<label>TVDB</label><input name="tvdb" value="' + TVDB_KEY + '">'
-    html += '<label>OpenSubtitles (<a href="https://www.opensubtitles.com/consumers" target="_blank">get key</a>)</label>'
-    html += '<input name="opensubs" placeholder="OpenSubtitles API key">'
-    html += '<button type="submit">Save</button></form><hr>'
-    
-    # Trakt
-    html += '<h3>Trakt</h3>' + trakt_section + '<hr>'
-    
-    # Media Servers + LAN Scanner
-    html += '<h3>Media Servers</h3>' + media_servers + '<hr>'
-    
-    # Local Library
-    html += '<h3>Local Library (TMM / file upload)</h3>'
-    html += '<form method="POST" action="' + BASE + '/tmm/' + user + '" enctype="multipart/form-data">'
-    html += '<input type="file" name="tmm" accept=".csv,.txt"><button type="submit">Upload</button></form><hr>'
-    
-    # Streaming Providers
-    html += '<h3>My Streaming Services</h3>' + provider_config + '<hr>'
-    
-    # IMDB Dataset
-    html += '<h3>Agent Token</h3>'
-    html += '<p>Token for the LAN agent to push library data. Set in agent.json as <code>token</code>.</p>'
-    html += '<form method="POST" action="' + BASE + '/keys">'
-    html += '<input name="agent_token" value="' + AGENT_TOKEN + '" placeholder="Generate a random token">'
-    html += '<button type="submit">Save</button></form><hr>'
-    html += '<h3>IMDB Dataset</h3>'
-    html += '<p>Download IMDB bulk data (200K+ titles, ~220MB). Eliminates most API calls.</p>'
-    html += '<a href="' + BASE + '/datasets/download" style="display:inline-block;padding:8px 16px;background:#1a1a2e;border:1px solid #4fc3f7;border-radius:6px;color:#4fc3f7;text-decoration:none">Download IMDB Datasets</a><hr>'
-    
-    # Agent Status
-    html += '<h3>Agent Status</h3>'
-    html += _render_agent_status()
-    html += '<hr>'
-    
-    # Streaming History Import
-    html += '<h3>Import Streaming History</h3>'
-    html += '<p><a href="' + BASE + '/import/streaming/' + user + '" class="btn btn-primary">Import Netflix / Prime / Disney+ / HBO history</a></p>'
-    html += '<hr>'
-    
-    # Streaming Region
-    html += '<h3>Streaming Region</h3>'
-    html += '<p>Region: <b>' + WATCH_COUNTRY + '</b> | <a href="' + BASE + '/catalog">Browse catalog</a></p>'
-    
-    html += '</div></body></html>'
-    return html
-
-
-
-# ── TV Show Intelligence ──────────────────────────────────────────────
-
-# ── Library Organization ──────────────────────────────────────────────
-def analyze_library(user):
-    """Analyze library for organization issues."""
-    library = load_user_tmm(user)
-    titles = load_titles()
-    items = {k: v for k, v in library.items() if not k.startswith("_") and isinstance(v, dict)}
-    
-    # Orphans: in library but not in titles store (unmatched)
-    orphans = [(iid, info) for iid, info in items.items() if iid not in titles]
-    
-    # Drive/folder summary
-    from collections import defaultdict
-    drives = defaultdict(lambda: {"count": 0, "size": 0})
-    for iid, info in items.items():
-        path = info.get("path", "")
-        # Extract root (drive or first 2 path components)
-        parts = path.replace("\\", "/").split("/")
-        root = "/".join(parts[:4]) if len(parts) > 3 else "/".join(parts[:2])
-        drives[root]["count"] += 1
-        s = info.get("file_size") or info.get("size") or 0
-        if isinstance(s, str):
-            try: s = int(s)
-            except: s = 0
-        drives[root]["size"] += s
-    
-    # Duplicates: same IMDB ID appearing multiple times (shouldn't happen in dict, but same-size files)
-    from collections import Counter
-    size_counts = Counter()
-    size_map = defaultdict(list)
-    for iid, info in items.items():
-        s = info.get("file_size") or info.get("size") or 0
-        if s:
-            size_counts[s] += 1
-            size_map[s].append((iid, info))
-    dupes = {s: entries for s, entries in size_map.items() if len(entries) > 1}
-    
-    # Quality distribution
-    quality = defaultdict(int)
-    codec = defaultdict(int)
-    for iid, info in items.items():
-        h = info.get("video_height") or info.get("quality") or ""
-        if isinstance(h, int) or (isinstance(h, str) and h.isdigit()):
-            h = int(h)
-            if h >= 2160: quality["4K"] += 1
-            elif h >= 1080: quality["1080p"] += 1
-            elif h >= 720: quality["720p"] += 1
-            elif h > 0: quality["SD"] += 1
-        c = info.get("video_codec", "")
-        if c: codec[c.lower()] += 1
-    
-    # Missing data
-    no_size = sum(1 for info in items.values() if not (info.get("file_size") or info.get("size")))
-    no_subs = sum(1 for info in items.values() if not info.get("subtitles"))
-    
-    return {
-        "total": len(items),
-        "orphans": len(orphans),
-        "drives": dict(sorted(drives.items(), key=lambda x: x[1]["size"], reverse=True)),
-        "duplicates": len(dupes),
-        "dupe_details": {str(s): [(iid, info.get("path","")[:80]) for iid, info in entries] for s, entries in list(dupes.items())[:20]},
-        "quality": dict(quality),
-        "codec": dict(codec),
-        "no_size": no_size,
-        "no_subs": no_subs,
-    }
-
-
-# ── Title/Path Mismatch Detection ─────────────────────────────────────
-import re as _re
-import unicodedata as _ud
-
-
-# ── Video Source Detection ────────────────────────────────────────────
-SOURCE_ICONS = {"bluray": "💿", "dvd": "📀", "webrip": "🌐", "webdl": "🌐", "hdtv": "📡", "telesync": "📹", "cam": "📷", "remux": "💎"}
-
-def detect_video_source(path):
-    """Detect video source from filename/path."""
-    p = path.lower()
-    if "remux" in p: return "remux"
-    if "blu-ray" in p or "bluray" in p or "brrip" in p or "bdmv" in p or "bdrip" in p: return "bluray"
-    if "dvd" in p or "video_ts" in p: return "dvd"
-    if "webrip" in p or "web-rip" in p: return "webrip"
-    if "webdl" in p or "web-dl" in p or "web dl" in p: return "webdl"
-    if "hdtv" in p: return "hdtv"
-    if "telesync" in p or "ts" in p.split("_"): return "telesync"
-    if "cam" in p.split("_") or "camrip" in p: return "cam"
-    return ""
-
-def _normalize(s):
-    """Normalize a string for fuzzy comparison: lowercase, strip tags, accents, punctuation."""
-    s = s.lower()
-    # Remove common tags
-    for tag in ["1080p","720p","480p","2160p","4k","uhd","hdr","bluray","blu-ray","webrip",
-                "brrip","dvdrip","hdtv","aac","ac3","dts","x264","x265","hevc","h264",
-                "mbps","telesync","remastered","extended","directors.cut","unrated"]:
-        s = s.replace(tag.lower(), "")
-    # Strip accents
-    s = "".join(c for c in _ud.normalize("NFD", s) if _ud.category(c) != "Mn")
-    # Remove punctuation, underscores, dots, parens, brackets, year
-    s = _re.sub(r"[()\[\]{}_.,:;!?\x27\x22-]", " ", s)
-    s = _re.sub(r"(19|20)\d{2}", "", s)  # remove years
-    s = _re.sub(r"\s+", " ", s).strip()
-    return s
-
-def _extract_title_from_path(path):
-    """Extract likely title from a file path."""
-    parts = path.replace("\\", "/").split("/")
-    # Skip generic filenames
-    fname = parts[-1] if parts else ""
-    if fname.lower() in ("video_ts.ifo","index.bdmv","movieobject.bdmv",""):
-        # Use parent or grandparent directory
-        fname = parts[-3] if len(parts) >= 3 else parts[-2] if len(parts) >= 2 else ""
-    else:
-        fname = fname.rsplit(".", 1)[0]  # remove extension
-    return _normalize(fname)
-
-def _fuzzy_match(a, b):
-    """Simple fuzzy match: ratio of common words."""
-    wa = set(a.split())
-    wb = set(b.split())
-    if not wa or not wb: return 0
-    common = wa & wb
-    return len(common) / max(len(wa), len(wb))
-
-def find_mismatches(user, threshold=0.3):
-    """Find titles where the IMDB title doesn't match the filename."""
-    library = load_user_tmm(user)
-    titles = load_titles()
-    mismatches = []
-    for iid, info in library.items():
-        if iid.startswith("_") or not isinstance(info, dict): continue
-        path = info.get("path", "")
-        if not path or info.get("confirmed"): continue
-        t = titles.get(iid, {})
-        db_title = t.get("title", "")
-        if not db_title: continue
-        path_title = _extract_title_from_path(path)
-        norm_db = _normalize(db_title)
-        if not path_title or not norm_db: continue
-        score = _fuzzy_match(norm_db, path_title)
-        if score < threshold:
-            mismatches.append({
-                "iid": iid, "db_title": db_title, "year": t.get("year",""),
-                "path_title": path_title, "path": path,
-                "match": round(score, 2),
-            })
-    mismatches.sort(key=lambda x: x["match"])
-    return mismatches
-
-def analyze_show(show_name, seasons_data):
-    """Analyze a TV show for gaps, quality issues, and completion."""
-    analysis = {"gaps": [], "quality_issues": [], "completion": {}, "next_episode": None}
-    all_watched = []
-    
-    for season_num in sorted(seasons_data.keys()):
-        eps = seasons_data[season_num]
-        if season_num == 0: continue  # Skip specials
-        ep_nums = sorted(set(ep.get("episode", 0) for ep in eps))
-        
-        # Episode gaps: find missing numbers in sequence
-        if ep_nums:
-            expected = set(range(1, max(ep_nums) + 1))
-            missing = sorted(expected - set(ep_nums))
-            if missing:
-                analysis["gaps"].append({"season": season_num, "missing": missing})
-        
-        # Season completion
-        watched_in_season = sum(1 for ep in eps if ep.get("playcount", 0) > 0)
-        analysis["completion"][season_num] = {
-            "total": len(eps), "watched": watched_in_season,
-            "pct": round(watched_in_season / len(eps) * 100) if eps else 0
-        }
-        
-        # Quality consistency: flag mixed resolutions within a season
-        heights = set(ep.get("video_height", 0) for ep in eps if ep.get("video_height"))
-        if len(heights) > 1:
-            analysis["quality_issues"].append({
-                "season": season_num, "type": "mixed_resolution",
-                "values": sorted(heights, reverse=True)
-            })
-        
-        # Track watched episodes for next-episode prediction
-        for ep in eps:
-            if ep.get("playcount", 0) > 0:
-                all_watched.append((season_num, ep.get("episode", 0)))
-    
-    # Next episode prediction: find the first unwatched after last watched
-    if all_watched:
-        last_s, last_e = max(all_watched)
-        for season_num in sorted(seasons_data.keys()):
-            if season_num < last_s: continue
-            for ep in sorted(seasons_data[season_num], key=lambda x: x.get("episode", 0)):
-                s, e = season_num, ep.get("episode", 0)
-                if (s, e) > (last_s, last_e) and ep.get("playcount", 0) == 0:
-                    analysis["next_episode"] = {"season": s, "episode": e, "title": ep.get("title", "")}
-                    break
-            if analysis["next_episode"]: break
-    
-    return analysis
-
-def render_tvshows(user):
-    """TV Shows screen: episodes grouped by show/season, quality, duplicates."""
-    library = load_user_tmm(user)
-    episodes = library.get("_episodes", {})
-    if not episodes:
-        return '<html><body style="background:#1a1a2e;color:#eee;font-family:sans-serif;padding:40px"><h2>No TV episodes synced</h2><p>Re-run the agent to fetch episodes from Kodi</p><a href="' + BASE + '/u/' + user + '" style="color:#4fc3f7">← Back</a></body></html>'
-
-    from collections import defaultdict
-    # Group by show -> season -> episode
-    shows = defaultdict(lambda: defaultdict(list))
-    for key, ep in episodes.items():
-        if not isinstance(ep, dict): continue
-        show = ep.get("showtitle", "Unknown")
-        season = ep.get("season", 0)
-        shows[show][season].append(ep)
-
-    # Stats
-    total_eps = len(episodes)
-    total_shows = len(shows)
-    watched = sum(1 for ep in episodes.values() if isinstance(ep, dict) and ep.get("playcount", 0) > 0)
-    no_subs = sum(1 for ep in episodes.values() if isinstance(ep, dict) and not ep.get("subtitles"))
-
-    # Quality breakdown
-    codec_map = {"hevc": "x265", "h265": "x265", "h264": "x264", "avc": "x264", "mpeg2": "MPEG-2"}
-    quality_dist = defaultdict(int)
-    codec_dist = defaultdict(int)
-    for ep in episodes.values():
-        if not isinstance(ep, dict): continue
-        h = ep.get("video_height", 0) or 0
-        if h >= 2160: quality_dist["4K"] += 1
-        elif h >= 1080: quality_dist["1080p"] += 1
-        elif h >= 720: quality_dist["720p"] += 1
-        elif h > 0: quality_dist["SD"] += 1
-        c = ep.get("video_codec", "")
-        if c: codec_dist[codec_map.get(c.lower(), c)] += 1
-
-    # Detect duplicate episodes (same show+season+episode, multiple files)
-    ep_groups = defaultdict(list)
-    for key, ep in episodes.items():
-        if not isinstance(ep, dict): continue
-        gkey = ep.get("showtitle","") + "|" + str(ep.get("season",0)) + "|" + str(ep.get("episode",0))
-        ep_groups[gkey].append(ep)
-    dupes = {k: v for k, v in ep_groups.items() if len(v) > 1}
-
-    # Build show list
-    show_rows = ""
-    for show_name in sorted(shows.keys()):
-        seasons = shows[show_name]
-        total_s = len(seasons)
-        total_e = sum(len(eps) for eps in seasons.values())
-        watched_e = sum(1 for eps in seasons.values() for ep in eps if ep.get("playcount", 0) > 0)
-        # Quality summary for this show
-        codecs = defaultdict(int)
-        for eps in seasons.values():
-            for ep in eps:
-                c = ep.get("video_codec", "")
-                if c: codecs[codec_map.get(c.lower(), c)] += 1
-        codec_str = ", ".join(c + ":" + str(n) for c, n in sorted(codecs.items(), key=lambda x: x[1], reverse=True))
-        res = set()
-        for eps in seasons.values():
-            for ep in eps:
-                h = ep.get("video_height", 0)
-                if h: res.add(str(h) + "p")
-        res_str = "/".join(sorted(res, reverse=True))
-        pct = round(watched_e / total_e * 100) if total_e else 0
-        bar_color = "#2d7" if pct == 100 else "#f90" if pct > 0 else "#d72"
-        show_rows += '<tr>'
-        show_rows += '<td><b>' + show_name + '</b></td>'
-        show_rows += '<td>' + str(total_s) + '</td>'
-        show_rows += '<td>' + str(total_e) + '</td>'
-        show_rows += '<td data-sort="' + str(pct) + '"><div style="display:flex;align-items:center;gap:6px"><div style="background:#333;border-radius:3px;width:80px;height:12px"><div style="background:' + bar_color + ';height:12px;width:' + str(pct * 0.8) + 'px;border-radius:3px"></div></div>' + str(pct) + '%</div></td>'
-        show_rows += '<td>' + res_str + '</td>'
-        show_rows += '<td style="font-size:.85em">' + codec_str + '</td>'
-        # TV Intelligence
-        analysis = analyze_show(show_name, seasons)
-        badges = ""
-        if analysis["gaps"]:
-            gap_count = sum(len(g["missing"]) for g in analysis["gaps"])
-            badges += '<span style="color:#d72" title="' + str(gap_count) + ' missing episodes">⚠' + str(gap_count) + ' gaps</span> '
-        if analysis["quality_issues"]:
-            badges += '<span style="color:#f90" title="Mixed quality in season">🔀 mixed</span> '
-        if analysis["next_episode"]:
-            ne = analysis["next_episode"]
-            badges += '<span style="color:#4fc3f7" title="Next: S' + str(ne["season"]).zfill(2) + 'E' + str(ne["episode"]).zfill(2) + '">▶ S' + str(ne["season"]).zfill(2) + 'E' + str(ne["episode"]).zfill(2) + '</span>'
-        show_rows += '<td>' + badges + '</td>'
-        show_rows += '</tr>'
-
-    # Quality bars
-    max_q = max(quality_dist.values()) if quality_dist else 1
-    q_bars = ""
-    for q in ["4K", "1080p", "720p", "SD"]:
-        c = quality_dist.get(q, 0)
-        if c: q_bars += '<div style="display:flex;align-items:center;gap:8px;margin:2px 0"><span style="width:50px;text-align:right">' + q + '</span><div style="background:#4fc3f7;height:18px;width:' + str(min(c/max_q*300, 300)) + 'px;border-radius:3px"></div><span style="color:#888">' + str(c) + '</span></div>'
-
-    html = page_head("TV Shows - " + user)
-    html += nav_bar("library", user)
-    html += render_library_nav(user, "tvshows")
+    html = page_head(f"Setup - {user}")
+    html += nav_bar("setup", user)
     html += '<div class="page">'
-    html += '<script>function f(){const q=document.getElementById("s").value.toLowerCase();document.querySelectorAll("tbody tr").forEach(r=>r.style.display=r.textContent.toLowerCase().includes(q)?"":"none")}</script>'
-    html += '<script>function sortTable(n){const tb=document.querySelector("tbody"),rows=[...tb.rows],dir=tb.dataset.sort==n?-1:1;tb.dataset.sort=dir==1?n:"";rows.sort((a,b)=>{let x=a.cells[n].textContent,y=b.cells[n].textContent;return(typeof x==="number"&&typeof y==="number"?(x-y):(String(x)).localeCompare(String(y),undefined,{numeric:true}))*dir});rows.forEach(r=>tb.appendChild(r))}'
-    html += 'function rate(el,user,iid,score){fetch("' + BASE + '/rate/"+user+"/"+iid+"/"+score).then(()=>{const row=el.closest("tr");const stars=row.querySelectorAll("a[href*=rate]");stars.forEach((s,i)=>{s.style.color=i<score?"#4fc3f7":"#444"});row.style.opacity="0.6"})}'
-    html += '</script>'
-    html += '</head><body>'
     html += '<h2>📺 TV Shows — ' + user + '</h2>'
 
     # Stats
@@ -2917,13 +2614,9 @@ def render_stats(user):
     dist_bars = "".join('<div style="display:flex;align-items:center;gap:8px;margin:2px 0"><span style="width:30px;text-align:right">' + str(i) + '</span><div style="background:#4fc3f7;height:18px;width:' + str(rating_dist[i-1]/max_bar*300) + 'px;border-radius:3px"></div><span style="color:#888;font-size:.85em">' + str(rating_dist[i-1]) + '</span></div>' for i in range(10, 0, -1))
     genre_bars = "".join('<div style="display:flex;align-items:center;gap:8px;margin:2px 0"><span style="width:100px;text-align:right;font-size:.85em">' + g + '</span><div style="background:#4fc3f7;height:16px;width:' + str(c/top_genres[0][1]*250) + 'px;border-radius:3px"></div><span style="color:#888;font-size:.85em">' + str(c) + '</span></div>' for g, c in top_genres)
     dir_list = "".join("<tr><td>" + d + "</td><td>" + str(c) + "</td></tr>" for d, c in top_dirs)
-    html = '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Stats</title>'
-    html += '<meta name="viewport" content="width=device-width,initial-scale=1">'
-    html += '<style>body{font-family:-apple-system,sans-serif;background:#1a1a2e;color:#eee;margin:20px}'
-    html += '.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:20px}'
-    html += '.card{background:#16213e;padding:20px;border-radius:12px}'
-    html += 'table{border-collapse:collapse;width:100%}td{padding:4px 8px;border-bottom:1px solid #333}'
-    html += 'a{color:#4fc3f7}</style></head><body>'
+    html = page_head(f"Stats - {user}")
+    html += nav_bar("ratings", user)
+    html += '<div class="page">'
     html += '<h2>📊 ' + user + " Stats</h2>"
     html += '<div style="display:flex;gap:20px;margin-bottom:20px;flex-wrap:wrap">'
     html += '<div class="card" style="text-align:center"><div style="font-size:3em">' + str(len(ratings)) + '</div>titles</div>'
@@ -2943,11 +2636,9 @@ def render_compare(u1, u2):
     disagree.sort(key=lambda x: x[3], reverse=True)
     agree_rows = "".join("<tr><td>" + t + "</td><td>" + str(a) + "</td><td>" + str(b) + "</td></tr>" for t,a,b in agree[:15])
     disagree_rows = "".join("<tr><td>" + t + "</td><td>" + str(a) + "</td><td>" + str(b) + "</td><td>" + str(d) + "</td></tr>" for t,a,b,d in disagree[:15])
-    html = '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Compare</title>'
-    html += '<style>body{font-family:sans-serif;background:#1a1a2e;color:#eee;margin:20px}'
-    html += '.card{background:#16213e;padding:20px;border-radius:12px;display:inline-block;margin:5px;text-align:center}'
-    html += 'table{border-collapse:collapse;width:100%}td,th{padding:4px 8px;border-bottom:1px solid #333;text-align:left}'
-    html += 'a{color:#4fc3f7}</style></head><body>'
+    html = page_head("Compare Users")
+    html += nav_bar("social", "")
+    html += '<div class="page">'
     html += '<h2>' + u1 + ' vs ' + u2 + '</h2>'
     html += '<div class="card"><div style="font-size:2em">' + str(len(common)) + '</div>both rated</div>'
     html += '<div class="card"><div style="font-size:2em">' + str(len(agree)) + '</div>agree</div>'
