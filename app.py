@@ -710,6 +710,8 @@ def _extract_title_from_path(path):
         fname = parts[-3] if len(parts) >= 3 else parts[-2] if len(parts) >= 2 else ""
     else:
         fname = fname.rsplit(".", 1)[0]
+        import re as _re2
+    fname = _re2.sub(r"\b(cd|disc|part)\d\b", "", fname, flags=_re2.IGNORECASE)
     return _normalize(fname)
 
 def _fuzzy_match(a, b):
@@ -734,9 +736,13 @@ def find_mismatches(user, threshold=0.2):
         norm_db = _normalize(db_title)
         if not path_title or not norm_db: continue
         score = _fuzzy_match(norm_db, path_title)
-        orig = _normalize(t.get("originalTitle", "") or t.get("original_title", "") or "")
-        if orig and orig != norm_db:
-            score = max(score, _fuzzy_match(orig, path_title))
+        for alt in [t.get("originalTitle", ""), t.get("original_title", "")] + (t.get("alt_titles") or []):
+            if not alt: continue
+            alt_norm = _normalize(alt)
+            if not alt_norm: continue
+            score = max(score, _fuzzy_match(alt_norm, path_title))
+            if alt_norm in path_title or path_title in alt_norm:
+                score = max(score, 0.8)
         if score < threshold:
             mismatches.append({"iid": iid, "db_title": db_title, "year": str(t.get("year","")),
                 "path_title": path_title, "path": path, "match": round(score, 2)})
