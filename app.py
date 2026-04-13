@@ -710,8 +710,7 @@ def _extract_title_from_path(path):
         fname = parts[-3] if len(parts) >= 3 else parts[-2] if len(parts) >= 2 else ""
     else:
         fname = fname.rsplit(".", 1)[0]
-        import re as _re2
-    fname = _re2.sub(r"\b(cd|disc|part)\d\b", "", fname, flags=_re2.IGNORECASE)
+        fname = __import__("re").sub(r"(?i)\b(cd|disc|part)\d\b", "", fname)
     return _normalize(fname)
 
 def _fuzzy_match(a, b):
