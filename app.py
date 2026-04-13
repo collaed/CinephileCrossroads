@@ -2671,6 +2671,52 @@ def render_library(user):
     html += '<div class="card" style="text-align:center"><div style="font-size:2.2em;color:#d72">' + str(no_subs) + '</div>missing subs</div>'
     html += '</div>'
 
+    # Agent & task performance
+    queue = load_task_queue()
+    agent = load_agent_status()
+    t_done = [t for t in queue if t["status"] == "done" and t.get("completed")]
+    t_pending = [t for t in queue if t["status"] == "pending"]
+    t_by_type = {}
+    for t in t_pending: t_by_type[t["type"]] = t_by_type.get(t["type"], 0) + 1
+    agent_ver = agent.get("agent_version", "?")
+    agent_uptime = agent.get("uptime", 0)
+    uptime_str = f"{agent_uptime//3600}h {(agent_uptime%3600)//60}m" if agent_uptime > 3600 else f"{agent_uptime//60}m"
+    last_seen = agent.get("last_seen", "never")
+    last_task = agent.get("last_activity", {}).get("task", "-")
+    bg_task = agent.get("last_activity", {}).get("bg_task", agent.get("bg_task", ""))
+    errors = agent.get("last_activity", {}).get("errors", 0)
+    # ETA: avg time per done task
+    eta_str = "-"
+    if len(t_done) >= 2:
+        times = sorted(t["completed"] for t in t_done)
+        try:
+            from datetime import datetime
+            first = datetime.strptime(times[0], "%Y-%m-%d %H:%M:%S")
+            last = datetime.strptime(times[-1], "%Y-%m-%d %H:%M:%S")
+            elapsed = (last - first).total_seconds()
+            if elapsed > 0 and len(t_done) > 1:
+                rate = len(t_done) / elapsed  # tasks/sec
+                if rate > 0 and t_pending:
+                    eta_sec = len(t_pending) / rate
+                    eta_str = f"{eta_sec//3600:.0f}h {(eta_sec%3600)//60:.0f}m" if eta_sec > 3600 else f"{eta_sec//60:.0f}m"
+        except: pass
+
+    html += '<div class="grid" style="margin-bottom:20px">'
+    html += '<div class="card"><b>🤖 Agent</b><br>'
+    html += f'v{agent_ver} · up {uptime_str}<br>'
+    html += f'<small style="color:var(--muted)">Last seen: {last_seen}</small><br>'
+    html += f'<small>Current: {last_task}</small>'
+    if bg_task: html += f'<br><small>Background: {bg_task}</small>'
+    if errors: html += f'<br><small style="color:#d72">Errors: {errors}</small>'
+    html += '</div>'
+    html += '<div class="card"><b>📋 Task Queue</b><br>'
+    html += f'<span style="font-size:1.5em">{len(t_done)}</span> done · <span style="font-size:1.5em">{len(t_pending)}</span> pending<br>'
+    for ttype, cnt in sorted(t_by_type.items(), key=lambda x: x[1], reverse=True):
+        html += f'<small>{ttype}: {cnt}</small><br>'
+    html += f'<small style="color:var(--muted)">ETA: {eta_str}</small>'
+    html += '</div>'
+    html += '</div>'
+
     # Quality & codec breakdown
     html += '<div class="grid" style="margin-bottom:20px">'
     html += '<div class="card"><h3>Resolution</h3>' + q_bars + '</div>'
