@@ -3259,10 +3259,9 @@ td{{padding:8px;border-bottom:1px solid #333}}a{{color:#4fc3f7;text-decoration:n
                     tmdb_id = t["tmdb_id"]
                     kind = "tv" if t.get("type") in ("tvSeries","tvMiniSeries","tv") else "movie"
                     alt = api_get(f"https://api.themoviedb.org/3/{kind}/{tmdb_id}/alternative_titles?api_key={TMDB_KEY}")
-                    if alt:
-                        alt_list = alt.get("titles") or alt.get("results") or []
-                        t["alt_titles"] = [a["title"] for a in alt_list if a.get("title")][:15]
-                        updated += 1
+                    alt_list = (alt.get("titles") or alt.get("results") or []) if alt else []
+                    t["alt_titles"] = [a["title"] for a in alt_list if a.get("title")][:15]
+                    updated += 1
                     time.sleep(0.1)
                 save_titles(titles)
             elif source == "tvdb" and TVDB_KEY:
