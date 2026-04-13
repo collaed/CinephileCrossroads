@@ -168,12 +168,19 @@ def generate_tasks_for_library(user):
     library = load_user_tmm(user)
     if not library: return 0
     
-    # Clear old pending tasks
+    # Load queue, preserve priority/exec_code tasks and all done tasks
     queue = load_task_queue()
-    preserved = [t for t in queue if t["status"] == "pending" and (t.get("priority") == -1 or t["type"] == "exec_code")]
-    queue = [t for t in queue if t["status"] != "pending" or t.get("priority") == -1 or t["type"] == "exec_code"]
-    if preserved: print("  Preserved " + str(len(preserved)) + " priority tasks")
-    save_task_queue(queue)
+    keep = [t for t in queue if t["status"] != "pending" or t.get("priority") == -1 or t["type"] in ("exec_code", "update_agent")]
+    dropped = len(queue) - len(keep)
+    preserved = [t for t in keep if t["status"] == "pending"]
+    if preserved: print("  Preserved " + str(len(preserved)) + " priority tasks: " + ", ".join(t["id"] for t in preserved))
+    if dropped: print("  Cleared " + str(dropped) + " old auto-generated tasks")
+    
+    new_tasks = []
+    def _add(task_type, params, priority):
+        new_tasks.append({"id": f"task_{int(time.time()*1000)}_{len(new_tasks)}", "type": task_type,
+            "params": params or {}, "priority": priority, "status": "pending",
+            "created": time.strftime("%Y-%m-%d %H:%M:%S")})
     
     count = 0
     from collections import defaultdict
@@ -204,21 +211,25 @@ def generate_tasks_for_library(user):
     # Batch sizing at 50 per task
     for i in range(0, len(needs_size), 50):
         batch = needs_size[i:i+50]
-        enqueue_task("size_files", {"paths": [p for _,p in batch], "imdb_ids": [i for i,_ in batch]}, priority=PRIORITY_QUALITY)
+        _add("size_files", {"paths": [p for _,p in batch], "imdb_ids": [i for i,_ in batch]}, PRIORITY_QUALITY)
         count += 1
     # Hash dupes
     for i in range(0, len(needs_hash_paths), 50):
-        enqueue_task("hash_files", {"paths": needs_hash_paths[i:i+50]}, priority=PRIORITY_DUPES)
+        _add("hash_files", {"paths": needs_hash_paths[i:i+50]}, PRIORITY_DUPES)
         count += 1
     # Subs - interleave with other tasks
     for iid, path in needs_subs:
-        enqueue_task("download_subs", {"imdb_id": iid, "path": path, "language": "en"}, priority=PRIORITY_SUBS)
+        _add("download_subs", {"imdb_id": iid, "path": path, "language": "en"}, PRIORITY_SUBS)
         count += 1
     # Quality
     for i in range(0, len(needs_quality), 50):
-        enqueue_task("check_quality", {"paths": needs_quality[i:i+50]}, priority=PRIORITY_QUALITY)
+        _add("check_quality", {"paths": needs_quality[i:i+50]}, PRIORITY_QUALITY)
         count += 1
 
+    # Save all at once: preserved + new + done
+    new_tasks.sort(key=lambda t: t["priority"])
+    save_task_queue(keep + new_tasks)
+    count = len(new_tasks)
     print(f"Generated {count} tasks for {user}: {len(needs_size)} sizing, {len(needs_hash_paths)} hashing, {len(needs_subs)} subs, {len(needs_quality)} quality")
     return count
 
