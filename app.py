@@ -2252,6 +2252,155 @@ def render_setup(user):
 
 # ── Library Organization ──────────────────────────────────────────────
 
+def render_tvshows(user):
+    """TV Shows screen: episodes grouped by show/season, quality, duplicates."""
+    library = load_user_tmm(user)
+    episodes = library.get("_episodes", {})
+    if not episodes:
+        return '<html><body style="background:#1a1a2e;color:#eee;font-family:sans-serif;padding:40px"><h2>No TV episodes synced</h2><p>Re-run the agent to fetch episodes from Kodi</p><a href="' + BASE + '/u/' + user + '" style="color:#4fc3f7">← Back</a></body></html>'
+
+    from collections import defaultdict
+    # Group by show -> season -> episode
+    shows = defaultdict(lambda: defaultdict(list))
+    for key, ep in episodes.items():
+        if not isinstance(ep, dict): continue
+        show = ep.get("showtitle", "Unknown")
+        season = ep.get("season", 0)
+        shows[show][season].append(ep)
+
+    # Stats
+    total_eps = len(episodes)
+    total_shows = len(shows)
+    watched = sum(1 for ep in episodes.values() if isinstance(ep, dict) and ep.get("playcount", 0) > 0)
+    no_subs = sum(1 for ep in episodes.values() if isinstance(ep, dict) and not ep.get("subtitles"))
+
+    # Quality breakdown
+    codec_map = {"hevc": "x265", "h265": "x265", "h264": "x264", "avc": "x264", "mpeg2": "MPEG-2"}
+    quality_dist = defaultdict(int)
+    codec_dist = defaultdict(int)
+    for ep in episodes.values():
+        if not isinstance(ep, dict): continue
+        h = ep.get("video_height", 0) or 0
+        if h >= 2160: quality_dist["4K"] += 1
+        elif h >= 1080: quality_dist["1080p"] += 1
+        elif h >= 720: quality_dist["720p"] += 1
+        elif h > 0: quality_dist["SD"] += 1
+        c = ep.get("video_codec", "")
+        if c: codec_dist[codec_map.get(c.lower(), c)] += 1
+
+    # Detect duplicate episodes (same show+season+episode, multiple files)
+    ep_groups = defaultdict(list)
+    for key, ep in episodes.items():
+        if not isinstance(ep, dict): continue
+        gkey = ep.get("showtitle","") + "|" + str(ep.get("season",0)) + "|" + str(ep.get("episode",0))
+        ep_groups[gkey].append(ep)
+    dupes = {k: v for k, v in ep_groups.items() if len(v) > 1}
+
+    # Build show list
+    show_rows = ""
+    for show_name in sorted(shows.keys()):
+        seasons = shows[show_name]
+        total_s = len(seasons)
+        total_e = sum(len(eps) for eps in seasons.values())
+        watched_e = sum(1 for eps in seasons.values() for ep in eps if ep.get("playcount", 0) > 0)
+        # Quality summary for this show
+        codecs = defaultdict(int)
+        for eps in seasons.values():
+            for ep in eps:
+                c = ep.get("video_codec", "")
+                if c: codecs[codec_map.get(c.lower(), c)] += 1
+        codec_str = ", ".join(c + ":" + str(n) for c, n in sorted(codecs.items(), key=lambda x: x[1], reverse=True))
+        res = set()
+        for eps in seasons.values():
+            for ep in eps:
+                h = ep.get("video_height", 0)
+                if h: res.add(str(h) + "p")
+        res_str = "/".join(sorted(res, reverse=True))
+        pct = round(watched_e / total_e * 100) if total_e else 0
+        bar_color = "#2d7" if pct == 100 else "#f90" if pct > 0 else "#d72"
+        show_rows += '<tr>'
+        show_rows += '<td><b>' + show_name + '</b></td>'
+        show_rows += '<td>' + str(total_s) + '</td>'
+        show_rows += '<td>' + str(total_e) + '</td>'
+        show_rows += '<td data-sort="' + str(pct) + '"><div style="display:flex;align-items:center;gap:6px"><div style="background:#333;border-radius:3px;width:80px;height:12px"><div style="background:' + bar_color + ';height:12px;width:' + str(pct * 0.8) + 'px;border-radius:3px"></div></div>' + str(pct) + '%</div></td>'
+        show_rows += '<td>' + res_str + '</td>'
+        show_rows += '<td style="font-size:.85em">' + codec_str + '</td>'
+        # TV Intelligence
+        analysis = analyze_show(show_name, seasons)
+        badges = ""
+        if analysis["gaps"]:
+            gap_count = sum(len(g["missing"]) for g in analysis["gaps"])
+            badges += '<span style="color:#d72" title="' + str(gap_count) + ' missing episodes">⚠' + str(gap_count) + ' gaps</span> '
+        if analysis["quality_issues"]:
+            badges += '<span style="color:#f90" title="Mixed quality in season">🔀 mixed</span> '
+        if analysis["next_episode"]:
+            ne = analysis["next_episode"]
+            badges += '<span style="color:#4fc3f7" title="Next: S' + str(ne["season"]).zfill(2) + 'E' + str(ne["episode"]).zfill(2) + '">▶ S' + str(ne["season"]).zfill(2) + 'E' + str(ne["episode"]).zfill(2) + '</span>'
+        show_rows += '<td>' + badges + '</td>'
+        show_rows += '</tr>'
+
+    # Quality bars
+    max_q = max(quality_dist.values()) if quality_dist else 1
+    q_bars = ""
+    for q in ["4K", "1080p", "720p", "SD"]:
+        c = quality_dist.get(q, 0)
+        if c: q_bars += '<div style="display:flex;align-items:center;gap:8px;margin:2px 0"><span style="width:50px;text-align:right">' + q + '</span><div style="background:#4fc3f7;height:18px;width:' + str(min(c/max_q*300, 300)) + 'px;border-radius:3px"></div><span style="color:#888">' + str(c) + '</span></div>'
+
+    html = page_head("TV Shows - " + user)
+    html += nav_bar("library", user)
+    html += render_library_nav(user, "tvshows")
+    html += '<div class="page">'
+    html += '<script>function f(){const q=document.getElementById("s").value.toLowerCase();document.querySelectorAll("tbody tr").forEach(r=>r.style.display=r.textContent.toLowerCase().includes(q)?"":"none")}</script>'
+    html += '<script>function sortTable(n){const tb=document.querySelector("tbody"),rows=[...tb.rows],dir=tb.dataset.sort==n?-1:1;tb.dataset.sort=dir==1?n:"";rows.sort((a,b)=>{let x=a.cells[n].textContent,y=b.cells[n].textContent;return(typeof x==="number"&&typeof y==="number"?(x-y):(String(x)).localeCompare(String(y),undefined,{numeric:true}))*dir});rows.forEach(r=>tb.appendChild(r))}'
+    html += 'function rate(el,user,iid,score){fetch("' + BASE + '/rate/"+user+"/"+iid+"/"+score).then(()=>{const row=el.closest("tr");const stars=row.querySelectorAll("a[href*=rate]");stars.forEach((s,i)=>{s.style.color=i<score?"#4fc3f7":"#444"});row.style.opacity="0.6"})}'
+    html += '</script>'
+    html += '</head><body>'
+    html += '<h2>📺 TV Shows — ' + user + '</h2>'
+
+    # Stats
+    html += '<div class="grid" style="margin-bottom:20px">'
+    html += '<div class="card"><div style="font-size:2.5em">' + str(total_shows) + '</div>shows</div>'
+    html += '<div class="card"><div style="font-size:2.5em">' + str(total_eps) + '</div>episodes</div>'
+    html += '<div class="card"><div style="font-size:2.5em">' + str(watched) + '</div>watched</div>'
+    html += '<div class="card"><div style="font-size:2.5em;color:#d72">' + str(no_subs) + '</div>no subs</div>'
+    html += '<div class="card"><div style="font-size:2.5em;color:#f90">' + str(len(dupes)) + '</div>duplicate eps</div>'
+    html += '</div>'
+
+    # Quality breakdown
+    html += '<div class="grid" style="margin-bottom:20px">'
+    html += '<div class="card"><h3>Resolution</h3>' + q_bars + '</div>'
+    html += '</div>'
+
+    # Show list
+    html += '<div style="margin-bottom:10px"><input id="s" onkeyup="f()" placeholder="Search shows..."></div>'
+    html += '<table><thead><tr><th onclick="sortTable(0)">Show</th><th onclick="sortTable(1)">Seasons</th><th onclick="sortTable(2)">Episodes</th><th onclick="sortTable(3)">Watched</th><th onclick="sortTable(4)">Quality</th><th>Codecs</th><th>Intel</th></tr></thead>'
+    html += '<tbody>' + show_rows + '</tbody></table>'
+
+    # Duplicate episodes
+    if dupes:
+        dupe_rows = ""
+        for gkey, eps in sorted(dupes.items()):
+            show, season, episode = gkey.split("|")
+            dupe_rows += '<tr style="background:#1a3a5e"><td colspan="7"><b>' + show + '</b> S' + season.zfill(2) + 'E' + episode.zfill(2) + ' — ' + str(len(eps)) + ' copies</td></tr>'
+            for ep in eps:
+                h = ep.get("video_height", "")
+                codec = ep.get("video_codec", "")
+                codec_display = codec_map.get(codec.lower(), codec) if codec else ""
+                audio = ep.get("audio", [])
+                audio_str = ", ".join(a.get("codec","") + " " + str(a.get("channels","")) + "ch" for a in audio[:3]) if audio else "—"
+                subs = ep.get("subtitles", [])
+                sub_str = ", ".join(s.get("language","") for s in subs[:4]) if subs else "none"
+                path = ep.get("path", "")
+                dupe_rows += '<tr><td>' + str(h) + 'p</td><td>' + codec_display + '</td><td>' + audio_str + '</td><td>' + sub_str + '</td><td style="font-size:.7em;color:#888">' + path[-60:] + '</td></tr>'
+        html += '<h3 style="margin-top:20px">🔍 Duplicate Episodes (' + str(len(dupes)) + ')</h3>'
+        html += '<table><thead><tr><th>Res</th><th>Codec</th><th>Audio</th><th>Subs</th><th>Path</th></tr></thead>'
+        html += '<tbody>' + dupe_rows + '</tbody></table>'
+
+    html += '<p style="margin-top:20px"><a href="' + BASE + '/u/' + user + '">← Ratings</a> · <a href="' + BASE + '/library/' + user + '">📚 Library</a></p>'
+    html += '</body></html>'
+    return html
+
+
 def render_library_nav(user, active="library"):
     return sub_nav([
         ("library", "📚 Library", f"{BASE}/library/{user}"),
@@ -2931,12 +3080,7 @@ th,td{{padding:6px 10px;text-align:left;border-bottom:1px solid #333}}th{{backgr
                 poster = titles.get(f["id"],{}).get("poster","")
                 img = '<img src="' + poster + '" height="40" style="border-radius:4px">' if poster else ""
                 rows += '<tr><td>' + img + '</td><td><b>' + f["user"] + '</b> rated <a href="https://www.imdb.com/title/' + f["id"] + '/" target="_blank">' + f["title"] + '</a></td><td style="font-weight:bold">' + str(f["rating"]) + '/10</td><td style="color:#888">' + f["date"] + '</td></tr>'
-            self._html(f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>Activity Feed</title>
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<style>body{{font-family:sans-serif;background:#1a1a2e;color:#eee;margin:20px}}table{{border-collapse:collapse;width:100%}}
-td{{padding:8px;border-bottom:1px solid #333}}a{{color:#4fc3f7;text-decoration:none}}</style></head>
-<body><h2>📡 Activity Feed</h2><table>{rows}</table>
-<p style="margin-top:15px"><a href="{BASE}/">← Back</a></p></body></html>""")
+            self._html(page_head("Activity Feed") + nav_bar("social", "") + f"""<div class="page"><h2>📡 Activity Feed</h2><table>{rows}</table></div>""" + page_foot())
             return
         elif p.startswith("/alerts/"):
             u = parts[-1]
