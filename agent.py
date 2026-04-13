@@ -538,7 +538,7 @@ def daemon_mode(args, config):
                 log(f"[sync] Error: {e}")
                 time.sleep(60)  # Retry sooner on error
                 continue
-            time.sleep(1800)  # Every 30 min
+            time.sleep(14400)  # Every 4 hours
     
     _start_time = time.time()
 
@@ -651,7 +651,7 @@ def daemon_mode(args, config):
             time.sleep(15)
     
     log(f"Agent daemon - server: {base_url}, user: {args.user}")
-    log(f"  Sync thread: every 30 min")
+    log(f"  Sync thread: every 4 hours")
     log(f"  Task thread: every 15 sec")
     
     threading.Thread(target=sync_loop, daemon=True).start()
