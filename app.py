@@ -1592,7 +1592,9 @@ def enrich_titles(jid=None, fast=False):
     count = 0
     cache = load_imdb_cache()
     omdb_calls = 0
+    changelog = safe_json_load(os.path.join(DATA_DIR, "enrichment_log.json")) or []
     for iid, t in todo:
+        before = {k: t.get(k) for k in ("poster", "keywords", "cast", "directors", "writers", "genres", "rotten_tomatoes", "metacritic", "providers", "trailer", "similar_tmdb", "overview")}
         # Fill basics from IMDB dataset (free, no API call)
         ds = cache.get(iid, {})
         for k in ("title", "year", "type", "genres", "runtime", "imdb_rating", "votes"):
@@ -1601,7 +1603,7 @@ def enrich_titles(jid=None, fast=False):
         if TMDB_KEY:
             for k, v in tmdb_enrich(iid).items():
                 if v: t[k] = v
-        if OMDB_KEY and omdb_calls < 100 and not fast:
+        if OMDB_KEY and omdb_calls < 80 and not fast:
             o = omdb_enrich(iid)
             omdb_calls += 1
             for k in ("rotten_tomatoes", "metacritic", "plot", "awards"):
@@ -1612,6 +1614,22 @@ def enrich_titles(jid=None, fast=False):
                 if v: t[k] = v
         t["_enriched"] = True
         t["_enriched_ts"] = time.strftime("%Y-%m-%dT%H:%M")
+        # Log what changed
+        changes = {}
+        for k, old_val in before.items():
+            new_val = t.get(k)
+            if new_val and new_val != old_val:
+                if k == "keywords":
+                    changes[k] = f"{len(old_val or [])} -> {len(new_val or [])}"
+                elif k == "similar_tmdb":
+                    changes[k] = f"{len(old_val or [])} -> {len(new_val or [])}"
+                elif k == "cast":
+                    changes[k] = str(new_val)[:60]
+                else:
+                    changes[k] = str(new_val)[:40]
+        if changes:
+            changelog.append({"iid": iid, "title": t.get("title", ""), "year": t.get("year", ""),
+                "ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "changes": changes})
         count += 1
         if jid and count % 5 == 0:
             job_progress(jid, count, total, f"Enriching {t.get('title',iid)}")
@@ -1620,7 +1638,10 @@ def enrich_titles(jid=None, fast=False):
             print(f"  Enriched {count}/{total}...")
         time.sleep(0.03 if fast else 0.08)
     save_titles(titles)
-    print(f"Enriched {count} titles")
+    # Keep last 2000 changelog entries
+    changelog = changelog[-2000:]
+    safe_json_save(os.path.join(DATA_DIR, "enrichment_log.json"), changelog)
+    print(f"Enriched {count} titles, {len([c for c in changelog if c['ts'] > time.strftime('%Y-%m-%d')])} changes today")
 
 def fetch_streaming_catalog(jid=None):
     """Fetch full streaming catalog for WATCH_COUNTRY from TMDB discover API.
@@ -3227,6 +3248,78 @@ td{{padding:8px;border-bottom:1px solid #333}}a{{color:#4fc3f7;text-decoration:n
 <p style="color:#888">Titles from your watchlist now available on your streaming services</p>
 <table>{rows if rows else "<tr><td>No watchlisted titles currently available</td></tr>"}</table>
 <p style="margin-top:15px"><a href="{BASE}/u/{u}">← Back</a></p></body></html>""")
+            return
+        elif p.startswith("/updates"):
+            page_num = int(qs.get("p", ["1"])[0])
+            log_path = os.path.join(DATA_DIR, "enrichment_log.json")
+            changelog = safe_json_load(log_path) or []
+            changelog.reverse()  # newest first
+            per_page = 50
+            total_pages = max(1, (len(changelog) + per_page - 1) // per_page)
+            page_items = changelog[(page_num-1)*per_page : page_num*per_page]
+
+            html = page_head("Recent Updates")
+            html += nav_bar("discover", "")
+            html += '<div class="page">'
+            html += f'<h2>📋 Recent Enrichment Updates</h2>'
+            html += f'<p style="color:var(--muted)">{len(changelog)} changes tracked. Page {page_num}/{total_pages}.</p>'
+            html += '<table><thead><tr><th>Time</th><th>Title</th><th>Changes</th></tr></thead><tbody>'
+            for entry in page_items:
+                change_tags = ""
+                for k, v in entry.get("changes", {}).items():
+                    colors = {"poster": "#48f", "keywords": "#4c8", "cast": "#f90", "directors": "#a6e",
+                              "rotten_tomatoes": "#d72", "metacritic": "#d72", "providers": "#4fc3f7",
+                              "genres": "#888", "trailer": "#ff0", "overview": "#888", "writers": "#a6e", "similar_tmdb": "#48f"}
+                    c = colors.get(k, "#888")
+                    change_tags += f'<span style="background:{c}22;color:{c};padding:1px 6px;border-radius:3px;font-size:.8em;margin:1px">{k}: {v}</span> '
+                html += f'<tr><td style="white-space:nowrap;font-size:.8em;color:var(--muted)">{entry["ts"][5:16]}</td>'
+                html += f'<td><a href="{BASE}/title/{entry["iid"]}">{entry["title"]}</a> ({entry.get("year","")})</td>'
+                html += f'<td>{change_tags}</td></tr>'
+            html += '</tbody></table>'
+
+            # Pagination with lazy loading
+            if total_pages > 1:
+                html += '<div id="pager" style="text-align:center;margin:20px">'
+                if page_num < total_pages:
+                    html += f'<button onclick="loadMore()" class="btn" id="loadBtn">Load more</button>'
+                html += '</div>'
+                html += '<script>'
+                html += 'var nextPage = ' + str(page_num + 1) + ';'
+                html += 'var maxPage = ' + str(total_pages) + ';'
+                html += 'function loadMore(){'
+                html += '  if(nextPage>maxPage)return;'
+                html += '  var btn=document.getElementById("loadBtn");btn.textContent="Loading...";'
+                html += '  fetch("' + BASE + '/api/updates?p="+nextPage).then(r=>r.text()).then(html=>{'
+                html += '    document.querySelector("tbody").insertAdjacentHTML("beforeend",html);'
+                html += '    nextPage++;btn.textContent=nextPage>maxPage?"No more":"Load more";'
+                html += '  });}'
+                html += '</script>'
+
+            html += '</div>' + page_foot()
+            self._page(html, "discover", "")
+            return
+        elif p.startswith("/api/updates"):
+            page_num = int(qs.get("p", ["1"])[0])
+            log_path = os.path.join(DATA_DIR, "enrichment_log.json")
+            changelog = safe_json_load(log_path) or []
+            changelog.reverse()
+            per_page = 50
+            page_items = changelog[(page_num-1)*per_page : page_num*per_page]
+            rows = ""
+            for entry in page_items:
+                change_tags = ""
+                for k, v in entry.get("changes", {}).items():
+                    colors = {"poster": "#48f", "keywords": "#4c8", "cast": "#f90", "directors": "#a6e",
+                              "rotten_tomatoes": "#d72", "metacritic": "#d72", "providers": "#4fc3f7"}
+                    c = colors.get(k, "#888")
+                    change_tags += f'<span style="background:{c}22;color:{c};padding:1px 6px;border-radius:3px;font-size:.8em;margin:1px">{k}: {v}</span> '
+                rows += f'<tr><td style="white-space:nowrap;font-size:.8em;color:var(--muted)">{entry["ts"][5:16]}</td>'
+                rows += f'<td><a href="{BASE}/title/{entry["iid"]}">{entry["title"]}</a> ({entry.get("year","")})</td>'
+                rows += f'<td>{change_tags}</td></tr>'
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write(rows.encode())
             return
         elif p.startswith("/ai-friend/"):
             u = parts[-1]
