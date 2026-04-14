@@ -1,0 +1,58 @@
+# Wishlist for Audiobookshelf-like Features
+# Inspired by CinephileCrossroads approach
+
+## Incoming Folder Scanner
+- Monitor a downloads folder for new audiobook files (.m4b, .mp3, .m4a, .opus)
+- Parse filename/folder for: author, title, narrator, series, book number
+- Match against online databases (Audible, Google Books, OpenLibrary, Goodreads)
+- Show on "To Be Confirmed" page with proposed match
+- One-click confirm → move to library with proper naming convention
+- Detect duplicates (same book, different quality/format)
+
+## Taste-Based Recommendations
+- Build listener profile from rated/completed audiobooks
+- Weight by: genres, authors, narrators, series, themes, length preference
+- Scoring: author match (2x), narrator (1.5x), genre (1x), theme keywords (1x)
+- Categories:
+  - 🧬 DNA Match (deep theme/keyword matching)
+  - ✍️ Authors You Love (prolific authors you rate highly)
+  - 🎙️ Narrators You Love (voice actors you prefer)
+  - 📚 Complete the Series (unfinished series you started)
+  - 💎 Hidden Gems (high-rated, low-popularity in your genres)
+
+## Library Intelligence
+- Series completion tracking (you have books 1,3,5 — missing 2,4)
+- Narrator consistency (flag if a series switches narrators)
+- Quality analysis (bitrate, format, chapter markers present)
+- Duration stats (total listening time, average book length preference)
+- "Save Space" — books furthest from your taste profile
+
+## Social / Community
+- Activity feed (recently finished across users)
+- Compare tastes between users
+- Shared wishlists
+- "If you liked X" recommendations from community data
+
+## Data Sources
+- Audible (metadata, ratings, narrator info)
+- Goodreads (ratings, reviews, series info)
+- OpenLibrary (free metadata, covers)
+- Google Books (metadata, descriptions)
+- LibriVox (free public domain audiobooks)
+- Wikidata (structured author/book data, multilingual)
+
+## Agent Tasks (like CineCross agent)
+- scan_incoming: find new audiobook files
+- identify_book: match filename to database
+- move_file: organize into library convention
+- check_quality: bitrate, format, chapter markers
+- find_chapters: detect chapter boundaries if missing
+- download_metadata: fetch cover art, description, narrator
+- generate_preview: extract 30s clip for browsing
+
+## Integration Ideas
+- Audiobookshelf API sync (if already running)
+- Plex audiobook library sync
+- Calibre integration for ebook↔audiobook cross-reference
+- Podcast feed generation for personal audiobook streaming
+- Mobile app deep links (open in Audiobookshelf app)
