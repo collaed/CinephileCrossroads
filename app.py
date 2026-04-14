@@ -2319,30 +2319,27 @@ def render_recs(user):
         if not items: continue
         cards = ""
         for iid, t, score in items:
-            poster = '<img src="' + t.get("poster","") + '" style="border-radius:4px;width:45px;height:65px;object-fit:cover" loading="lazy">' if t.get("poster") else ""
+            poster_url = t.get("poster", "")
+            poster_img = '<img src="' + poster_url + '" loading="lazy">' if poster_url else '<div style="width:100%;aspect-ratio:2/3;background:var(--border);display:flex;align-items:center;justify-content:center;font-size:.7em;color:var(--muted)">No poster</div>'
             provs = " ".join(PROVIDER_ICONS.get(p,"") for p in t.get("providers",[]) if p in get_user_active_providers(user))
-            wl = '<a href="' + BASE + '/watchlist/add/' + iid + '">🤍</a>' if iid not in watchlist else '<a href="' + BASE + '/watchlist/rm/' + iid + '">❤️</a>'
-            trailer = ' <a href="' + t.get("trailer","") + '" target="_blank">▶️</a>' if t.get("trailer") else ""
-            prev_rating = user_ratings.get(iid, {}).get("rating", 0) if cat_key == "rewatch" else 0
-            if prev_rating:
-                stars = "".join('<a href="' + BASE + '/rate/' + user + '/' + iid + '/' + str(s) + '" style="text-decoration:none;color:' + ('#4fc3f7' if s <= prev_rating else '#444') + '">' + "★" + '</a>' for s in range(1, 11))
-            else:
-                stars = "".join('<a href="' + BASE + '/rate/' + user + '/' + iid + '/' + str(s) + '" style="text-decoration:none;color:gold">' + ("★" if s <= 5 else "☆") + '</a>' for s in range(1, 11))
-            cards += '<div style="display:flex;gap:8px;padding:8px 0;border-bottom:1px solid var(--border,#333);align-items:center">'
-            cards += poster
-            cards += '<div style="flex:1;min-width:0;overflow:hidden">'
-            cards += '<div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis"><b><a href="https://www.imdb.com/title/' + iid + '/" target="_blank" title="' + t.get("overview","")[:150] + '">' + t.get("title","?") + '</a></b> ' + wl + trailer + '</div>'
-            cards += '<div style="color:#888;font-size:.8em">' + str(t.get("year","")) + ' · ' + provs + ' · ' + str(t.get("imdb_rating","")) + ' · <span style="color:var(--accent)">' + str(score) + '</span></div>'
-            cards += '<div style="font-size:.75em">' + stars + '</div>'
-            cards += '</div></div>'
-        columns += '<div style="min-width:0"><h4 style="margin:0 0 5px;white-space:nowrap">' + cat_title + '</h4>'
-        columns += '<p style="color:#888;font-size:.75em;margin:0 0 8px">' + cat_desc + '</p>'
-        columns += cards + '</div>'
+            imdb_r = str(t.get("imdb_rating",""))
+            wl = '<a href="' + BASE + '/watchlist/add/' + iid + '" style="text-decoration:none">🤍</a>' if iid not in watchlist else '<a href="' + BASE + '/watchlist/rm/' + iid + '" style="text-decoration:none">❤️</a>'
+            cards += '<a href="' + BASE + '/title/' + iid + '" style="text-decoration:none;color:var(--fg)"><div class="poster-card">'
+            cards += poster_img
+            cards += '<div class="rating" style="color:var(--accent)">' + str(score) + '</div>'
+            if imdb_r: cards += '<div class="badge">' + imdb_r + '</div>'
+            if provs: cards += '<div style="position:absolute;bottom:40px;right:4px;font-size:.9em">' + provs + '</div>'
+            cards += '<div class="info"><div class="title">' + t.get("title","?") + '</div>'
+            cards += '<div class="meta">' + str(t.get("year","")) + ' ' + wl + '</div></div></div></a>'
+        columns += '<div><h4 style="margin:0 0 8px">' + cat_title + '</h4>'
+        columns += '<p style="color:var(--muted);font-size:.8em;margin:0 0 12px">' + cat_desc + '</p><div class="poster-grid" style="grid-template-columns:repeat(auto-fill,minmax(120px,1fr))">' 
+        columns += cards + '</div></div>'
     sections = '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:20px;align-items:start">' + columns + '</div>'
     
     user_bar = render_user_bar(user, "recs", False)
     html = page_head("Recommendations for " + user)
     html += nav_bar("discover", user)
+    html += render_discover_nav(user, "recs")
     html += '<div class="page">'
     html += '<h2>🎯 Recommendations <span style="color:var(--muted);font-weight:normal;font-size:.6em">Movies & TV shows</span></h2>'
     html += '<details style="margin-bottom:20px"><summary style="cursor:pointer;color:#4fc3f7">Your taste profile</summary>'
