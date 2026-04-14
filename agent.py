@@ -10,7 +10,7 @@ Run via cron for automatic sync: */30 * * * * python3 /path/to/agent.py --server
 """
 import json, os, sys, time, threading, urllib.request, urllib.parse, argparse, subprocess, base64
 
-AGENT_VERSION = "2.1.04141653"
+AGENT_VERSION = "2.1.04141657"
 CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "agent.json")
 LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "agent.log")
 _last_activity = {"task": "starting", "time": "", "errors": 0}
@@ -685,30 +685,39 @@ def run_task(ttype, params, config):
             paths = params.get("paths", [])
             mapped = [(p, map_path(p, config)) for p in paths]
             data = {}
-            if os.name == "nt":
-                # Batch via PowerShell - one process for all files
+            if os.name == "nt" and mapped:
+                # Batch via PowerShell Get-Item - one process for all files
                 mp_list = [mp for _, mp in mapped]
                 try:
-                    cmd = ["powershell", "-c", "Get-Item -LiteralPath " + ",".join("'" + m + "'" for m in mp_list) + " -ErrorAction SilentlyContinue | Select-Object -Property FullName,Length | ConvertTo-Json"]
+                    # Build PowerShell command
+                    ps_paths = ",".join("'" + m.replace("'", "''") + "'" for m in mp_list)
+                    cmd = ["powershell", "-c",
+                        "Get-Item -LiteralPath " + ps_paths +
+                        " -ErrorAction SilentlyContinue | Select-Object FullName,Length | ConvertTo-Json -Compress"]
                     out = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-                    import json as _j
-                    results = _j.loads(out.stdout) if out.stdout.strip() else []
-                    if isinstance(results, dict): results = [results]
-                    size_map = {r["FullName"]: r["Length"] for r in results if r.get("Length")}
-                    for orig, mp in mapped:
-                        if mp in size_map: data[orig] = size_map[mp]
-                        elif mp.replace("/", os.sep) in size_map: data[orig] = size_map[mp.replace("/", os.sep)]
+                    if out.stdout.strip():
+                        import json as _j
+                        results = _j.loads(out.stdout)
+                        if isinstance(results, dict): results = [results]
+                        size_map = {}
+                        for r in results:
+                            if r.get("Length"):
+                                size_map[r["FullName"]] = r["Length"]
+                        for orig, mp in mapped:
+                            # Try exact match and normalized match
+                            sz = size_map.get(mp) or size_map.get(mp.replace("/", os.sep))
+                            if sz: data[orig] = sz
+                    log(f"[size] PowerShell batch: {len(data)}/{len(paths)} sized")
                 except Exception as e:
-                    log(f"[size] PowerShell batch failed: {e}, falling back")
+                    log(f"[size] PowerShell failed: {e}, falling back")
                     for orig, mp in mapped:
-                        try: data[orig] = os.path.getsize(mp)
-                        except: pass
+                        sz = _safe_stat(mp)
+                        if sz: data[orig] = sz
             else:
                 for orig, mp in mapped:
-                    try: data[orig] = os.path.getsize(mp)
-                    except: pass
+                    sz = _safe_stat(mp)
+                    if sz: data[orig] = sz
             return {"sized": len(data), "data": data}
-        
         elif ttype == "hash_files":
             paths = params.get("paths", [])
             data = {}
@@ -723,13 +732,44 @@ def run_task(ttype, params, config):
             return {"hashed": len(data), "data": data}
         
         elif ttype == "download_subs":
-            imdb_id = params.get("imdb_id")
-            path = params.get("path")
-            if imdb_id and path:
-                mp = map_path(path, config)
-                file_hash = opensubtitles_hash(mp) if os.path.isfile(mp) else None
-                return {"imdb_id": imdb_id, "hash": file_hash, "path": path}
-            return {"error": "missing imdb_id or path"}
+            imdb_id = params.get("imdb_id", "")
+            path = params.get("path", "")
+            language = params.get("language", "eng")
+            if not imdb_id or not path:
+                return {"error": "missing imdb_id or path"}
+            mp = map_path(path, config)
+            file_hash = opensubtitles_hash(mp) if os.path.isfile(mp) else None
+            file_size = _safe_stat(mp)
+            # Try OpenSubtitles.org XML-RPC
+            os_user = params.get("os_user", "") or config.get("opensubs_user", "")
+            os_pass = params.get("os_pass", "") or config.get("opensubs_pass", "")
+            subs_found = []
+            if file_hash and file_size and os_user:
+                try:
+                    import xmlrpc.client
+                    server = xmlrpc.client.ServerProxy("https://api.opensubtitles.org/xml-rpc")
+                    login = server.LogIn(os_user, os_pass, language, "CinephileCrossroads v2.1")
+                    if login.get("status", "").startswith("200"):
+                        token = login["token"]
+                        results = server.SearchSubtitles(token, [
+                            {"moviehash": file_hash, "moviebytesize": str(file_size), "sublanguageid": language},
+                            {"imdbid": imdb_id.replace("tt",""), "sublanguageid": language}
+                        ])
+                        if results.get("data"):
+                            for s in results["data"][:5]:
+                                subs_found.append({
+                                    "name": s.get("SubFileName",""),
+                                    "lang": s.get("SubLanguageID",""),
+                                    "url": s.get("SubDownloadLink",""),
+                                    "rating": s.get("SubRating","0"),
+                                    "format": s.get("SubFormat","srt"),
+                                })
+                            log(f"[subs] {imdb_id}: {len(subs_found)} subs found ({language})")
+                        server.LogOut(token)
+                except Exception as e:
+                    log(f"[subs] OpenSubs error: {e}")
+            return {"imdb_id": imdb_id, "hash": file_hash, "path": path, "subs": subs_found,
+                    "data": {"subs": subs_found}}
         
         elif ttype == "check_quality":
             paths = params.get("paths", [])

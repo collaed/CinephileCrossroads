@@ -226,7 +226,7 @@ def generate_tasks_for_library(user):
         count += 1
     # Subs - interleave with other tasks
     for iid, path in needs_subs:
-        _add("download_subs", {"imdb_id": iid, "path": path, "language": sub_lang}, PRIORITY_SUBS)
+        _add("download_subs", {"imdb_id": iid, "path": path, "language": sub_lang, "os_user": _load_key("opensubs_user"), "os_pass": _load_key("opensubs_pass")}, PRIORITY_SUBS)
         count += 1
     # Quality
     for i in range(0, len(needs_quality), 50):
@@ -4022,7 +4022,12 @@ button{{padding:12px 30px;background:#4fc3f7;border:none;border-radius:8px;curso
                         for lib_iid, lib_info in library.items():
                             if isinstance(lib_info, dict) and titles.get(lib_iid, {}).get("tmdb_id") == tmdb_id:
                                 vsrc = detect_video_source(lib_info.get("path", ""))
-                                in_lib = ' <span style="color:#f90">⚠ Already in library</span> <span style="font-size:.8em;color:var(--muted)">' + SOURCE_ICONS.get(vsrc, "") + ' ' + lib_info.get("path","").split("/")[-1][:40] + '</span>'
+                                lib_q = lib_info.get("video_height", "") or lib_info.get("quality", "")
+                                lib_codec = lib_info.get("video_codec", "")
+                                new_q = f.get("quality", "")
+                                better = "📈 Better" if new_q and lib_q and str(new_q).replace("p","") > str(lib_q) else "📉 Worse" if new_q and lib_q else ""
+                                in_lib = ' <span style="color:#f90">⚠ In library (' + str(lib_q) + ' ' + lib_codec + ')</span> <span style="font-size:.8em">' + better + '</span>'
+
                                 break
                         html += '<td>' + poster + ' <b>' + match.get("title","") + '</b>' + ep_info + ' (' + match.get("year","") + ' ' + match.get("type","") + ')' + in_lib
                         if in_lib:
