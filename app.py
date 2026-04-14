@@ -393,6 +393,22 @@ def _apply_task_result(task, result):
                         f["year_guess"] = parsed.get("year", "")
                         f["quality"] = parsed.get("quality", "")
                         f["status"] = "pending"
+                        # Auto-search TMDB for match
+                        if TMDB_KEY and f["title_guess"]:
+                            q = urllib.parse.quote(f["title_guess"])
+                            url = f"https://api.themoviedb.org/3/search/multi?api_key={TMDB_KEY}&query={q}"
+                            if f["year_guess"]: url += "&year=" + f["year_guess"]
+                            results = api_get(url)
+                            if results and results.get("results"):
+                                r = results["results"][0]
+                                f["tmdb_match"] = {
+                                    "id": r.get("id"),
+                                    "title": r.get("title") or r.get("name", ""),
+                                    "year": (r.get("release_date") or r.get("first_air_date") or "")[:4],
+                                    "type": r.get("media_type", "movie"),
+                                    "poster": f"https://image.tmdb.org/t/p/w92{r["poster_path"]}" if r.get("poster_path") else "",
+                                }
+                            time.sleep(0.1)
                     existing.extend(new_files)
                     safe_json_save(incoming_file, existing)
                     updated = True
@@ -3564,7 +3580,7 @@ td{{padding:8px;border-bottom:1px solid #333}}a{{color:#4fc3f7;text-decoration:n
             if why:
                 html += '<h3 style="margin-top:30px">🤔 Why Do I Have This?</h3>'
                 html += '<p style="color:var(--muted);font-size:.85em">Low taste match AND low IMDB rating. Prime candidates for cleanup.</p>'
-                html += '<table><thead><tr><th>Title</th><th>Year</th><th>IMDB</th><th>Match</th></tr></thead><tbody>'
+                html += '<table><thead><tr><th>Title</th><th>Year</th><th>IMDB</th><th>TMDB Match</th></tr></thead><tbody>'
                 for iid, t, score, imdb_r in why[:20]:
                     html += f'<tr><td><a href="{BASE}/title/{iid}">{t["title"]}</a></td><td>{t.get("year","")}</td><td style="color:#d72">{imdb_r}</td><td>{score:.1f}</td></tr>'
                 html += '</tbody></table>'
@@ -3924,14 +3940,19 @@ button{{padding:12px 30px;background:#4fc3f7;border:none;border-radius:8px;curso
             if pending:
                 html += '<h3 style="margin-top:30px">📥 Incoming — ' + str(len(pending)) + ' new files</h3>'
                 html += '<p style="color:var(--muted);font-size:.85em">New downloads to identify. Search TMDB to match, then confirm to organize.</p>'
-                html += '<table><thead><tr><th>Filename</th><th>Title (guess)</th><th>Year</th><th>Size</th><th>Match</th></tr></thead><tbody>'
+                html += '<table><thead><tr><th>Filename</th><th>Title (guess)</th><th>Year</th><th>Size</th><th>TMDB Match</th></tr></thead><tbody>'
                 for f in pending[:50]:
                     size_str = str(round(f.get("size",0)/1073741824, 1)) + " GB"
                     tg = f.get("title_guess", "")
                     yg = f.get("year_guess", "")
                     html += '<tr><td style="font-family:monospace;font-size:.8em;max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + f.get("filename","") + '</td>'
                     html += '<td>' + tg + '</td><td>' + yg + '</td><td>' + size_str + '</td>'
-                    html += '<td><form method="GET" action="' + BASE + '/scraper-match/' + u + '/incoming" style="display:flex;gap:4px"><input name="q" value="' + tg + '" style="width:120px;padding:4px"><input type="hidden" name="path" value="' + f.get("path","") + '"><button type="submit" class="btn">🔍</button></form></td></tr>'
+                    match = f.get("tmdb_match", {})
+                    if match:
+                        poster = '<img src="' + match.get("poster","") + '" height="40" style="border-radius:3px">' if match.get("poster") else ""
+                        html += '<td>' + poster + ' <b>' + match.get("title","") + '</b> (' + match.get("year","") + ') <span style="color:var(--muted);font-size:.8em">' + match.get("type","") + '</span></td></tr>'
+                    else:
+                        html += '<td><form method="GET" action="' + BASE + '/scraper-match/' + u + '/incoming" style="display:flex;gap:4px"><input name="q" value="' + tg + '" style="width:120px;padding:4px"><button type="submit" class="btn">🔍</button></form></td></tr>'
                 html += '</tbody></table>'
 
             html += '</div>' + page_foot()
