@@ -329,6 +329,7 @@ def complete_task(task_id, result=None):
         _apply_task_result(fake_task, result)
     # Feed results back into library data
     if task and result and not result.get("error"):
+        print("[complete] Applying " + task.get("type","?") + " " + task_id)
         _apply_task_result(task, result)
     # Store exec_code results persistently
     if result and (task_id.startswith("inspect_") or task_id.startswith("nfo_") or (task and task.get("type") == "exec_code")):
@@ -343,7 +344,9 @@ def _apply_task_result(task, result):
     ttype = task["type"]
     params = task.get("params", {})
     data = result.get("data", {})
-    if not data: return
+    if not data:
+        print(f"[apply] No data for {ttype}")
+        return
     print(f"[tasks] Applying {ttype}: {len(data)} items")
     # Find which user this is for (check all users)
     for user in list_users():
@@ -654,7 +657,9 @@ def tmdb_enrich(imdb_id):
     """Fetch poster, overview, rating, streaming providers, keywords, and similar titles from TMDB."""
     if not TMDB_KEY: return {}
     data = api_get(f"https://api.themoviedb.org/3/find/{imdb_id}?api_key={TMDB_KEY}&external_source=imdb_id")
-    if not data: return {}
+    if not data:
+        print(f"[apply] No data for {ttype}")
+        return {}
     movies, shows = data.get("movie_results") or [], data.get("tv_results") or []
     if not movies and not shows: return {}
     is_tv = len(shows) > 0
@@ -1196,7 +1201,9 @@ def opensubs_search(imdb_id, languages=None, file_hash=None, file_size=None):
     if file_hash: params += f"&moviehash={file_hash}"
     data = api_get(f"{OPENSUBS_API}/subtitles?{params}",
                    {"Api-Key": api_key, "User-Agent": "CineCross v1.0"})
-    if not data: return []
+    if not data:
+        print(f"[apply] No data for {ttype}")
+        return []
     results = []
     for s in data.get("data", []):
         attr = s.get("attributes", {})
@@ -1323,7 +1330,9 @@ def tastedive_similar(imdb_id, title):
         return t["_tastedive"]
     q = urllib.parse.quote(title)
     data = api_get(f"https://tastedive.com/api/similar?q={q}&type=movie&limit=5&info=1")
-    if not data: return []
+    if not data:
+        print(f"[apply] No data for {ttype}")
+        return []
     results = [{"title": r.get("Name",""), "type": r.get("Type",""), "description": r.get("wTeaser","")} for r in data.get("Similar",{}).get("Results",[])]
     # Cache
     if imdb_id in titles:

@@ -10,7 +10,7 @@ Run via cron for automatic sync: */30 * * * * python3 /path/to/agent.py --server
 """
 import json, os, sys, time, threading, urllib.request, urllib.parse, argparse, subprocess, base64
 
-AGENT_VERSION = "2.1.04141304"
+AGENT_VERSION = "2.1.04141521"
 CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "agent.json")
 LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "agent.log")
 _last_activity = {"task": "starting", "time": "", "errors": 0}
@@ -776,6 +776,8 @@ def run_task(ttype, params, config):
             incoming = params.get("path", "")
             min_size = params.get("min_size", 50000000)  # 50MB default
             mp = map_path(incoming, config)
+            log(f"[incoming] Path: {incoming} -> {mp}")
+            log(f"[incoming] Exists: {os.path.exists(mp)}")
             found = []
             for root, dirs, files in os.walk(mp):
                 for f in files:
