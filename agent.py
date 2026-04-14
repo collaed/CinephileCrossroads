@@ -51,9 +51,7 @@ def flush_buffer(base_url, headers):
 DEFAULT_CONFIG = {
     "_path_mappings": {
         "/Movies": "\\\\zeus\\Movies",
-        "/TVShows": "\\\\zeus\\TVShows",
-        "/Audiobooks": "\\\\zeus\\Audiobooks",
-        "/AudioIncoming": "\\\\zeus\\Downloads\\Audiobooks"
+        "/TVShows": "\\\\zeus\\TVShows"
     },
 
     "plex": {"enabled": False, "url": "http://192.168.1.x:32400", "token": ""},
@@ -897,109 +895,6 @@ def run_task(ttype, params, config):
                 "paths": path_info,
             }
         
-        elif ttype == "scan_incoming_audio":
-            # Scan incoming folder for audiobook files
-            incoming = params.get("path", "")
-            min_size = params.get("min_size", 1000000)  # 1MB default for audio
-            mp = map_path(incoming, config)
-            if os.name == "nt" and mp.startswith("//"): mp = mp.replace("/", os.sep)
-            log(f"[audio-incoming] Path: {incoming} -> {repr(mp)}")
-            audio_exts = (".m4b", ".mp3", ".m4a", ".opus", ".flac", ".ogg", ".wma", ".aac")
-            found = []
-            for root, dirs, files in os.walk(mp):
-                for f in files:
-                    if f.lower().endswith(audio_exts):
-                        fp = os.path.join(root, f)
-                        try: sz = os.path.getsize(fp)
-                        except: sz = 0
-                        if sz > min_size:
-                            nfs = unmap_path(fp, config)
-                            # Parse author/title from path structure
-                            rel = os.path.relpath(fp, mp)
-                            parts = rel.replace("\\", "/").split("/")
-                            parsed = {"author": "", "title": "", "series": "", "sequence": ""}
-                            if len(parts) >= 3:
-                                parsed["author"] = parts[0]
-                                parsed["series"] = parts[1]
-                                import re as _re
-                                seq = _re.match(r"(?:Book\s*)?(\d+)", parts[-1])
-                                if seq: parsed["sequence"] = seq.group(1)
-                                parsed["title"] = os.path.splitext(parts[-1])[0]
-                            elif len(parts) == 2:
-                                parsed["author"] = parts[0]
-                                parsed["title"] = os.path.splitext(parts[1])[0]
-                            else:
-                                name = os.path.splitext(parts[0])[0]
-                                if " - " in name:
-                                    parsed["author"], parsed["title"] = name.split(" - ", 1)
-                                else:
-                                    parsed["title"] = name
-                            found.append({"path": nfs, "filename": f, "size": sz, "parsed": parsed})
-                            log(f"[audio-incoming] {f} ({sz/1048576:.1f} MB)")
-            log(f"[audio-incoming] Found {len(found)} audio files")
-            return {"files": found, "data": {"files": found}}
-
-        elif ttype == "audio_quality":
-            # Check audiobook quality via ffprobe
-            paths = params.get("paths", [])
-            data = {}
-            for p in paths:
-                mp = map_path(p, config)
-                if not os.path.isfile(mp):
-                    data[p] = {"error": "not found"}
-                    continue
-                try:
-                    out = subprocess.run(
-                        ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", "-show_streams", mp],
-                        capture_output=True, text=True, timeout=30)
-                    info = json.loads(out.stdout) if out.stdout.strip() else {}
-                    fmt = info.get("format", {})
-                    streams = info.get("streams", [])
-                    audio_streams = [s for s in streams if s.get("codec_type") == "audio"]
-                    a = audio_streams[0] if audio_streams else {}
-                    data[p] = {
-                        "duration": float(fmt.get("duration", 0)),
-                        "bitrate": int(fmt.get("bit_rate", 0)) // 1000,
-                        "format": fmt.get("format_name", ""),
-                        "codec": a.get("codec_name", ""),
-                        "channels": a.get("channels", 0),
-                        "sample_rate": a.get("sample_rate", ""),
-                        "size": int(fmt.get("size", 0)),
-                        "has_chapters": len(info.get("chapters", [])) > 0,
-                        "chapter_count": len(info.get("chapters", [])),
-                    }
-                    log(f"[audio-quality] {os.path.basename(mp)}: {data[p]['bitrate']}kbps {data[p]['codec']} {data[p]['channels']}ch")
-                except Exception as e:
-                    data[p] = {"error": str(e)}
-            return {"checked": len(data), "data": data}
-
-        elif ttype == "audio_identify":
-            # Read embedded metadata from audiobook file
-            p = params.get("path", "")
-            mp = map_path(p, config)
-            if not os.path.isfile(mp):
-                return {"error": "not found"}
-            try:
-                out = subprocess.run(
-                    ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", mp],
-                    capture_output=True, text=True, timeout=15)
-                info = json.loads(out.stdout) if out.stdout.strip() else {}
-                tags = info.get("format", {}).get("tags", {})
-                # Normalize tag keys to lowercase
-                tags = {k.lower(): v for k, v in tags.items()}
-                return {
-                    "path": p,
-                    "title": tags.get("title", ""),
-                    "artist": tags.get("artist", tags.get("album_artist", "")),
-                    "album": tags.get("album", ""),
-                    "genre": tags.get("genre", ""),
-                    "date": tags.get("date", ""),
-                    "comment": tags.get("comment", ""),
-                    "duration": float(info.get("format", {}).get("duration", 0)),
-                }
-            except Exception as e:
-                return {"error": str(e)}
-
         else:
             return {"error": f"Unknown task: {ttype}"}
     except Exception as e:
