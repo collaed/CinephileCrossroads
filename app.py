@@ -110,6 +110,17 @@ body{font-family:-apple-system,sans-serif;background:var(--bg);color:var(--fg);m
 .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:15px;margin-bottom:20px}
 .card{background:var(--card);padding:15px;border-radius:10px}
 table{border-collapse:collapse;width:100%}th,td{padding:6px 10px;text-align:left;border-bottom:1px solid var(--border)}
+
+.poster-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:16px;padding:10px 0}
+.poster-card{position:relative;border-radius:8px;overflow:hidden;background:var(--card);transition:transform .2s}
+.poster-card:hover{transform:scale(1.03)}
+.poster-card img{width:100%;aspect-ratio:2/3;object-fit:cover;display:block}
+.poster-card .info{padding:8px;font-size:.8em}
+.poster-card .title{font-weight:bold;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.poster-card .meta{color:var(--muted);font-size:.85em}
+.poster-card .badge{position:absolute;top:6px;right:6px;background:rgba(0,0,0,.7);padding:2px 6px;border-radius:4px;font-size:.75em}
+.poster-card .rating{position:absolute;top:6px;left:6px;background:rgba(0,0,0,.8);padding:2px 8px;border-radius:4px;font-weight:bold}
+.poster-card .progress{position:absolute;bottom:0;left:0;height:3px;background:var(--accent);border-radius:0 0 8px 8px}
 th{background:var(--card);cursor:pointer;position:sticky;top:88px;cursor:pointer}tr:hover{background:var(--card)}
 a{color:var(--accent);text-decoration:none}img{border-radius:4px}
 .btn{display:inline-block;padding:6px 14px;border-radius:6px;background:var(--card);border:1px solid var(--border);color:var(--fg);text-decoration:none;font-size:.85em;margin:2px}
@@ -3585,10 +3596,12 @@ td{{padding:8px;border-bottom:1px solid #333}}a{{color:#4fc3f7;text-decoration:n
             # Hidden Gems
             html += '<h3>💎 Hidden Gems in Your Library</h3>'
             html += '<p style="color:var(--muted);font-size:.85em">You own these but have not rated them. Your taste profile says you will love them.</p>'
-            html += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px">'
+            html += '<div class="poster-grid">'
             for iid, t, score, imdb_r in gems[:20]:
-                poster = f'<img src="{t.get("poster","")}" style="width:100%;border-radius:6px">' if t.get("poster") else ""
-                html += f'<a href="{BASE}/title/{iid}" style="text-decoration:none;color:var(--fg)"><div class="card" style="padding:8px;text-align:center">{poster}<div style="font-size:.85em;margin-top:4px">{t["title"]}</div><div style="font-size:.75em;color:var(--muted)">{t.get("year","")} · IMDB {imdb_r}</div><div style="font-size:.75em;color:#4c8">Match: {score:.0f}</div></div></a>'
+                poster_url = t.get("poster", "")
+                poster_img = f'<img src="{poster_url}" alt="">' if poster_url else '<div style="width:100%;aspect-ratio:2/3;background:var(--border);display:flex;align-items:center;justify-content:center;color:var(--muted)">No poster</div>'
+                rating_color = "#4c8" if score > 100 else "#f90" if score > 50 else "#888"
+                html += f'<a href="{BASE}/title/{iid}" style="text-decoration:none;color:var(--fg)"><div class="poster-card">{poster_img}<div class="rating" style="color:{rating_color}">{score:.0f}</div><div class="badge">{imdb_r}</div><div class="info"><div class="title">{t["title"]}</div><div class="meta">{t.get("year","")}</div></div></div></a>'
             html += '</div>'
 
             # Why do I have this
