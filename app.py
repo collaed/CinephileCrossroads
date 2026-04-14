@@ -3962,6 +3962,8 @@ button{{padding:12px 30px;background:#4fc3f7;border:none;border-radius:8px;curso
             html += '<tbody>' + rows + '</tbody></table>'
             html += '<script>function sortTable(n){const tb=document.querySelector("tbody"),rows=[...tb.rows],dir=tb.dataset.sort==n?-1:1;tb.dataset.sort=dir==1?n:"";rows.sort((a,b)=>{let x=a.cells[n].textContent,y=b.cells[n].textContent;return(typeof x==="number"&&typeof y==="number"?(x-y):(String(x)).localeCompare(String(y),undefined,{numeric:true}))*dir});rows.forEach(r=>tb.appendChild(r))}</script>'
             # Incoming files section
+            library = load_user_tmm(u)
+            titles = load_titles()
             incoming_file = os.path.join(DATA_DIR, "users", u, "incoming.json")
             incoming = safe_json_load(incoming_file) or []
             pending = [f for f in incoming if f.get("status") == "pending"]
@@ -3982,14 +3984,39 @@ button{{padding:12px 30px;background:#4fc3f7;border:none;border-radius:8px;curso
                         parsed = parse_movie_filename(f.get("filename",""))
                         if parsed.get("is_tv"):
                             ep_info = " S" + str(parsed.get("season","")) + "E" + str(parsed.get("episode",""))
-                        html += '<td>' + poster + ' <b>' + match.get("title","") + '</b>' + ep_info + ' (' + match.get("year","") + ' ' + match.get("type","") + ')'
-                        html += ' <a href="' + BASE + '/incoming-confirm/' + u + '?path=' + urllib.parse.quote(f.get("path","")) + '" class="btn" style="background:#2a5">✅ Import</a></td></tr>'
+                        # Check if already in library
+                        tmdb_id = match.get("id")
+                        in_lib = ""
+                        for lib_iid, lib_info in library.items():
+                            if isinstance(lib_info, dict) and titles.get(lib_iid, {}).get("tmdb_id") == tmdb_id:
+                                vsrc = detect_video_source(lib_info.get("path", ""))
+                                in_lib = ' <span style="color:#f90">⚠ Already in library</span> <span style="font-size:.8em;color:var(--muted)">' + SOURCE_ICONS.get(vsrc, "") + ' ' + lib_info.get("path","").split("/")[-1][:40] + '</span>'
+                                break
+                        html += '<td>' + poster + ' <b>' + match.get("title","") + '</b>' + ep_info + ' (' + match.get("year","") + ' ' + match.get("type","") + ')' + in_lib
+                        if in_lib:
+                            html += ' <a href="' + BASE + '/incoming-delete/' + u + '?path=' + urllib.parse.quote(f.get("path","")) + '" class="btn" style="background:#d72">🗑 Delete</a>'
+                        else:
+                            html += ' <a href="' + BASE + '/incoming-confirm/' + u + '?path=' + urllib.parse.quote(f.get("path","")) + '" class="btn" style="background:#2a5">✅ Import</a>'
+                        html += '</td></tr>'
                     else:
                         html += '<td><form method="GET" action="' + BASE + '/scraper-match/' + u + '/incoming" style="display:flex;gap:4px"><input name="q" value="' + tg + '" style="width:120px;padding:4px"><button type="submit" class="btn">🔍</button></form></td></tr>'
                 html += '</tbody></table>'
 
             html += '</div>' + page_foot()
             self._page(html, "library", u)
+            return
+        elif p.startswith("/incoming-delete/"):
+            u = parts[-1]
+            inc_path = qs.get("path", [""])[0]
+            incoming_file = os.path.join(DATA_DIR, "users", u, "incoming.json")
+            incoming = safe_json_load(incoming_file) or []
+            for f in incoming:
+                if f.get("path") == inc_path:
+                    enqueue_task("delete_file", {"path": inc_path, "confirm": "yes_delete"}, priority=-1)
+                    f["status"] = "deleted"
+                    safe_json_save(incoming_file, incoming)
+                    break
+            self._redirect(f"{BASE}/confirm/{u}")
             return
         elif p.startswith("/incoming-confirm/"):
             u = parts[-1]
