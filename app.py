@@ -2328,17 +2328,11 @@ def render_setup(user):
     html += '<h4 style="margin-top:16px;margin-bottom:10px">OpenSubtitles.com</h4>'
     html += '<label style="display:block;margin-bottom:4px">API key (<a href="https://www.opensubtitles.com/consumers" target="_blank">get key</a>)</label>'
     html += '<input name="opensubs" value="" + _load_key("opensubs") + "" placeholder="OpenSubtitles API key">'
+    html += '<h4 style="margin-top:20px;margin-bottom:10px">Incoming Folder</h4>'
+    html += '<div><label style="display:block;margin-bottom:4px">Download folder path</label>'
+    html += '<input name="incoming_path" value="' + _load_key("incoming_path") + '" placeholder="nfs://192.168.0.235/volume1/Movies/.downloads">'
+    html += '<small style="color:var(--muted);display:block;margin-top:4px">Agent scans every 2 hours for new video files.</small></div>'
     html += '<button type="submit">Save</button></form><hr>'
-    
-    # Incoming folder
-    html += '<h3 style="margin-top:30px">Incoming Folder</h3>'
-    html += '<p style="color:var(--muted);font-size:.85em">New downloads to identify and organize. Agent scans this folder periodically.</p>'
-    html += '<label style="display:block;margin-bottom:4px">Incoming path (NFS)</label>'
-    html += '<div style="margin-top:14px"><label style="font-weight:bold;display:block;margin-bottom:4px">Incoming folder</label>'
-    html += '<input name="incoming_path" value="' + _load_key("incoming_path") + '" placeholder="//zeus/Movies/.downloads">'
-    html += '<small style="color:var(--muted);display:block;margin-top:4px">New downloads to identify. Agent scans every 2 hours.</small></div>'
-    html += '<button type="submit" style="margin-top:16px">Save</button></form><hr>'
-
 
     # Trakt
     html += '<h3>Trakt</h3>' + trakt_section + '<hr>'
