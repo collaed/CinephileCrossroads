@@ -2226,7 +2226,7 @@ def render_setup(user):
     html += '</div>'
     html += '<h4 style="margin-top:16px;margin-bottom:10px">OpenSubtitles.com</h4>'
     html += '<label style="display:block;margin-bottom:4px">API key (<a href="https://www.opensubtitles.com/consumers" target="_blank">get key</a>)</label>'
-    html += '<input name="opensubs" placeholder="OpenSubtitles API key">'
+    html += '<input name="opensubs" value="" + _load_key("opensubs") + "" placeholder="OpenSubtitles API key">'
     html += '<button type="submit">Save</button></form><hr>'
     
     # Trakt
