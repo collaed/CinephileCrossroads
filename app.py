@@ -358,7 +358,13 @@ def _apply_task_result(task, result):
                         break
                 for lib_iid, lib_info in library.items():
                     if isinstance(lib_info, dict) and nfs_path in lib_info.get("path", ""):
-                        lib_info["thumbnail"] = b64[:50000]  # cap at 50KB
+                        import base64 as _b64
+                        thumb_dir = os.path.join(DATA_DIR, "thumbnails")
+                        os.makedirs(thumb_dir, exist_ok=True)
+                        fname = lib_iid.replace("/","_") + ".jpg"
+                        with open(os.path.join(thumb_dir, fname), "wb") as tf:
+                            tf.write(_b64.b64decode(b64))
+                        lib_info["thumbnail"] = fname
                         updated = True
                         break
         elif ttype == "exec_code" and (task.get("id", "").startswith("nfo_") or task.get("id", "").startswith("nfo_batch_")):
@@ -2631,7 +2637,7 @@ def render_library(user):
             dupe_cards += '<div style="margin-top:6px">' + open_btn + '</div>'
             thumb_img = ''
             if entry.get("thumbnail"):
-                thumb_img = '<img src="data:image/jpeg;base64,' + entry["thumbnail"] + '" style="max-width:280px;border-radius:4px;margin-top:6px">'
+                thumb_img = '<img src="' + BASE + '/thumbnails/' + entry["thumbnail"] + '" style="max-width:280px;border-radius:4px;margin-top:6px">'
             dupe_cards += thumb_img
             dupe_cards += '<div style="font-size:.75em;color:#8ab;margin-top:4px;word-break:break-all;font-family:monospace">' + path.split("/")[-2] + '/' + path.split("/")[-1] + '</div>'
             dupe_cards += '</div>'
