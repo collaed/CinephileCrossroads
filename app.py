@@ -2338,7 +2338,7 @@ def render_setup(user):
     html += '<input name="incoming_path" value="' + _load_key("incoming_path") + '" placeholder="//zeus/Movies/.downloads">'
     html += '<small style="color:var(--muted);display:block;margin-top:4px">New downloads to identify. Agent scans every 2 hours.</small></div>'
     html += '<button type="submit" style="margin-top:16px">Save</button></form><hr>'
-'
+
 
     # Trakt
     html += '<h3>Trakt</h3>' + trakt_section + '<hr>'
