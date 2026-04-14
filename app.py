@@ -2707,7 +2707,7 @@ def render_library_nav(user, active="library"):
         ("tvshows", "📺 TV Shows", f"{BASE}/tvshows/{user}"),
         ("scraper", "🔍 Scraper", f"{BASE}/scraper/{user}"),
         ("org", "🗂 Organize", f"{BASE}/library/org/{user}"),
-        ("confirm", "⚠ Confirm", f"{BASE}/confirm/{user}"),
+        ("confirm", "⚠ Confirm", f"{BASE}/confirm/{user}"), ("incoming", "📥 Incoming", f"{BASE}/incoming/{user}"),
     ], active)
 
 def _merge_agent_data(library, user):
@@ -3574,6 +3574,65 @@ td{{padding:8px;border-bottom:1px solid #333}}a{{color:#4fc3f7;text-decoration:n
             html += '</div>' + page_foot()
             self._page(html, "setup", u)
             return
+        elif p.startswith("/incoming/"):
+            u = parts[-1]
+            incoming_file = os.path.join(DATA_DIR, "users", u, "incoming.json")
+            incoming = safe_json_load(incoming_file) or []
+            library = _merge_agent_data(load_user_tmm(u), u)
+            titles = load_titles()
+            pending = [f for f in incoming if f.get("status") == "pending"]
+
+            # Split into movies and TV
+            movies = [f for f in pending if not f.get("tmdb_match", {}).get("type") == "tv" and not parse_movie_filename(f.get("filename","")).get("is_tv")]
+            tv = [f for f in pending if f.get("tmdb_match", {}).get("type") == "tv" or parse_movie_filename(f.get("filename","")).get("is_tv")]
+
+            html = page_head(f"Incoming - {u}")
+            html += nav_bar("library", u)
+            html += render_library_nav(u, "incoming")
+            html += '<div class="page">'
+            html += f'<h2>📥 Incoming — {len(pending)} files</h2>'
+            html += f'<div class="grid" style="margin-bottom:16px"><div class="card" style="text-align:center"><div style="font-size:2em">{len(movies)}</div>Movies</div><div class="card" style="text-align:center"><div style="font-size:2em">{len(tv)}</div>TV Episodes</div></div>'
+
+            for section_name, section_items in [("🎬 Movies", movies), ("📺 TV Episodes", tv)]:
+                if not section_items: continue
+                html += f'<h3>{section_name} ({len(section_items)})</h3>'
+                html += '<div class="poster-grid">'
+                for f in section_items[:50]:
+                    match = f.get("tmdb_match", {})
+                    parsed = parse_movie_filename(f.get("filename", ""))
+                    title = match.get("title", f.get("title_guess", "?"))
+                    year = match.get("year", f.get("year_guess", ""))
+                    poster_url = match.get("poster", "")
+                    poster_img = f'<img src="{poster_url}" alt="">' if poster_url else '<div style="width:100%;aspect-ratio:2/3;background:var(--border);display:flex;align-items:center;justify-content:center;font-size:.7em;color:var(--muted);padding:8px;text-align:center">' + f.get("filename","")[:30] + '</div>'
+                    ep_info = ""
+                    if parsed.get("is_tv"):
+                        ep_info = f' S{parsed.get("season","")}E{parsed.get("episode","")}'
+                    size_gb = f.get("size", 0) / 1073741824
+                    # Check if duplicate
+                    tmdb_id = match.get("id")
+                    is_dupe = False
+                    lib_quality = ""
+                    if tmdb_id:
+                        for lib_iid, lib_info in library.items():
+                            if isinstance(lib_info, dict) and titles.get(lib_iid, {}).get("tmdb_id") == tmdb_id:
+                                is_dupe = True
+                                lib_quality = str(lib_info.get("video_height", "")) + "p " + str(lib_info.get("video_codec", ""))
+                                break
+                    border = "2px solid #d72" if is_dupe else "1px solid var(--border)"
+                    dupe_badge = '<div style="position:absolute;bottom:40px;left:4px;background:#d72;color:#fff;padding:1px 6px;border-radius:3px;font-size:.7em">DUPE ' + lib_quality + '</div>' if is_dupe else ""
+                    enc_path = urllib.parse.quote(f.get("path", ""))
+                    if is_dupe:
+                        action = f'<a href="{BASE}/incoming-delete/{u}?path={enc_path}" style="color:#d72;font-size:.8em">🗑 Delete</a>'
+                    elif match:
+                        action = f'<a href="{BASE}/incoming-confirm/{u}?path={enc_path}" style="color:#4c8;font-size:.8em">✅ Import</a>'
+                    else:
+                        action = f'<a href="{BASE}/scraper-match/{u}/incoming?q={urllib.parse.quote(f.get("title_guess",""))}" style="font-size:.8em">🔍 Match</a>'
+                    html += f'<div class="poster-card" style="border:{border}">{poster_img}{dupe_badge}<div class="info"><div class="title">{title}{ep_info}</div><div class="meta">{year} · {size_gb:.1f}GB</div><div>{action}</div></div></div>'
+                html += '</div>'
+
+            html += '</div>' + page_foot()
+            self._page(html, "library", u)
+            return
         elif p.startswith("/ai-friend/"):
             u = parts[-1]
             titles = load_titles()
@@ -3993,52 +4052,8 @@ button{{padding:12px 30px;background:#4fc3f7;border:none;border-radius:8px;curso
             html += '<table><thead><tr><th onclick="sortTable(0)">IMDB Title</th><th>Filename</th><th onclick="sortTable(2)">Match</th><th></th></tr></thead>'
             html += '<tbody>' + rows + '</tbody></table>'
             html += '<script>function sortTable(n){const tb=document.querySelector("tbody"),rows=[...tb.rows],dir=tb.dataset.sort==n?-1:1;tb.dataset.sort=dir==1?n:"";rows.sort((a,b)=>{let x=a.cells[n].textContent,y=b.cells[n].textContent;return(typeof x==="number"&&typeof y==="number"?(x-y):(String(x)).localeCompare(String(y),undefined,{numeric:true}))*dir});rows.forEach(r=>tb.appendChild(r))}</script>'
-            # Incoming files section
-            library = load_user_tmm(u)
-            titles = load_titles()
-            incoming_file = os.path.join(DATA_DIR, "users", u, "incoming.json")
-            incoming = safe_json_load(incoming_file) or []
-            pending = [f for f in incoming if f.get("status") == "pending"]
-            if pending:
-                html += '<h3 style="margin-top:30px">📥 Incoming — ' + str(len(pending)) + ' new files</h3>'
-                html += '<p style="color:var(--muted);font-size:.85em">New downloads to identify. Search TMDB to match, then confirm to organize.</p>'
-                html += '<table><thead><tr><th>Filename</th><th>Title (guess)</th><th>Year</th><th>Size</th><th>TMDB Match</th></tr></thead><tbody>'
-                for f in pending[:50]:
-                    size_str = str(round(f.get("size",0)/1073741824, 1)) + " GB"
-                    tg = f.get("title_guess", "")
-                    yg = f.get("year_guess", "")
-                    html += '<tr><td style="font-family:monospace;font-size:.8em;max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + f.get("filename","") + '</td>'
-                    html += '<td>' + tg + '</td><td>' + yg + '</td><td>' + size_str + '</td>'
-                    match = f.get("tmdb_match", {})
-                    if match:
-                        poster = '<img src="' + match.get("poster","") + '" height="40" style="border-radius:3px">' if match.get("poster") else ""
-                        ep_info = ""
-                        parsed = parse_movie_filename(f.get("filename",""))
-                        if parsed.get("is_tv"):
-                            ep_info = " S" + str(parsed.get("season","")) + "E" + str(parsed.get("episode",""))
-                        # Check if already in library
-                        tmdb_id = match.get("id")
-                        in_lib = ""
-                        for lib_iid, lib_info in library.items():
-                            if isinstance(lib_info, dict) and titles.get(lib_iid, {}).get("tmdb_id") == tmdb_id:
-                                vsrc = detect_video_source(lib_info.get("path", ""))
-                                lib_q = lib_info.get("video_height", "") or lib_info.get("quality", "")
-                                lib_codec = lib_info.get("video_codec", "")
-                                new_q = f.get("quality", "")
-                                better = "📈 Better" if new_q and lib_q and str(new_q).replace("p","") > str(lib_q) else "📉 Worse" if new_q and lib_q else ""
-                                in_lib = ' <span style="color:#f90">⚠ In library (' + str(lib_q) + ' ' + lib_codec + ')</span> <span style="font-size:.8em">' + better + '</span>'
-
-                                break
-                        html += '<td>' + poster + ' <b>' + match.get("title","") + '</b>' + ep_info + ' (' + match.get("year","") + ' ' + match.get("type","") + ')' + in_lib
-                        if in_lib:
-                            html += ' <a href="' + BASE + '/incoming-delete/' + u + '?path=' + urllib.parse.quote(f.get("path","")) + '" class="btn" style="background:#d72">🗑 Delete</a>'
-                        else:
-                            html += ' <a href="' + BASE + '/incoming-confirm/' + u + '?path=' + urllib.parse.quote(f.get("path","")) + '" class="btn" style="background:#2a5">✅ Import</a>'
-                        html += '</td></tr>'
-                    else:
-                        html += '<td><form method="GET" action="' + BASE + '/scraper-match/' + u + '/incoming" style="display:flex;gap:4px"><input name="q" value="' + tg + '" style="width:120px;padding:4px"><button type="submit" class="btn">🔍</button></form></td></tr>'
-                html += '</tbody></table>'
-
+            # Incoming files moved to /incoming/<user>
+            # (moved to /incoming page)
             html += '</div>' + page_foot()
             self._page(html, "library", u)
             return
