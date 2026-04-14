@@ -2217,7 +2217,9 @@ def render_setup(user):
     html += '<label>TMDB</label><input name="tmdb" value="' + TMDB_KEY + '">'
     html += '<label>OMDB</label><input name="omdb" value="' + OMDB_KEY + '">'
     html += '<label>TVDB</label><input name="tvdb" value="' + TVDB_KEY + '">'
-    html += '<label>OpenSubtitles (<a href="https://www.opensubtitles.com/consumers" target="_blank">get key</a>)</label>'
+    html += '<label>OpenSubtitles.org username</label><input name="opensubs_user" value="' + get_api_key('opensubs_user') + '">'
+    html += '<label>OpenSubtitles.org password</label><input name="opensubs_pass" type="password" value="' + get_api_key('opensubs_pass') + '">'
+    html += '<label>OpenSubtitles.com API key (<a href="https://www.opensubtitles.com/consumers" target="_blank">get key</a>)</label>'
     html += '<input name="opensubs" placeholder="OpenSubtitles API key">'
     html += '<button type="submit">Save</button></form><hr>'
     
@@ -4299,9 +4301,9 @@ button{{padding:10px 20px;background:#4fc3f7;border:none;border-radius:6px;curso
         elif self.path.startswith("/keys"):
             params = urllib.parse.parse_qs(body.decode())
             existing = json.load(open(KEYS_FILE)) if os.path.exists(KEYS_FILE) else {}
-            for k in ("tmdb", "omdb", "tvdb", "opensubs", "agent_token"):
+            for k in ("tmdb", "omdb", "tvdb", "opensubs", "opensubs_user", "opensubs_pass", "agent_token"):
                 v = params.get(k, [""])[0]
-                if v: existing[k] = v
+                if v: existing[k] = v.strip()
             keys = existing
             json.dump(keys, open(KEYS_FILE, "w"))
             TMDB_KEY, OMDB_KEY, TVDB_KEY = keys["tmdb"], keys["omdb"], keys["tvdb"]
@@ -4434,9 +4436,9 @@ if __name__ == "__main__":
     os.makedirs(DATA_DIR, exist_ok=True)
     if os.path.exists(KEYS_FILE):
         keys = json.load(open(KEYS_FILE))
-        TMDB_KEY = keys.get("tmdb", TMDB_KEY)
-        OMDB_KEY = keys.get("omdb", OMDB_KEY)
-        TVDB_KEY = keys.get("tvdb", TVDB_KEY)
+        TMDB_KEY = keys.get("tmdb", TMDB_KEY).strip()
+        OMDB_KEY = keys.get("omdb", OMDB_KEY).strip()
+        TVDB_KEY = keys.get("tvdb", TVDB_KEY).strip()
         AGENT_TOKEN = keys.get("agent_token", AGENT_TOKEN)
     migrate_old_data()
     users = list_users()
