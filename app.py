@@ -2629,6 +2629,7 @@ def render_library(user):
 
             dupe_cards += '<div style="background:#1a1a2e;border-radius:8px;padding:10px;border:' + border + '">'
             dupe_cards += thumb_html
+            dupe_cards += '<div style="font-size:.7em;color:#666">' + iid + '</div>'
             dupe_cards += '<div style="font-size:1.2em;font-weight:bold;margin-bottom:4px">' + str(h) + 'p ' + codec_display + '</div>'
             dupe_cards += '<div style="font-size:.9em;color:#aaa">Size: ' + size_str + '</div>'
             dupe_cards += '<div style="font-size:.85em;color:#888;margin:4px 0">Audio: ' + audio_str + '</div>'
