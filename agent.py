@@ -10,7 +10,7 @@ Run via cron for automatic sync: */30 * * * * python3 /path/to/agent.py --server
 """
 import json, os, sys, time, threading, urllib.request, urllib.parse, argparse, subprocess, base64
 
-AGENT_VERSION = "2.1.04141521"
+AGENT_VERSION = "2.1.04141523"
 CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "agent.json")
 LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "agent.log")
 _last_activity = {"task": "starting", "time": "", "errors": 0}
@@ -783,8 +783,9 @@ def run_task(ttype, params, config):
                 for f in files:
                     if f.lower().endswith(('.mkv', '.mp4', '.avi', '.m4v', '.ts')):
                         fp = os.path.join(root, f)
-                        sz = _safe_stat(fp)
-                        if sz and sz > min_size:
+                        try: sz = os.path.getsize(fp)
+                        except: sz = 0
+                        if sz > min_size:
                             nfs = unmap_path(fp, config)
                             found.append({"path": nfs, "filename": f, "size": sz})
                             log(f"[incoming] {f} ({sz/1073741824:.1f} GB)")
