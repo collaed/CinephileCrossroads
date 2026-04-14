@@ -774,6 +774,13 @@ def tvdb_enrich(imdb_id):
 # ── Movie Scraper ─────────────────────────────────────────────────────
 import re as _re
 
+LANG_NAMES = {"eng":"English","ger":"German","deu":"German","fre":"French","fra":"French",
+    "spa":"Spanish","ita":"Italian","por":"Portuguese","dut":"Dutch","nld":"Dutch",
+    "swe":"Swedish","dan":"Danish","fin":"Finnish","nor":"Norwegian","pol":"Polish",
+    "cze":"Czech","ces":"Czech","hun":"Hungarian","rum":"Romanian","ron":"Romanian",
+    "tur":"Turkish","ara":"Arabic","chi":"Chinese","zho":"Chinese","jpn":"Japanese",
+    "kor":"Korean","rus":"Russian","hin":"Hindi","tha":"Thai","heb":"Hebrew","und":"Unknown"}
+
 SOURCE_ICONS = {"bluray": "💿", "dvd": "📀", "webrip": "🌐", "webdl": "🌐", "hdtv": "📡", "telesync": "📹", "cam": "📷", "remux": "💎"}
 
 def detect_video_source(path):
@@ -2389,6 +2396,22 @@ def render_setup(user):
     html += '<h4 style="margin-top:16px;margin-bottom:10px">OpenSubtitles.com</h4>'
     html += '<label style="display:block;margin-bottom:4px">API key (<a href="https://www.opensubtitles.com/consumers" target="_blank">get key</a>)</label>'
     html += '<input name="opensubs" value="" + _load_key("opensubs") + "" placeholder="OpenSubtitles API key">'
+    html += '<h4 style="margin-top:20px;margin-bottom:10px">Preferences</h4>'
+    html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px">'
+    html += '<div><label style="display:block;margin-bottom:4px">Preferred subtitle language</label>'
+    html += '<select name="sub_language" style="width:100%;padding:6px"><option value="">Select...</option>'
+    cur_lang = _load_key("sub_language")
+    for code, name in [("eng","English"),("ger","German"),("fre","French"),("spa","Spanish"),("ita","Italian"),("por","Portuguese"),("dut","Dutch"),("swe","Swedish"),("dan","Danish"),("fin","Finnish"),("nor","Norwegian"),("pol","Polish"),("cze","Czech"),("hun","Hungarian"),("rum","Romanian"),("tur","Turkish"),("ara","Arabic"),("chi","Chinese"),("jpn","Japanese"),("kor","Korean")]:
+        sel = " selected" if cur_lang == code else ""
+        html += '<option value="' + code + '"' + sel + '>' + name + '</option>'
+    html += '</select></div>'
+    html += '<div><label style="display:block;margin-bottom:4px">Preferred audio language</label>'
+    cur_audio = _load_key("audio_language")
+    html += '<select name="audio_language" style="width:100%;padding:6px"><option value="">Any</option>'
+    for code, name in [("eng","English"),("ger","German"),("fre","French"),("spa","Spanish"),("ita","Italian"),("jpn","Japanese")]:
+        sel = " selected" if cur_audio == code else ""
+        html += '<option value="' + code + '"' + sel + '>' + name + '</option>'
+    html += '</select></div></div>'
     html += '<h4 style="margin-top:20px;margin-bottom:10px">Incoming Folder</h4>'
     html += '<div><label style="display:block;margin-bottom:4px">Download folder path</label>'
     html += '<input name="incoming_path" value="' + _load_key("incoming_path") + '" placeholder="nfs://192.168.0.235/volume1/Movies/.downloads">'
@@ -4572,7 +4595,7 @@ button{{padding:10px 20px;background:#4fc3f7;border:none;border-radius:6px;curso
         elif self.path.startswith("/keys"):
             params = urllib.parse.parse_qs(body.decode())
             existing = json.load(open(KEYS_FILE)) if os.path.exists(KEYS_FILE) else {}
-            for k in ("tmdb", "omdb", "tvdb", "opensubs", "opensubs_user", "opensubs_pass", "agent_token", "incoming_path"):
+            for k in ("tmdb", "omdb", "tvdb", "opensubs", "opensubs_user", "opensubs_pass", "agent_token", "incoming_path", "sub_language", "audio_language"):
                 v = params.get(k, [""])[0]
                 if v: existing[k] = v.strip()
             keys = existing
