@@ -777,6 +777,60 @@ def _fuzzy_match(a, b):
     common = wa & wb
     return len(common) / max(len(wa), len(wb))
 
+def detect_library_convention(user):
+    """Analyze library paths to detect naming convention."""
+    library = load_user_tmm(user)
+    import re
+    from collections import Counter
+    separators = Counter()
+    collections = Counter()
+    patterns = Counter()
+    total = 0
+    for iid, info in library.items():
+        if not isinstance(info, dict) or iid.startswith("_"): continue
+        path = info.get("path", "")
+        if not path: continue
+        total += 1
+        # Normalize away NFS prefix
+        for prefix in ["nfs://192.168.0.235/volume1/Movies/", "nfs://192.168.0.235/volume1/"]:
+            if path.startswith(prefix): path = path[len(prefix):]
+        parts = path.split("/")
+        if len(parts) >= 2: collections["/".join(parts[:2])] += 1
+        folder = parts[-2] if len(parts) >= 2 else ""
+        separators["_" if "_" in folder else " "] += 1
+        if len(parts) >= 3 and re.match(r"\d{4}", parts[2]): patterns["year_folder"] += 1
+        for tag in ["Blu-ray","Webrip","Web-DL","DVD","Telesync","HDRip"]:
+            if tag.lower() in folder.lower(): patterns["source_tag"] += 1; break
+        if re.search(r"\d+\.\d+.Mbps", folder): patterns["bitrate"] += 1
+    if not total: return {}
+    sep = separators.most_common(1)[0][0] if separators else "_"
+    coll = collections.most_common(1)[0][0] if collections else "Movies"
+    return {
+        "separator": sep,
+        "collection": coll,
+        "year_folder": patterns.get("year_folder", 0) > total * 0.5,
+        "source_tag": patterns.get("source_tag", 0) > total * 0.5,
+        "bitrate": patterns.get("bitrate", 0) > total * 0.5,
+        "total": total,
+        "template": "{collection}/{year}/{title}{sep}({year}){sep}{quality}{sep}{codec}{sep}{bitrate}{sep}{source}/{filename}.{ext}"
+    }
+
+def build_destination_path(title, year, quality, codec, bitrate, source, ext, convention):
+    """Build a destination path following the detected convention."""
+    sep = convention.get("separator", "_")
+    coll = convention.get("collection", "YiFY/TMM")
+    parts = [title.replace(" ", sep)]
+    parts.append(f"({year})")
+    if quality: parts.append(quality)
+    if codec: parts.append(codec)
+    if bitrate and convention.get("bitrate"): parts.append(bitrate)
+    if source and convention.get("source_tag"): parts.append(source)
+    folder_name = sep.join(parts)
+    fname = sep.join(parts) + "." + ext
+    if convention.get("year_folder"):
+        return f"{coll}/{year}/{folder_name}/{fname}"
+    return f"{coll}/{folder_name}/{fname}"
+
 def find_mismatches(user, threshold=0.2):
     library = load_user_tmm(user)
     titles = load_titles()
