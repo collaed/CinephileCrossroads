@@ -657,6 +657,18 @@ def daemon_mode(args, config):
     threading.Thread(target=sync_loop, daemon=True).start()
     task_loop()  # Run task loop in main thread
 
+def _safe_stat(path, timeout=5):
+    """os.path.getsize with timeout to avoid SMB hangs."""
+    import threading
+    result = [None]
+    def _do():
+        try: result[0] = os.path.getsize(path)
+        except: pass
+    t = threading.Thread(target=_do, daemon=True)
+    t.start()
+    t.join(timeout)
+    return result[0]
+
 def run_task(ttype, params, config):
     """Execute a single task from the server."""
     try:
@@ -693,9 +705,12 @@ def run_task(ttype, params, config):
             data = {}
             for p in paths:
                 mp = map_path(p, config)
-                if os.path.isfile(mp):
+                try:
                     h = opensubtitles_hash(mp)
-                    if h: data[p] = {"hash": h, "size": os.path.getsize(mp)}
+                    if h:
+                        sz = _safe_stat(mp)
+                        if sz: data[p] = {"hash": h, "size": sz}
+                except: pass
             return {"hashed": len(data), "data": data}
         
         elif ttype == "download_subs":
