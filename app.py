@@ -406,7 +406,7 @@ def _apply_task_result(task, result):
                                     "title": r.get("title") or r.get("name", ""),
                                     "year": (r.get("release_date") or r.get("first_air_date") or "")[:4],
                                     "type": r.get("media_type", "movie"),
-                                    "poster": f"https://image.tmdb.org/t/p/w92{r["poster_path"]}" if r.get("poster_path") else "",
+                                    "poster": ("https://image.tmdb.org/t/p/w92" + r["poster_path"]) if r.get("poster_path") else "",
                                 }
                             time.sleep(0.1)
                     existing.extend(new_files)
