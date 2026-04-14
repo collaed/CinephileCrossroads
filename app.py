@@ -4106,7 +4106,21 @@ button{{padding:10px 20px;background:#4fc3f7;border:none;border-radius:6px;curso
                 # Merge: keep existing fields (file_size, file_hash, nfo_matched, etc.)
                 for iid, info in data.get("library", {}).items():
                     if iid in library and isinstance(library[iid], dict) and isinstance(info, dict):
-                        library[iid].update(info)
+                        existing_path = library[iid].get("path", "")
+                        new_path = info.get("path", "")
+                        if existing_path and new_path and existing_path != new_path:
+                            # Same IMDB ID, different paths = true duplicate
+                            library[iid] = [library[iid], info]
+                        else:
+                            library[iid].update(info)
+                    elif iid in library and isinstance(library[iid], list) and isinstance(info, dict):
+                        # Already a list, add if new path
+                        paths = [e.get("path") for e in library[iid]]
+                        if info.get("path") not in paths:
+                            library[iid].append(info)
+                        else:
+                            for e in library[iid]:
+                                if e.get("path") == info.get("path"): e.update(info)
                     else:
                         library[iid] = info
                 save_user_tmm(user, library)
