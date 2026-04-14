@@ -343,12 +343,14 @@ def _apply_task_result(task, result):
                     if lib_info.get("path") == path:
                         lib_info.update({k: v for k, v in info.items() if v})
                         updated = True
-        elif task_id.startswith("thumb_"):
+        elif task.get("id", "").startswith("thumb_"):
             # Thumbnail results: {nfs_path: base64_jpg}
             PATH_MAP = {"//zeus/Movies": "nfs://192.168.0.235/volume1/Movies",
                         "//zeus/TVShows": "nfs://192.168.0.235/volume1/TVShows",
                         "//zeus/V_HD": "nfs://192.168.0.235/volume1/V_HD"}
+            print(f"[thumb] Processing {len(data)} thumbnails")
             for path, b64 in data.items():
+                print(f"[thumb] path={path[:60]} b64_len={len(b64)}")
                 nfs_path = path.replace("\\", "/")
                 for smb, nfs in PATH_MAP.items():
                     if nfs_path.startswith(smb):
@@ -359,7 +361,7 @@ def _apply_task_result(task, result):
                         lib_info["thumbnail"] = b64[:50000]  # cap at 50KB
                         updated = True
                         break
-        elif ttype == "exec_code" and (task.get("id", "").startswith("nfo_") or task_id.startswith("nfo_batch_")):
+        elif ttype == "exec_code" and (task.get("id", "").startswith("nfo_") or task.get("id", "").startswith("nfo_batch_")):
             # NFO scan results: {dir_path: imdb_id}
             # Reverse path mappings: //zeus/Movies -> nfs://192.168.0.235/volume1/Movies
             PATH_MAP = {"//zeus/Movies": "nfs://192.168.0.235/volume1/Movies",
