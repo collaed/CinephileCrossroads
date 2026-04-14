@@ -8,7 +8,7 @@ Usage:
 Configure your media servers in agent.json (created on first run).
 Run via cron for automatic sync: */30 * * * * python3 /path/to/agent.py --server URL --user USER
 """
-import json, os, sys, time, threading, urllib.request, urllib.parse, argparse
+import json, os, sys, time, threading, urllib.request, urllib.parse, argparse, subprocess, base64
 
 AGENT_VERSION = "2.1.04141041"
 CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "agent.json")
