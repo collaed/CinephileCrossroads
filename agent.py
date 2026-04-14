@@ -771,6 +771,76 @@ def run_task(ttype, params, config):
                 return {"updated": path, "size": len(code), "_restart": True}
             return {"error": "missing code or path"}
         
+        elif ttype == "scan_incoming":
+            # Scan incoming folder for new video files
+            incoming = params.get("path", "")
+            min_size = params.get("min_size", 50000000)  # 50MB default
+            mp = map_path(incoming, config)
+            found = []
+            for root, dirs, files in os.walk(mp):
+                for f in files:
+                    if f.lower().endswith(('.mkv', '.mp4', '.avi', '.m4v', '.ts')):
+                        fp = os.path.join(root, f)
+                        sz = _safe_stat(fp)
+                        if sz and sz > min_size:
+                            nfs = unmap_path(fp, config)
+                            found.append({"path": nfs, "filename": f, "size": sz})
+                            log(f"[incoming] {f} ({sz/1073741824:.1f} GB)")
+            log(f"[incoming] Found {len(found)} files")
+            return {"files": found, "data": {"files": found}}
+
+        elif ttype == "move_file":
+            # Move/rename a file from source to destination
+            src = map_path(params.get("source", ""), config)
+            dst = map_path(params.get("destination", ""), config)
+            if not src or not dst:
+                return {"error": "missing source or destination"}
+            try:
+                os.makedirs(os.path.dirname(dst), exist_ok=True)
+                import shutil
+                shutil.move(src, dst)
+                log(f"[move] {os.path.basename(src)} -> {dst}")
+                return {"moved": True, "source": params["source"], "destination": params["destination"]}
+            except Exception as e:
+                return {"error": str(e)}
+
+        elif ttype == "delete_file":
+            # Delete a file (with confirmation token)
+            path = map_path(params.get("path", ""), config)
+            confirm = params.get("confirm", "")
+            if confirm != "yes_delete":
+                return {"error": "missing confirmation token"}
+            try:
+                if os.path.isfile(path):
+                    os.remove(path)
+                    # Remove empty parent dir
+                    parent = os.path.dirname(path)
+                    if os.path.isdir(parent) and not os.listdir(parent):
+                        os.rmdir(parent)
+                    log(f"[delete] {os.path.basename(path)}")
+                    return {"deleted": True, "path": params["path"]}
+                return {"error": "file not found"}
+            except Exception as e:
+                return {"error": str(e)}
+
+        elif ttype == "generate_thumb":
+            # Generate thumbnail for a video file
+            path = map_path(params.get("path", ""), config)
+            seek = params.get("seek", 30)
+            try:
+                tmp = os.path.join(os.environ.get("TEMP", "/tmp"), "thumb.jpg")
+                subprocess.run(["ffmpeg", "-y", "-ss", str(seek), "-i", path,
+                    "-vframes", "1", "-q:v", "5", "-vf", "scale=320:-1", tmp],
+                    capture_output=True, timeout=30)
+                if os.path.exists(tmp):
+                    with open(tmp, "rb") as f:
+                        thumb_b64 = base64.b64encode(f.read()).decode()
+                    os.remove(tmp)
+                    return {"thumbnail": thumb_b64, "path": params["path"], "data": {params["path"]: thumb_b64}}
+                return {"error": "ffmpeg produced no output"}
+            except Exception as e:
+                return {"error": str(e)}
+
         elif ttype == "diag":
             # Diagnostic: return system info
             import platform, shutil
