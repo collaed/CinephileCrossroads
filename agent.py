@@ -10,7 +10,7 @@ Run via cron for automatic sync: */30 * * * * python3 /path/to/agent.py --server
 """
 import json, os, sys, time, threading, urllib.request, urllib.parse, argparse, subprocess, base64
 
-AGENT_VERSION = "2.1.04141528"
+AGENT_VERSION = "2.1.04141653"
 CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "agent.json")
 LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "agent.log")
 _last_activity = {"task": "starting", "time": "", "errors": 0}
@@ -540,7 +540,7 @@ def daemon_mode(args, config):
                     except Exception as e:
                         log(f"[sync] {name} error: {e}")
                 if library:
-                    # library = compute_hashes(library)  # disabled: hashing done via tasks
+                    # # library = compute_hashes(library)  # disabled: hashing via tasks  # disabled: hashing done via tasks
                     api_post(f"{base_url}/api/library/{args.user}", {"library": library})
                     log(f"[sync] Pushed {len(library)} titles")
             except Exception as e:

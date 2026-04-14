@@ -206,6 +206,7 @@ def generate_tasks_for_library(user):
     needs_hash = [(iid, info["path"]) for iid, info in library.items()
                   if isinstance(info, dict) and info.get("path")
                   and info.get("file_size") and not info.get("file_hash")]
+    sub_lang = _load_key("sub_language") or "eng"
     needs_subs = [(iid, info["path"]) for iid, info in library.items()
                   if isinstance(info, dict) and info.get("path")
                   and not info.get("subtitles") and not info.get("suggested_sub")][:50]
@@ -225,7 +226,7 @@ def generate_tasks_for_library(user):
         count += 1
     # Subs - interleave with other tasks
     for iid, path in needs_subs:
-        _add("download_subs", {"imdb_id": iid, "path": path, "language": "en"}, PRIORITY_SUBS)
+        _add("download_subs", {"imdb_id": iid, "path": path, "language": sub_lang}, PRIORITY_SUBS)
         count += 1
     # Quality
     for i in range(0, len(needs_quality), 50):
@@ -2917,6 +2918,17 @@ def render_library(user):
         except: pass
 
     html += '<div class="grid" style="margin-bottom:20px">'
+    # Agent health check
+    agent_last = agent.get("last_seen", "")
+    agent_stale = False
+    if agent_last:
+        try:
+            from datetime import datetime
+            last_dt = datetime.strptime(agent_last, "%Y-%m-%d %H:%M:%S")
+            agent_stale = (datetime.now() - last_dt).total_seconds() > 1800
+        except: pass
+    if agent_stale:
+        html += '<div style="background:#d72;color:#fff;padding:8px 16px;border-radius:6px;margin-bottom:12px">⚠ Agent disconnected — last seen ' + agent_last + '</div>'
     html += '<div class="card"><b>🤖 Agent</b><br>'
     html += f'v{agent_ver} · up {uptime_str}<br>'
     html += f'<small style="color:var(--muted)">Last seen: {last_seen}</small><br>'
@@ -3676,7 +3688,7 @@ td{{padding:8px;border-bottom:1px solid #333}}a{{color:#4fc3f7;text-decoration:n
                     "codec": info.get("video_codec",""), "size": size,
                     "size_str": f"{size/1073741824:.1f}GB" if size > 1e9 else f"{size//1048576}MB" if size else "-",
                     "vsrc": SOURCE_ICONS.get(vsrc,""), "rating": r,
-                    "subs": "yes" if info.get("subtitles") else "no",
+                    "subs": ", ".join(LANG_NAMES.get(s.get("language",""),"?") if isinstance(s,dict) else str(s) for s in (info.get("subtitles") or [])[:3]) or "no",
                     "path": info.get("path","").split("/")[-1]})
             if sort_by == "size": items.sort(key=lambda x: x["size"], reverse=True)
             elif sort_by == "year": items.sort(key=lambda x: str(x["year"]), reverse=True)
