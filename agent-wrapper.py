@@ -3,12 +3,17 @@
 import subprocess, sys, os, time
 
 AGENT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "agent.py")
+ARGS = sys.argv[1:]
+
+print(f"[wrapper] Agent: {AGENT}")
+print(f"[wrapper] Args: {ARGS}")
 
 while True:
-    print(f"[wrapper] Starting agent: {AGENT}")
-    proc = subprocess.run([sys.executable, AGENT] + sys.argv[1:])
+    cmd = [sys.executable, AGENT] + ARGS
+    print(f"[wrapper] Running: {' '.join(cmd)}")
+    proc = subprocess.run(cmd)
     code = proc.returncode
-    if code == 42:  # Agent requests restart (after self-update)
+    if code == 42:
         print("[wrapper] Agent requested restart (code 42)")
         time.sleep(1)
         continue
