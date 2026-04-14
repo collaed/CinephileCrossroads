@@ -3978,13 +3978,49 @@ button{{padding:12px 30px;background:#4fc3f7;border:none;border-radius:8px;curso
                     match = f.get("tmdb_match", {})
                     if match:
                         poster = '<img src="' + match.get("poster","") + '" height="40" style="border-radius:3px">' if match.get("poster") else ""
-                        html += '<td>' + poster + ' <b>' + match.get("title","") + '</b> (' + match.get("year","") + ') <span style="color:var(--muted);font-size:.8em">' + match.get("type","") + '</span></td></tr>'
+                        ep_info = ""
+                        parsed = parse_movie_filename(f.get("filename",""))
+                        if parsed.get("is_tv"):
+                            ep_info = " S" + str(parsed.get("season","")) + "E" + str(parsed.get("episode",""))
+                        html += '<td>' + poster + ' <b>' + match.get("title","") + '</b>' + ep_info + ' (' + match.get("year","") + ' ' + match.get("type","") + ')'
+                        html += ' <a href="' + BASE + '/incoming-confirm/' + u + '?path=' + urllib.parse.quote(f.get("path","")) + '" class="btn" style="background:#2a5">✅ Import</a></td></tr>'
                     else:
                         html += '<td><form method="GET" action="' + BASE + '/scraper-match/' + u + '/incoming" style="display:flex;gap:4px"><input name="q" value="' + tg + '" style="width:120px;padding:4px"><button type="submit" class="btn">🔍</button></form></td></tr>'
                 html += '</tbody></table>'
 
             html += '</div>' + page_foot()
             self._page(html, "library", u)
+            return
+        elif p.startswith("/incoming-confirm/"):
+            u = parts[-1]
+            inc_path = qs.get("path", [""])[0]
+            incoming_file = os.path.join(DATA_DIR, "users", u, "incoming.json")
+            incoming = safe_json_load(incoming_file) or []
+            # Find the file
+            for f in incoming:
+                if f.get("path") == inc_path:
+                    match = f.get("tmdb_match", {})
+                    if match:
+                        # Build destination path using convention
+                        conv = detect_library_convention(u)
+                        parsed = parse_movie_filename(f.get("filename", ""))
+                        title = match.get("title", parsed.get("title_guess", "unknown"))
+                        year = match.get("year", parsed.get("year_guess", ""))
+                        quality = parsed.get("quality", "1080p")
+                        source = detect_video_source(f.get("path", ""))
+                        ext = f.get("filename", "").rsplit(".", 1)[-1] if "." in f.get("filename", "") else "mkv"
+                        dest = build_destination_path(title, year, quality, "", "", source or "Webrip", ext, conv)
+                        # Full NFS destination
+                        nfs_base = "nfs://192.168.0.235/volume1/Movies/"
+                        full_dest = nfs_base + dest
+                        # Queue move task
+                        enqueue_task("move_file", {"source": inc_path, "destination": full_dest}, priority=-1)
+                        f["status"] = "confirmed"
+                        f["destination"] = full_dest
+                        safe_json_save(incoming_file, incoming)
+                        print(f"[incoming] Confirmed: {f.get('filename','')} -> {dest}")
+                    break
+            self._redirect(f"{BASE}/confirm/{u}")
             return
         elif p.startswith("/confirm-ok/"):
             u = parts[-2]
