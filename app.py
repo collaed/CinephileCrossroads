@@ -225,6 +225,34 @@ def generate_tasks_for_library(user):
     new_tasks.sort(key=lambda t: t["priority"])
     save_task_queue(keep + new_tasks)
     count = len(new_tasks)
+    # Scan incoming folder if configured
+    incoming = _load_key("incoming_path")
+    if incoming:
+        code = (
+            "import os, json, urllib.request, re\n"
+            "incoming = " + repr(incoming) + "\n"
+            "mp = incoming\n"
+            "for src, dst in config.get('_path_mappings', {}).items():\n"
+            "    if incoming.startswith(src): mp = dst + incoming[len(src):]\n"
+            "mp = mp.replace('/', os.sep) if os.name == 'nt' else mp\n"
+            "found = []\n"
+            "for root, dirs, files in os.walk(mp):\n"
+            "    for f in files:\n"
+            "        if f.lower().endswith(('.mkv','.mp4','.avi','.m4v')):\n"
+            "            fp = os.path.join(root, f)\n"
+            "            sz = os.path.getsize(fp) if os.path.isfile(fp) else 0\n"
+            "            if sz > 50000000:\n"  # >50MB only
+            "                nfs = fp.replace(os.sep, '/')\n"
+            "                for dst2, src2 in config.get('_path_mappings', {}).items():\n"
+            "                    if nfs.startswith(dst2): nfs = src2 + nfs[len(dst2):]\n"
+            "                found.append({'path': nfs, 'filename': f, 'size': sz})\n"
+            "                log('[incoming] ' + f + ' (' + str(round(sz/1073741824,1)) + ' GB)')\n"
+            "result = {'files': found}\n"
+            "log('[incoming] Found ' + str(len(found)) + ' files')\n"
+        )
+        _add("exec_code", {"code": code, "description": "Scan incoming folder"}, PRIORITY_QUALITY)
+        count += 1
+
     print(f"Generated {count} tasks for {user}: {len(needs_size)} sizing, {len(needs_hash)} hashing, {len(needs_subs)} subs, {len(needs_quality)} quality")
     return count
 
@@ -343,6 +371,25 @@ def _apply_task_result(task, result):
                     if lib_info.get("path") == path:
                         lib_info.update({k: v for k, v in info.items() if v})
                         updated = True
+        elif ttype == "exec_code" and data.get("files") is not None:
+            # Incoming folder scan results
+            incoming_file = os.path.join(DATA_DIR, "users", user, "incoming.json") if user != "default" else None
+            if incoming_file:
+                existing = safe_json_load(incoming_file) or []
+                existing_paths = {e["path"] for e in existing}
+                new_files = [f for f in data["files"] if f["path"] not in existing_paths]
+                if new_files:
+                    # Parse filenames and try to match
+                    for f in new_files:
+                        parsed = parse_movie_filename(f["filename"])
+                        f["title_guess"] = parsed.get("title", "")
+                        f["year_guess"] = parsed.get("year", "")
+                        f["quality"] = parsed.get("quality", "")
+                        f["status"] = "pending"
+                    existing.extend(new_files)
+                    safe_json_save(incoming_file, existing)
+                    updated = True
+                    print(f"[incoming] {len(new_files)} new files from incoming folder")
         elif task.get("id", "").startswith("thumb_"):
             # Thumbnail results: {nfs_path: base64_jpg}
             PATH_MAP = {"//zeus/Movies": "nfs://192.168.0.235/volume1/Movies",
@@ -2229,6 +2276,13 @@ def render_setup(user):
     html += '<input name="opensubs" value="" + _load_key("opensubs") + "" placeholder="OpenSubtitles API key">'
     html += '<button type="submit">Save</button></form><hr>'
     
+    # Incoming folder
+    html += '<h3 style="margin-top:30px">Incoming Folder</h3>'
+    html += '<p style="color:var(--muted);font-size:.85em">New downloads to identify and organize. Agent scans this folder periodically.</p>'
+    html += '<label style="display:block;margin-bottom:4px">Incoming path (NFS)</label>'
+    html += '<input name="incoming_path" value="' + _load_key("incoming_path") + '" placeholder="nfs://192.168.0.235/volume1/Movies/.downloads">'
+    html += '<button type="submit">Save</button></form><hr>'
+
     # Trakt
     html += '<h3>Trakt</h3>' + trakt_section + '<hr>'
     
@@ -3783,6 +3837,23 @@ button{{padding:12px 30px;background:#4fc3f7;border:none;border-radius:8px;curso
             html += '<table><thead><tr><th onclick="sortTable(0)">IMDB Title</th><th>Filename</th><th onclick="sortTable(2)">Match</th><th></th></tr></thead>'
             html += '<tbody>' + rows + '</tbody></table>'
             html += '<script>function sortTable(n){const tb=document.querySelector("tbody"),rows=[...tb.rows],dir=tb.dataset.sort==n?-1:1;tb.dataset.sort=dir==1?n:"";rows.sort((a,b)=>{let x=a.cells[n].textContent,y=b.cells[n].textContent;return(typeof x==="number"&&typeof y==="number"?(x-y):(String(x)).localeCompare(String(y),undefined,{numeric:true}))*dir});rows.forEach(r=>tb.appendChild(r))}</script>'
+            # Incoming files section
+            incoming_file = os.path.join(DATA_DIR, "users", u, "incoming.json")
+            incoming = safe_json_load(incoming_file) or []
+            pending = [f for f in incoming if f.get("status") == "pending"]
+            if pending:
+                html += '<h3 style="margin-top:30px">📥 Incoming — ' + str(len(pending)) + ' new files</h3>'
+                html += '<p style="color:var(--muted);font-size:.85em">New downloads to identify. Search TMDB to match, then confirm to organize.</p>'
+                html += '<table><thead><tr><th>Filename</th><th>Title (guess)</th><th>Year</th><th>Size</th><th>Match</th></tr></thead><tbody>'
+                for f in pending[:50]:
+                    size_str = str(round(f.get("size",0)/1073741824, 1)) + " GB"
+                    tg = f.get("title_guess", "")
+                    yg = f.get("year_guess", "")
+                    html += '<tr><td style="font-family:monospace;font-size:.8em;max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + f.get("filename","") + '</td>'
+                    html += '<td>' + tg + '</td><td>' + yg + '</td><td>' + size_str + '</td>'
+                    html += '<td><form method="GET" action="' + BASE + '/scraper-match/' + u + '/incoming" style="display:flex;gap:4px"><input name="q" value="' + tg + '" style="width:120px;padding:4px"><input type="hidden" name="path" value="' + f.get("path","") + '"><button type="submit" class="btn">🔍</button></form></td></tr>'
+                html += '</tbody></table>'
+
             html += '</div>' + page_foot()
             self._page(html, "library", u)
             return
@@ -4307,7 +4378,7 @@ button{{padding:10px 20px;background:#4fc3f7;border:none;border-radius:6px;curso
         elif self.path.startswith("/keys"):
             params = urllib.parse.parse_qs(body.decode())
             existing = json.load(open(KEYS_FILE)) if os.path.exists(KEYS_FILE) else {}
-            for k in ("tmdb", "omdb", "tvdb", "opensubs", "opensubs_user", "opensubs_pass", "agent_token"):
+            for k in ("tmdb", "omdb", "tvdb", "opensubs", "opensubs_user", "opensubs_pass", "agent_token", "incoming_path"):
                 v = params.get(k, [""])[0]
                 if v: existing[k] = v.strip()
             keys = existing
