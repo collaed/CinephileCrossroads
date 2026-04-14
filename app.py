@@ -2603,7 +2603,7 @@ def render_library(user):
 
             # Thumbnail
             thumb = info.get("thumbnail", "")
-            thumb_html = '<img src="' + BASE + thumb + '" style="width:100%;border-radius:4px;margin-bottom:8px">' if thumb else '<div style="background:#333;height:80px;border-radius:4px;margin-bottom:8px;display:flex;align-items:center;justify-content:center;color:#666">no preview</div>'
+            thumb_html = '<img src="' + BASE + '/thumbnails/' + thumb + '" style="width:100%;border-radius:4px;margin-bottom:8px">' if thumb else '<div style="background:#333;height:80px;border-radius:4px;margin-bottom:8px;display:flex;align-items:center;justify-content:center;color:#666">no preview</div>'
 
             # Keep suggestion
             h_val = int(h or 0)
