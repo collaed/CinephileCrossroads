@@ -371,7 +371,7 @@ def _apply_task_result(task, result):
                     if lib_info.get("path") == path:
                         lib_info.update({k: v for k, v in info.items() if v})
                         updated = True
-        elif ttype == "exec_code" and data.get("files") is not None:
+        elif (ttype == "scan_incoming" or (ttype == "exec_code" and data.get("files") is not None)):
             # Incoming folder scan results
             incoming_file = os.path.join(DATA_DIR, "users", user, "incoming.json") if user != "default" else None
             if incoming_file:
