@@ -896,6 +896,21 @@ def find_mismatches(user, threshold=0.2):
 def parse_movie_filename(filename):
     """Extract title, year, quality, 3D format from a media filename."""
     name = os.path.splitext(os.path.basename(filename))[0]
+    # TV episode detection: extract show name before SxxExx
+    import re as _re2
+    ep_match = _re2.search(r"[.\ _-][Ss](\d{1,2})[Ee](\d{1,2})", name)
+    if ep_match:
+        show_name = name[:ep_match.start()]
+        show_name = _re2.sub(r"[\.\-_]", " ", show_name).strip()
+        season = int(ep_match.group(1))
+        episode = int(ep_match.group(2))
+        # Also try to get episode title (after SxxExx)
+        rest = name[ep_match.end():]
+        quality = ""
+        for q in ["2160p", "1080p", "720p", "480p"]:
+            if q.lower() in rest.lower(): quality = q; break
+        return {"title": show_name, "year": "", "quality": quality, "is_3d": None,
+                "is_tv": True, "season": season, "episode": episode, "filename": filename}
     # 3D detection
     is_3d = None
     for pattern, fmt in [("hsbs", "HSBS"), ("sbs", "SBS"), ("htab", "HTAB"), ("tab", "TAB"), ("mvc", "MVC")]:
