@@ -10,7 +10,7 @@ Run via cron for automatic sync: */30 * * * * python3 /path/to/agent.py --server
 """
 import json, os, sys, time, threading, urllib.request, urllib.parse, argparse, subprocess, base64
 
-AGENT_VERSION = "2.1.04141524"
+AGENT_VERSION = "2.1.04141528"
 CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "agent.json")
 LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "agent.log")
 _last_activity = {"task": "starting", "time": "", "errors": 0}
@@ -397,6 +397,15 @@ def fetch_tmm(cfg):
         except: pass
     shutil.rmtree(export_path, ignore_errors=True)
     return lib
+
+def unmap_path(local_path, config):
+    """Convert local/SMB path back to NFS path."""
+    p = local_path.replace(os.sep, "/")
+    for nfs, local in config.get("_path_mappings", {}).items():
+        local_norm = local.replace(os.sep, "/")
+        if p.startswith(local_norm):
+            return nfs + p[len(local_norm):]
+    return p
 
 def map_path(path, config):
     """Map remote paths (e.g. Kodi NFS) to local paths (e.g. Windows SMB).
@@ -788,17 +797,26 @@ def run_task(ttype, params, config):
                 except Exception as e:
                     log(f"[incoming] listdir error: {e}")
             found = []
+            walk_dirs = 0
+            walk_files = 0
             for root, dirs, files in os.walk(mp):
-                for f in files:
-                    if f.lower().endswith(('.mkv', '.mp4', '.avi', '.m4v', '.ts')):
-                        fp = os.path.join(root, f)
-                        try: sz = os.path.getsize(fp)
-                        except: sz = 0
-                        if sz > min_size:
-                            nfs = unmap_path(fp, config)
-                            found.append({"path": nfs, "filename": f, "size": sz})
-                            log(f"[incoming] {f} ({sz/1073741824:.1f} GB)")
-            log(f"[incoming] Found {len(found)} files")
+                try:
+                    walk_dirs += 1
+                    walk_files += len(files)
+                    if walk_dirs <= 5:
+                        log(f"[incoming] Walk: {root[-50:]} d={len(dirs)} f={len(files)}")
+                    for f in files:
+                        if f.lower().endswith((".mkv", ".mp4", ".avi", ".m4v", ".ts")):
+                            fp = os.path.join(root, f)
+                            try: sz = os.path.getsize(fp)
+                            except: sz = 0
+                            if sz > min_size:
+                                nfs = unmap_path(fp, config)
+                                found.append({"path": nfs, "filename": f, "size": sz})
+                                log(f"[incoming] {f} ({sz/1073741824:.1f} GB)")
+                except Exception as e:
+                    log(f"[incoming] Walk error in {root[-30:]}: {e}")
+            log(f"[incoming] Walk: {walk_dirs} dirs, {walk_files} total files, {len(found)} video >min_size")
             return {"files": found, "data": {"files": found}}
 
         elif ttype == "move_file":
