@@ -1,145 +1,101 @@
-# 🎬 CinephileCrossroads
+# 🎬 Cinephile Crossroads
 
-A self-hosted, zero-dependency movie & TV ratings dashboard that aggregates data from multiple sources, shows streaming availability, and provides taste-based recommendations.
+A self-hosted, zero-dependency movie & TV ratings dashboard with taste-based recommendations, streaming availability, media server integration, and a LAN agent for library management.
 
 ![Python](https://img.shields.io/badge/python-3.12-blue) ![Docker](https://img.shields.io/badge/docker-ready-blue) ![License](https://img.shields.io/badge/license-MIT-green) ![Dependencies](https://img.shields.io/badge/dependencies-zero-brightgreen)
 
 [![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/template/new?repo=collaed/CinephileCrossroads) [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/collaed/CinephileCrossroads)
 
-<!-- Add a screenshot: replace this with an actual screenshot URL -->
-<!-- ![Screenshot](https://your-domain.com/screenshot.png) -->
-
 ## Features
 
-### 📊 Ratings Dashboard
+### ⭐ Ratings Dashboard
 - Import IMDB ratings (CSV export)
-- Enrich with posters, plot summaries, and scores from TMDB, OMDB, and TVDB
-- Searchable, sortable, filterable by genre, rating, streaming provider, and decade
-- Hover titles for plot summaries
-- 💾 indicator for titles in your local library (Plex, Jellyfin, Emby, Kodi, Radarr, Sonarr, TMM)
-- Leaving soon detection — tracks titles disappearing from streaming services
-- 🏆 Awards badge on Oscar winners
-- ▶️ Trailer links (YouTube via TMDB)
-- 🔗 TasteDive "similar" suggestions
-- 🌓 Dark/light theme toggle
-- 📱 Mobile-responsive layout
+- Enrich with posters, plots, scores from TMDB, OMDB, TVDB
+- Searchable, sortable, filterable by genre, rating, streaming provider, decade, video source
+- 💾 Local library indicator with source icons (💿 Blu-ray, 📀 DVD, 🌐 Web, 💎 Remux)
+- 🏆 Awards badges, ▶️ trailer links, 🔗 TasteDive similar
+- Mood picker: ☀️ Light, 🔥 Intense, 😂 Funny, 🌀 Mind-Bending, 🌑 Dark, ⚔️ Epic, 💕 Romantic, 👻 Scary, ✨ Inspiring
+- 🌓 Dark/light theme, 📱 mobile responsive
 
-### 📺 Streaming Availability
-- See which titles are on Netflix, Prime, Disney+, Max, etc. in your country
-- Filter your ratings by streaming provider
-- Browse the full streaming catalog for your region
-- Per-user provider selection (pick your subscriptions)
-- 🆕 "New on streaming" — detect titles that just appeared
-- Powered by TMDB watch providers (supports 50+ countries)
+### 🎯 Discover
+- **Taste-Based Recommendations** — Jinni-inspired "Movie Genome" using TMDB keywords, genres, directors, actors, writers
+  - 🧬 DNA Match, 🎬 Director's Chair, 👥 Community, ✅ Unanimous Hits, 💫 Blast from the Past
+  - Weighted scoring: keywords 1x, directors 2x, actors 1.5x, writers 1.5x, genres 0.5x
+  - Fully-watched unrated TV shows count as implicit 7/10
+- **🤖 AI Friend** — personalized insights from your library:
+  - 💎 Hidden Gems (unrated titles matching your taste)
+  - 🤔 Why Do I Have This? (low taste + low IMDB)
+  - 😈 Guilty Pleasures (you loved it, critics hated it)
+  - 🎬 Directors You Love
+- **🎲 Tonight / 🎰 Random** — quick picks with trailer embeds
+- **📺 Streaming Catalog** — browse what's available in your country
+- **🆕 New on Streaming** — detect titles that just appeared
+- **📋 Enrichment Updates** — changelog of what data changed, with color-coded tags
 
-### 🎯 Taste-Based Recommendations
-- Builds a weighted taste profile from your highly-rated titles using TMDB keywords and genres
-- Inspired by Jinni's "Movie Genome" approach — goes beyond genres to match on themes, moods, and plot elements
-- **5 recommendation categories:**
-  - 🧬 **DNA** — keyword/genre deep match (your taste fingerprint)
-  - 🎬 **Director's Chair** — from creators and actors you love
-  - 👥 **Community** — loved by users with similar taste (via TMDB similar)
-  - ✅ **Unanimous Hits** — high scores across all platforms, no divergence
-  - 💫 **Blast from the Past** — favorites you haven't seen in 2+ years
-- Score divergence detector — flags titles where IMDB/TMDB/RT/Metacritic disagree (likely manipulation)
-- Filtered to what's available on your streaming services
-- 🎲 "What should I watch tonight?" — random pick with trailer embed
-- ★ Inline rating — rate directly from the recommendations page
-- ❤️ Watchlist toggle on recommendations
+### 📚 Library Management
+- **Library Dashboard** — progress bars for sized/hashed/subtitled/quality-checked files
+  - Agent status, task queue with ETA, resolution & codec breakdown
+- **📖 Browse** — paginated, searchable, sortable view of all 18K+ library items
+- **📺 TV Shows** — episode gap detection, quality consistency, completion tracking, sortable by watched %
+- **🔍 Scraper** — filename parsing, TMDB search matching, IMDB dataset proposals, one-click match
+- **🗂 Organize** — library breakdown by location, decade, genre
+- **⚠ To Be Confirmed** — fuzzy title/filename mismatch detection
+  - Checks IMDB title, originalTitle, and TMDB alternative titles (15+ languages)
+  - German transliterations (ä→ae, ö→oe, ü→ue), substring matching
+  - ✅ Confirm or 🔍 Re-match buttons
+- **💾 Save Space** — titles furthest from your taste profile, sorted by match score
+- **Duplicate Detection** — side-by-side comparison with thumbnails, resolution, codec, size
+  - ✅ KEEP / ❌ REMOVE / ⚖️ REVIEW suggestions
+  - Video frame thumbnails extracted via ffmpeg
 
-### 📊 Stats & Social
-- Rating distribution, genre breakdown, top directors
-- 👥 Compare users — agreement/disagreement analysis
-- 📡 RSS feed of recent ratings
-- ⬇ Export ratings as CSV
+### 👥 Social
+- **📡 Activity Feed** — recent ratings across all users
+- **🤝 Compare** — agreement/disagreement analysis between users
+- **🔔 Alerts** — watchlisted titles now available on streaming
+- **🌍 Contribute** — compare your data vs TMDB/TVDB/Wikidata
+  - One-click pull of alternative titles, TV data, multilingual names
+  - Data gap analysis showing what you can contribute back
 
-### 👥 Multi-User Support
-- Shared title metadata store (posters, scores, keywords, streaming) — ~2MB for 1000 titles
-- Per-user ratings, Trakt tokens, and local libraries — ~20KB per user
-- Adding a new user is a marginal cost of a few KB
-- Profile switcher bar on every page — no passwords needed
+### ⚙ Setup & Integrations
 
-### 🔄 Integrations
 | Service | What it provides | Auth |
 |---------|-----------------|------|
 | **IMDB** | Ratings import (CSV) + bulk datasets (200K titles) | None |
-| **TMDB** | Posters, keywords, streaming, similar, trailers, cast | API key |
+| **TMDB** | Posters, keywords, streaming, similar, trailers, cast, alt titles | API key |
 | **OMDB** | Rotten Tomatoes 🍅, Metacritic scores | API key |
 | **TVDB** | TV show metadata | API key |
-| **Trakt** | Bidirectional rating sync, watch history | OAuth |
-| **TasteDive** | "If you liked X" similar suggestions | None (free) |
+| **Trakt** | Bidirectional rating sync, watch history, episode scrobbles | OAuth |
+| **TasteDive** | "If you liked X" similar suggestions | None |
 | **OpenSubtitles** | Subtitle search with hash matching | API key |
-| **Plex** | Local library sync (resolution, codecs, audio, subs) | URL + token |
-| **Jellyfin** | Local library sync (full media info) | URL + API key |
-| **Emby** | Local library sync (full media info) | URL + API key |
-| **Kodi** | Local library sync (streamdetails) | JSON-RPC URL |
-| **Radarr** | Movie library + wanted/downloaded status | URL + API key |
-| **Sonarr** | TV library + wanted/downloaded status | URL + API key |
-| **TMM** | Local library (tinyMediaManager HTTP API or CSV upload) | API key |
+| **Plex** | Local library sync | URL + token |
+| **Jellyfin** | Local library sync | URL + API key |
+| **Emby** | Local library sync | URL + API key |
+| **Kodi** | Local library sync (JSON-RPC) | URL |
+| **Radarr** | Movie library + wanted status | URL + API key |
+| **Sonarr** | TV library + wanted status | URL + API key |
+| **TMM** | tinyMediaManager library | API key |
 
-### 🖥️ Media Server Sync
+### 🖥️ LAN Agent (`agent.py`)
 
-Two ways to sync your local media library:
+A standalone zero-dependency Python script for unattended media server sync and library management:
 
-**Browser LAN Scan** — click "Scan LAN" in Setup. Your browser probes common LAN IPs for media servers, prompts for API tokens, and syncs directly. No server-side config needed.
+- **Daemon mode** with wrapper (`agent-wrapper.py`) for auto-restart on crash or self-update
+- **Threaded execution**: background tasks (exec_code) run alongside foreground tasks (sizing, hashing)
+- **Task types**: size_files, hash_files, check_quality, download_subs, find_duplicates, exec_code, update_agent, diag
+- **Self-update**: server pushes new agent code, agent writes it and exits 42, wrapper restarts
+- **5-second timeout** on SMB file operations to prevent hangs
+- **Offline buffering**: failed results saved to `agent_buffer.json`, retried on reconnect
+- **NFO scanning**: reads .nfo sidecar files for IMDB IDs, batched reporting
+- **Thumbnail extraction**: ffmpeg frame capture for duplicate comparison
+- **Path mapping**: NFS ↔ SMB automatic conversion
 
-**LAN Agent** (`agent.py`) — a standalone zero-dependency Python script for unattended sync:
 ```bash
-# First run creates agent.json config
-python3 agent.py --server https://your-domain.com/imdb --user yourname
+# With wrapper (recommended)
+python agent-wrapper.py --server https://your-domain.com/cinecross --user yourname --daemon
 
-# Edit agent.json with your server URLs and tokens, then:
-python3 agent.py --server https://your-domain.com/imdb --user yourname
-
-# Automate with cron (every 30 min):
-*/30 * * * * python3 /path/to/agent.py --server https://your-domain.com/imdb --user yourname
+# Direct
+python agent.py --server https://your-domain.com/cinecross --user yourname --daemon
 ```
-
-#### Running the Agent on Windows
-
-1. Install Python 3.12+ from [python.org](https://www.python.org/downloads/) (check "Add to PATH")
-2. Download `agent.py` from this repo
-3. Open PowerShell and run:
-```powershell
-# First run — creates agent.json config file
-python agent.py --server https://your-domain.com/imdb --user yourname
-
-# Edit agent.json in Notepad — enable your servers, add URLs and tokens:
-notepad agent.json
-
-# Run the sync
-python agent.py --server https://your-domain.com/imdb --user yourname
-```
-4. To automate, create a scheduled task:
-```powershell
-# Open Task Scheduler or run:
-schtasks /create /tn "CineCross Sync" /tr "python C:\path\to\agent.py --server https://your-domain.com/imdb --user yourname" /sc hourly
-```
-
-#### Windows Prerequisites (optional)
-
-For file sizes, hashes, and video thumbnails, run the setup script as Administrator:
-```powershell
-powershell -ExecutionPolicy Bypass -File setup-windows.ps1
-```
-This installs:
-- **NFS client** — access NFS shares from Windows (optional if using SMB)
-- **ffmpeg** — video thumbnails for library curation
-
-#### Path Mapping (NFS/SMB)
-
-If your media server (Kodi) uses NFS paths but your Windows machine accesses them via SMB, configure path mappings in `agent.json`:
-```json
-{
-    "_path_mappings": {
-        "nfs://192.168.0.235/volume1/Movies": "//zeus/Movies",
-        "nfs://192.168.0.235/volume1/TVShows": "//zeus/TVShows"
-    }
-}
-```
-The agent auto-converts forward slashes to backslashes on Windows. On first run, it checks if paths are accessible and prompts to set up mappings interactively.
-
-The agent supports: Plex, Jellyfin, Emby, Kodi, Radarr, Sonarr, and tinyMediaManager. It computes OpenSubtitles file hashes for sync-accurate subtitle matching.
 
 ## Quick Start
 
@@ -156,204 +112,75 @@ Open `http://localhost:8000`, go to ⚙ Setup, and upload your IMDB CSV export.
 ```yaml
 # docker-compose.override.yml
 services:
-  cinephile:
+  cinecross:
     environment:
       - TMDB_KEY=your_tmdb_key
       - OMDB_KEY=your_omdb_key
       - TVDB_KEY=your_tvdb_key
       - TRAKT_ID=your_trakt_client_id
       - TRAKT_SECRET=your_trakt_client_secret
-      - TRAKT_REDIRECT=https://your-domain.com/trakt/callback
-      - WATCH_COUNTRY=LU
+      - TRAKT_REDIRECT=https://your-domain.com/cinecross/trakt/callback
+      - WATCH_COUNTRY=US
 ```
 
-## API Keys
+The Docker image includes NFS client for direct media access. See `docker-compose.yml` for NFS volume mount examples.
 
-All optional — the app works with just an IMDB CSV. Each key unlocks more features:
+## Navigation
 
-| Service | Get a key | What it unlocks |
-|---------|-----------|----------------|
-| **TMDB** | [themoviedb.org/settings/api](https://www.themoviedb.org/settings/api) | Posters, keywords, streaming, recommendations |
-| **OMDB** | [omdbapi.com/apikey.aspx](https://www.omdbapi.com/apikey.aspx) | Rotten Tomatoes, Metacritic (1000 req/day free) |
-| **TVDB** | [thetvdb.com/dashboard/account/apikey](https://thetvdb.com/dashboard/account/apikey) | TV show cross-referencing |
-| **Trakt** | [trakt.tv/oauth/applications](https://trakt.tv/oauth/applications) | Rating sync, watch history |
-| **OpenSubtitles** | [opensubtitles.com/consumers](https://www.opensubtitles.com/consumers) | Subtitle search + download |
-
-Keys can be set via environment variables or pasted in the ⚙ Setup page at runtime (saved to `/data/api_keys.json`).
+| Section | Pages |
+|---------|-------|
+| **⭐ Ratings** | Ratings · Stats · Unrated · History |
+| **🎯 Discover** | Recommendations · AI Friend · Tonight · Random · Catalog · New · Updates |
+| **📚 Library** | Dashboard · Browse · TV Shows · Scraper · Organize · Confirm |
+| **👥 Social** | Feed · Compare · Alerts · Contribute |
+| **⚙ Setup** | Config · Trakt · Export · Import · RSS |
 
 ## Architecture
 
 ```
 /data/
-├── titles.json              # Shared: metadata for all known titles (~2MB/1000 titles)
-├── catalog.json             # Streaming catalog for WATCH_COUNTRY
-├── catalog_prev.json        # Previous catalog snapshot (for "leaving soon" detection)
+├── titles.json              # Shared metadata (~2MB/1000 titles)
+├── catalog.json             # Streaming catalog
+├── enrichment_log.json      # Change tracking
 ├── api_keys.json            # Saved API keys
-├── tvdb_token.json          # TVDB session token
-├── imdb_datasets/           # IMDB bulk data (title.basics.tsv, title.ratings.tsv)
+├── thumbnails/              # Video frame captures (.jpg)
+├── imdb_datasets/           # title.basics.tsv, title.ratings.tsv
 └── users/
-    ├── alice/
-    │   ├── ratings.json     # {imdb_id: {rating, date}} (~20KB)
-    │   ├── trakt_token.json # Trakt OAuth token
-    │   ├── tmm_library.json # Local library (TMM + media servers)
-    │   ├── media_servers.json # Media server connection config
-    │   ├── providers.json   # Streaming subscriptions
-    │   └── watchlist.json   # Watchlisted titles
-    └── bob/
-        └── ratings.json
+    └── alice/
+        ├── ratings.json     # Personal ratings (~20KB)
+        ├── tmm_library.json # Local library (media servers)
+        ├── trakt_token.json # Trakt OAuth token
+        ├── providers.json   # Streaming subscriptions
+        └── watchlist.json   # Watchlisted titles
 ```
-
-### Data Flow
-
-```
-IMDB CSV ──→ import_csv() ──→ titles.json (shared metadata)
-                            └→ users/X/ratings.json (personal ratings)
-
-Enrich ──→ TMDB (poster, keywords, streaming, similar, cast, trailer)
-        ├→ OMDB (RT, Metacritic)
-        └→ TVDB (TV cross-ref)
-        ──→ titles.json (updated)
-
-Recommend ──→ build_taste_profile() from user's high-rated titles
-           ├→ score all unrated titles against profile
-           ├→ filter by streaming availability
-           └→ return top matches in 5 categories
-
-Media Sync ──→ Browser LAN scan OR agent.py
-            ├→ Plex / Jellyfin / Emby / Kodi / Radarr / Sonarr / TMM
-            └→ POST /api/library/<user> ──→ users/X/tmm_library.json
-
-Catalog ──→ TMDB discover API (per provider, per country)
-         ├→ catalog.json (current snapshot)
-         ├→ catalog_prev.json (previous, for diff)
-         ├→ "leaving soon" = titles in prev but not in current
-         └→ seeds titles.json with unrated titles for recommendations
-
-Discovery ──→ Weekly: TMDB 8.0+ movies in EN/FR/PT/ES
-           └→ seeds titles.json with highly-rated films
-```
-
-### Recommendation Algorithm
-
-1. **Taste profile**: For each title rated 6+, extract TMDB keywords, genres, directors, and actors. Weight by rating: `(rating - 5) / 5` — so a 10/10 contributes 5x more than a 6/10.
-
-2. **Scoring**: Each candidate title is scored by summing keyword matches (full weight) and genre matches (half weight), boosted by critical ratings (IMDB/TMDB). Cast/director matches add additional weight.
-
-3. **Score validation**: Titles where IMDB/TMDB/RT/Metacritic diverge by >2.0 points are flagged as potentially manipulated and excluded from the "Unanimous Hits" category.
-
-4. **Filtering**: Only titles available on the user's streaming services in their country are shown.
-
-5. **FIFO re-enrichment**: Every daily run re-enriches the 50 oldest titles, keeping metadata fresh. OMDB calls capped at 500/run (half of daily quota).
-
-6. **Seasonal boost**: Keywords matching the current season (e.g., "christmas" in December) get a scoring boost.
-
-### Scalability
-
-| Users | Disk | RAM | Architecture |
-|---|---|---|---|
-| 1-50 | <100 MB | ~200 MB | Current design (JSON files) |
-| 50-500 | ~60 MB | ~200 MB | Add gunicorn (4 workers) |
-| 500-5000 | ~400 MB | ~250 MB | SQLite for titles (WAL mode) |
-| 5000+ | ~800 MB | ~650 MB | PostgreSQL + Redis |
-
-## Configuration
-
-### Environment Variables
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `TMDB_KEY` | TMDB API key | |
-| `OMDB_KEY` | OMDB API key | |
-| `TVDB_KEY` | TVDB API key | |
-| `TRAKT_ID` | Trakt OAuth client ID | |
-| `TRAKT_SECRET` | Trakt OAuth client secret | |
-| `TRAKT_REDIRECT` | Trakt OAuth redirect URI | |
-| `WATCH_COUNTRY` | ISO 3166-1 country code | `LU` |
 
 ### Scheduled Jobs
 
-| Schedule | Job | Description |
-|---|---|---|
-| Daily 3am | Enrichment | Keywords, posters, cast, streaming for new/stale titles |
-| Sunday 4am | Catalog refresh | Full streaming catalog + seeding |
-| Sunday 5am | Discovery | TMDB 8.0+ movies in EN/FR/PT/ES |
+| Schedule | Job |
+|---|---|
+| Every 2 hours | Enrichment (TMDB keywords/cast/streaming, OMDB RT/Metacritic, capped 80 OMDB/run) |
+| Every 5 seconds | Alt titles pull from TMDB (10 titles/cycle, prioritizes confirm mismatches) |
+| Every 4 hours | Kodi/media server sync (agent) |
+| Sunday 4am | Streaming catalog refresh + discovery sweep |
 
-### Reverse Proxy
+### Recommendation Algorithm
 
-Behind Caddy with a subpath:
-
-```
-handle_path /movies/* {
-    reverse_proxy cinecross:8000
-}
-```
-
-Set the `BASE` constant in `app.py` to match your subpath (default: `/imdb`).
-
-### URL Routes
-
-| Route | Auth | Description |
-|-------|------|-------------|
-| `/` | Public | Default user's ratings |
-| `/u/<user>` | Public | Specific user's ratings |
-| `/recs/<user>` | Public | 5-category recommendations |
-| `/tonight/<user>` | Public | Random pick with trailer |
-| `/stats/<user>` | Public | Rating stats and charts |
-| `/catalog` | Public | Streaming catalog browser |
-| `/new` | Public | New on streaming |
-| `/random/<user>` | Public | Random unwatched title |
-| `/compare/` | Public | Compare users |
-| `/rss/<user>` | Public | RSS feed |
-| `/similar/<id>` | Public | TasteDive similar titles |
-| `/export/<user>` | Public | Download ratings CSV |
-| `/setup/<user>` | 🔒 Login | Setup & configuration |
-| `/enrich` | 🔒 Login | Trigger enrichment |
-| `/keys` | 🔒 Login | Save API keys |
-| `/trakt/sync/<user>` | 🔒 Login | Sync with Trakt |
-| `/media/sync/<user>` | 🔒 Login | Sync media servers |
-| `/datasets/download` | 🔒 Login | Download IMDB datasets |
-| `/api/library/<user>` | Public | POST: receive library from agent |
-| `/jobs` | Public | Background job status (JSON) |
-| `/api` | Public | Stats endpoint (JSON) |
+1. **Taste profile**: For each title rated 6+, extract keywords, genres, directors, actors, writers. Weight by rating: `(rating - 5) / 5`. Fully-watched unrated TV shows count as implicit 7.
+2. **Scoring**: keyword match (1x) + genre (0.5x) + director (2x) + actor (1.5x) + writer (1.5x), boosted by IMDB/TMDB ratings.
+3. **Seasonal boost**: Keywords matching current season get a scoring boost.
+4. **Filtering**: Only titles on user's streaming services in their country.
+5. **5 categories**: DNA, Director's Chair, Community (TMDB similar), Unanimous Hits, Blast from the Past.
 
 ## Tech Stack
 
 - **Zero dependencies** — pure Python 3.12 standard library
-- **Single file** — `app.py` (~2000 lines) + optional `agent.py` (~150 lines)
-- **~50MB Docker image** (python:alpine)
-- **IMDB bulk datasets** — 200K titles loaded in memory for instant lookups
+- **Single file** — `app.py` (~4000 lines) + `agent.py` (~1000 lines)
+- **~50MB Docker image** (python:alpine + nfs-utils)
+- **Thread-safe JSON** with file locking + atomic writes
+- **Concurrent requests** via ThreadingMixIn
 - **Background job queue** with progress tracking
-- **Incremental saves** during enrichment (no data loss on interruption)
-- **Browser-side LAN scanning** for media server discovery
-- **FIFO re-enrichment** — 50 oldest titles refreshed daily
-- **Zero API calls** for anonymous users (all public pages serve cached data)
-- **Multi-user** with minimal per-user overhead (~75KB)
-
-# Roadmap - v2
-
-### Resident Agent + Server Task Queue
-- Agent daemon mode, server-controlled task queue
-- Priority: duplicates > quality > subs > rest  
-- Dry-run mode, trash folder, undo log
-
-### Movie Scraper (TMM Replacement)
-- Identify movies from filenames via IMDB dataset + TMDB
-- Runtime validation, background auto-matching + human review queue
-- Write NFO, download artwork, smart rename, 3D detection (SBS/HSBS/TAB/MVC)
-
-### Library Organization
-- Auto-organize by genre/decade/rating, merge across drives, orphan detection
-
-### TV Show Intelligence
-- Episode gaps, quality consistency, season completion, next episode prediction
-
-### Recommendations v2
-- Collaborative filtering, mood/time-based, seasonal boost, anti-recommendation
-
-### Streaming + Social + Technical
-- Trakt scrobbling, GDPR CSV import, available/leaving alerts
-- Shared watchlist, activity feed, taste compatibility
-- SQLite migration, WebSocket, plugin system, multi-instance federation
+- **Auto-enrichment** every 2 hours with OMDB rate limiting
+- **20K+ title capacity** tested with full library
 
 ## License
 
