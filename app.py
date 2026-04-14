@@ -394,7 +394,7 @@ def _apply_task_result(task, result):
                     safe_json_save(incoming_file, existing)
                     updated = True
                     print(f"[incoming] {len(new_files)} new files from incoming folder")
-        elif task.get("id", "").startswith("thumb_"):
+        elif task.get("id", "").startswith("thumb_") or ttype == "generate_thumb":
             # Thumbnail results: {nfs_path: base64_jpg}
             PATH_MAP = {"//zeus/Movies": "nfs://192.168.0.235/volume1/Movies",
                         "//zeus/TVShows": "nfs://192.168.0.235/volume1/TVShows",

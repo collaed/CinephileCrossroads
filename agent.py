@@ -531,7 +531,7 @@ def daemon_mode(args, config):
                     except Exception as e:
                         log(f"[sync] {name} error: {e}")
                 if library:
-                    library = compute_hashes(library)
+                    # library = compute_hashes(library)  # disabled: hashing done via tasks
                     api_post(f"{base_url}/api/library/{args.user}", {"library": library})
                     log(f"[sync] Pushed {len(library)} titles")
             except Exception as e:
