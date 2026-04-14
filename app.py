@@ -2635,10 +2635,7 @@ def render_library(user):
             dupe_cards += '<div style="font-size:.85em;color:#888">Subs: ' + sub_str + '</div>'
             dupe_cards += badge
             dupe_cards += '<div style="margin-top:6px">' + open_btn + '</div>'
-            thumb_img = ''
-            if entry.get("thumbnail"):
-                thumb_img = '<img src="' + BASE + '/thumbnails/' + entry["thumbnail"] + '" style="max-width:280px;border-radius:4px;margin-top:6px">'
-            dupe_cards += thumb_img
+
             dupe_cards += '<div style="font-size:.75em;color:#8ab;margin-top:4px;word-break:break-all;font-family:monospace">' + path.split("/")[-2] + '/' + path.split("/")[-1] + '</div>'
             dupe_cards += '</div>'
 
