@@ -350,21 +350,25 @@ def _apply_task_result(task, result):
         library = load_user_tmm(user)
         updated = False
         if ttype == "size_files":
+            agent = load_agent_data(user)
             imdb_ids = params.get("imdb_ids", [])
             paths = params.get("paths", [])
             for i, path in enumerate(paths):
                 if path in data:
                     iid = imdb_ids[i] if i < len(imdb_ids) else None
-                    if iid and iid in library:
-                        library[iid]["file_size"] = data[path]
-                        updated = True
+                    if iid:
+                        agent.setdefault(iid, {})["file_size"] = data[path]
+            save_agent_data(user, agent)
+            updated = False  # don't save library
         elif ttype == "hash_files":
+            agent = load_agent_data(user)
             for path, info in data.items():
                 for iid, lib_info in library.items():
-                    if lib_info.get("path") == path:
-                        lib_info["file_hash"] = info.get("hash")
-                        lib_info["file_size"] = info.get("size")
-                        updated = True
+                    if isinstance(lib_info, dict) and lib_info.get("path") == path:
+                        agent.setdefault(iid, {})["file_hash"] = info.get("hash")
+                        agent.setdefault(iid, {})["file_size"] = info.get("size")
+            save_agent_data(user, agent)
+            updated = False
         elif ttype == "check_quality":
             for path, info in data.items():
                 for iid, lib_info in library.items():
@@ -411,8 +415,9 @@ def _apply_task_result(task, result):
                         fname = lib_iid.replace("/","_") + ".jpg"
                         with open(os.path.join(thumb_dir, fname), "wb") as tf:
                             tf.write(_b64.b64decode(b64))
-                        lib_info["thumbnail"] = fname
-                        updated = True
+                        agent = load_agent_data(user)
+                        agent.setdefault(lib_iid, {})["thumbnail"] = fname
+                        save_agent_data(user, agent)
                         break
         elif ttype == "exec_code" and (task.get("id", "").startswith("nfo_") or task.get("id", "").startswith("nfo_batch_")):
             # NFO scan results: {dir_path: imdb_id}
@@ -562,6 +567,14 @@ def load_user_trakt_token(user):
 
 def save_user_trakt_token(user, token):
     json.dump(token, open(f"{user_dir(user)}/trakt_token.json", "w"))
+
+def load_agent_data(user):
+    path = os.path.join(DATA_DIR, "users", user, "agent_data.json")
+    return safe_json_load(path) or {}
+
+def save_agent_data(user, data):
+    path = os.path.join(DATA_DIR, "users", user, "agent_data.json")
+    safe_json_save(path, data)
 
 def load_user_tmm(user):
     f = f"{user_dir(user)}/tmm_library.json"
@@ -2625,10 +2638,17 @@ def render_library_nav(user, active="library"):
         ("confirm", "⚠ Confirm", f"{BASE}/confirm/{user}"),
     ], active)
 
+def _merge_agent_data(library, user):
+    agent = load_agent_data(user)
+    for iid, adata in agent.items():
+        if iid in library and isinstance(library[iid], dict):
+            library[iid].update(adata)
+    return library
+
 def render_library(user):
     """Library page with sub-navigation."""
     """Library curation: duplicates, quality comparison, cleanup suggestions."""
-    library = load_user_tmm(user)
+    library = _merge_agent_data(load_user_tmm(user), user)
     titles = load_titles()
     if not library:
         return '<html><body style="background:#1a1a2e;color:#eee;font-family:sans-serif;padding:40px"><h2>No local library synced</h2><a href="' + BASE + '/setup/' + user + '" style="color:#4fc3f7">Setup media servers</a></body></html>'
