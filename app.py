@@ -40,9 +40,22 @@ WATCH_COUNTRY = os.environ.get("WATCH_COUNTRY", "LU")  # ISO 3166-1 for streamin
 DEFAULT_PROVIDERS = {"Netflix", "Amazon Prime Video", "Disney Plus", "Max"}  # Defaults for new users  # User's subscriptions
 DATA_DIR = "/data"
 
+# ── Route Registry ─────────────────────────────────────────────────────
+_routes = []
+def route(pattern):
+    def decorator(func):
+        _routes.append((pattern, func))
+        return func
+    return decorator
+
 # ── SQLite Database Layer ──────────────────────────────────────────────
 import sqlite3
+import html as _html_escape
 _db_local = threading.local()
+
+def esc(s):
+    """Escape HTML to prevent XSS."""
+    return _html_escape.escape(str(s)) if s else ""
 
 def get_db():
     if not hasattr(_db_local, "conn") or _db_local.conn is None:
@@ -975,12 +988,12 @@ def parse_movie_filename(filename):
     name = os.path.splitext(os.path.basename(filename))[0]
     # TV episode detection: extract show name before SxxExx
     import re as _re2
-    ep_match = _re2.search(r"[.\ _-][Ss](\d{1,2})[Ee](\d{1,2})", name)
+    ep_match = _re2.search(r"[. _-](?:[Ss](\d{1,2})[Ee](\d{1,2})|(\d{1,2})[xX](\d{2,3}))", name)
     if ep_match:
         show_name = name[:ep_match.start()]
         show_name = _re2.sub(r"[\.\-_]", " ", show_name).strip()
-        season = int(ep_match.group(1))
-        episode = int(ep_match.group(2))
+        season = int(ep_match.group(1) or ep_match.group(3))
+        episode = int(ep_match.group(2) or ep_match.group(4))
         # Also try to get episode title (after SxxExx)
         rest = name[ep_match.end():]
         quality = ""
@@ -3659,7 +3672,7 @@ td{{padding:8px;border-bottom:1px solid #333}}a{{color:#4fc3f7;text-decoration:n
             html += f'<button onclick="doPull(\'wikidata\')" class="btn" style="margin-top:8px">⬇ Pull translations</button>'
             html += f'<br><small style="color:var(--muted)">Multilingual titles for matching</small><div id="wikidata_status"></div></div>'
             html += '</div>'
-            html += '<script>function doPull(src,ids){var el=document.getElementById(src+"_status");el.innerHTML="<br>Pulling...";fetch("' + BASE + '/contribute/pull/' + u + '/"+src+(ids?"?ids="+ids:"")).then(function(r){return r.text()}).then(function(t){var m=t.match(/count=(\d+)/);el.innerHTML="<br>Updated "+(m?m[1]:"0")+" titles"})}</script>'
+            html += '<script>function doPull(src,ids){var el=document.getElementById(src+"_status");el.innerHTML="<br>Pulling...";fetch("' + BASE + '/contribute/pull/' + u + '/"+src+(ids?"?ids="+ids:"")).then(function(r){return r.text()}).then(function(t){var m=t.match(/count=(\\d+)/);el.innerHTML="<br>Updated "+(m?m[1]:"0")+" titles"})}</script>'
 
             html += '</div>' + page_foot()
             self._page(html, "setup", u)

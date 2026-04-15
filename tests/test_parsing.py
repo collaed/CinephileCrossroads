@@ -68,7 +68,7 @@ class TestParseFilename:
     @pytest.mark.parametrize("filename,show,season,episode", [
         ("Tehran.S03E02.Friend.Or.Foe.1080p.mkv", "Tehran", 3, 2),
         ("legion.s01e08.1080p.bluray.x265.mp4", "legion", 1, 8),
-        ("The.Lost.Room.1x03.La.Caccia.mkv", None, None, None),  # 1x03 format not handled
+        ("The.Lost.Room.1x03.La.Caccia.mkv", "The Lost Room", 1, 3),  # 1x03 format
     ])
     def test_tv_episodes(self, filename, show, season, episode):
         p = parse_movie_filename(filename)
