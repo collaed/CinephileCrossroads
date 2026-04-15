@@ -4789,6 +4789,62 @@ def _scheduler():
             last_discover = now.date()
         time.sleep(600)  # Check every 10 min
 
+def _migrate_json_to_db():
+    """One-time migration of JSON files to SQLite."""
+    db = get_db()
+    # Migrate task queue
+    if db.execute("SELECT COUNT(*) FROM task_queue").fetchone()[0] == 0:
+        tq = safe_json_load(os.path.join(DATA_DIR, "task_queue.json")) or []
+        for t in tq:
+            try:
+                db.execute("INSERT OR IGNORE INTO task_queue (id,type,params,priority,status,created,completed,result) VALUES (?,?,?,?,?,?,?,?)",
+                    (t.get("id",""), t.get("type",""), json.dumps(t.get("params",{})), t.get("priority",0),
+                     t.get("status","pending"), t.get("created",""), t.get("completed"),
+                     json.dumps(t.get("result")) if t.get("result") else None))
+            except: pass
+        db.commit()
+        if tq: print(f"  Migrated {len(tq)} tasks to SQLite")
+
+    # Migrate agent_data
+    if db.execute("SELECT COUNT(*) FROM agent_data").fetchone()[0] == 0:
+        for user in list_users():
+            ad = safe_json_load(os.path.join(DATA_DIR, "users", user, "agent_data.json")) or {}
+            count = 0
+            for iid, fields in ad.items():
+                if isinstance(fields, dict):
+                    for field, value in fields.items():
+                        db.execute("INSERT OR IGNORE INTO agent_data (user,imdb_id,field,value) VALUES (?,?,?,?)",
+                            (user, iid, field, str(value)))
+                        count += 1
+            db.commit()
+            if count: print(f"  Migrated {count} agent_data entries for {user}")
+
+    # Migrate enrichment log
+    if db.execute("SELECT COUNT(*) FROM enrichment_log").fetchone()[0] == 0:
+        elog = safe_json_load(os.path.join(DATA_DIR, "enrichment_log.json")) or []
+        for e in elog:
+            try:
+                db.execute("INSERT INTO enrichment_log (imdb_id,title,year,ts,changes) VALUES (?,?,?,?,?)",
+                    (e.get("iid",""), e.get("title",""), e.get("year",""), e.get("ts",""), json.dumps(e.get("changes",{}))))
+            except: pass
+        db.commit()
+        if elog: print(f"  Migrated {len(elog)} enrichment log entries")
+
+    # Migrate incoming
+    if db.execute("SELECT COUNT(*) FROM incoming").fetchone()[0] == 0:
+        for user in list_users():
+            inc = safe_json_load(os.path.join(DATA_DIR, "users", user, "incoming.json")) or []
+            for f in inc:
+                try:
+                    db.execute("INSERT OR IGNORE INTO incoming (user,path,filename,size,title_guess,year_guess,quality,tmdb_match,status) VALUES (?,?,?,?,?,?,?,?,?)",
+                        (user, f.get("path",""), f.get("filename",""), f.get("size",0),
+                         f.get("title_guess",""), f.get("year_guess",""), f.get("quality",""),
+                         json.dumps(f.get("tmdb_match")) if f.get("tmdb_match") else None,
+                         f.get("status","pending")))
+                except: pass
+            db.commit()
+            if inc: print(f"  Migrated {len(inc)} incoming entries for {user}")
+
 if __name__ == "__main__":
     os.makedirs(DATA_DIR, exist_ok=True)
     if os.path.exists(KEYS_FILE):
@@ -4797,6 +4853,9 @@ if __name__ == "__main__":
         OMDB_KEY = keys.get("omdb", OMDB_KEY).strip()
         TVDB_KEY = keys.get("tvdb", TVDB_KEY).strip()
         AGENT_TOKEN = keys.get("agent_token", AGENT_TOKEN)
+    init_db()
+    # Migrate JSON data to SQLite if needed
+    _migrate_json_to_db()
     migrate_old_data()
     users = list_users()
     titles = load_titles()
