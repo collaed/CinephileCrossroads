@@ -53,6 +53,39 @@ import sqlite3
 import html as _html_escape
 _db_local = threading.local()
 
+# ── LLM Integration ────────────────────────────────────────────────────
+def llm_ask(prompt, system=None, max_tokens=500):
+    """Call LLM via OpenAI-compatible API (intello/ollama/openai)."""
+    llm_url = _load_key("llm_url") or os.environ.get("LLM_URL", "http://intello:8000")
+    llm_token = _load_key("llm_token") or os.environ.get("LLM_TOKEN", "")
+    messages = []
+    if system: messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": prompt})
+    headers = {"Content-Type": "application/json"}
+    if llm_token: headers["Authorization"] = "Bearer " + llm_token
+    try:
+        data = json.dumps({"messages": messages, "max_tokens": max_tokens}).encode()
+        req = urllib.request.Request(llm_url.rstrip("/") + "/v1/chat/completions", data=data, headers=headers)
+        resp = urllib.request.urlopen(req, timeout=30)
+        result = json.loads(resp.read())
+        return result.get("choices", [{}])[0].get("message", {}).get("content", "")
+    except Exception as e:
+        return ""
+
+# ── Public Domain Movies ──────────────────────────────────────────────
+def search_internet_archive(query, limit=10):
+    """Search Internet Archive for free movies."""
+    url = "https://archive.org/advancedsearch.php?q=" + urllib.parse.quote(query)
+    url += "+mediatype:movies&fl[]=identifier,title,year,description,avg_rating,downloads"
+    url += "&sort[]=downloads+desc&rows=" + str(limit) + "&output=json"
+    data = api_get(url)
+    if data and data.get("response"):
+        return [{"id": d.get("identifier",""), "title": d.get("title",""), "year": d.get("year",""),
+                 "desc": (d.get("description","") or "")[:150], "rating": d.get("avg_rating",""),
+                 "url": "https://archive.org/details/" + d.get("identifier","")}
+                for d in data["response"].get("docs", [])]
+    return []
+
 def esc(s):
     """Escape HTML to prevent XSS."""
     return _html_escape.escape(str(s)) if s else ""
@@ -2484,6 +2517,13 @@ def render_setup(user):
         sel = " selected" if cur_audio == code else ""
         html += '<option value="' + code + '"' + sel + '>' + name + '</option>'
     html += '</select></div></div>'
+    html += '<h4 style="margin-top:20px;margin-bottom:10px">AI / LLM</h4>'
+    html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px">'
+    html += '<div><label style="display:block;margin-bottom:4px">LLM API URL</label>'
+    html += '<input name="llm_url" value="' + _load_key("llm_url") + '" placeholder="http://intello:8000"></div>'
+    html += '<div><label style="display:block;margin-bottom:4px">LLM Token (optional)</label>'
+    html += '<input name="llm_token" value="' + _load_key("llm_token") + '" placeholder="Bearer token"></div>'
+    html += '</div>'
     html += '<h4 style="margin-top:20px;margin-bottom:10px">Incoming Folder</h4>'
     html += '<div><label style="display:block;margin-bottom:4px">Download folder path</label>'
     html += '<input name="incoming_path" value="' + _load_key("incoming_path") + '" placeholder="nfs://192.168.0.235/volume1/Movies/.downloads">'
@@ -4730,7 +4770,7 @@ button{{padding:10px 20px;background:#4fc3f7;border:none;border-radius:6px;curso
         elif self.path.startswith("/keys"):
             params = urllib.parse.parse_qs(body.decode())
             existing = json.load(open(KEYS_FILE)) if os.path.exists(KEYS_FILE) else {}
-            for k in ("tmdb", "omdb", "tvdb", "opensubs", "opensubs_user", "opensubs_pass", "agent_token", "incoming_path", "sub_language", "audio_language"):
+            for k in ("tmdb", "omdb", "tvdb", "opensubs", "opensubs_user", "opensubs_pass", "agent_token", "incoming_path", "sub_language", "audio_language", "llm_url", "llm_token"):
                 v = params.get(k, [""])[0]
                 if v: existing[k] = v.strip()
             keys = existing
