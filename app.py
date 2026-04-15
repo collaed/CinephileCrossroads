@@ -2773,7 +2773,11 @@ def _merge_agent_data(library, user):
     for iid, adata in agent.items():
         if iid in library and isinstance(library[iid], dict):
             if isinstance(adata, dict):
-                library[iid].update(adata)
+                for k, v in adata.items():
+                    try:
+                        if k in ("file_size",) and v: v = int(v)
+                    except (ValueError, TypeError): pass
+                    library[iid][k] = v
     return library
 
 def render_library(user):
