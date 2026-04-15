@@ -39,6 +39,73 @@ TRAKT_REDIRECT = os.environ.get("TRAKT_REDIRECT", "https://your-domain.com/trakt
 WATCH_COUNTRY = os.environ.get("WATCH_COUNTRY", "LU")  # ISO 3166-1 for streaming availability
 DEFAULT_PROVIDERS = {"Netflix", "Amazon Prime Video", "Disney Plus", "Max"}  # Defaults for new users  # User's subscriptions
 DATA_DIR = "/data"
+
+# ── SQLite Database Layer ──────────────────────────────────────────────
+import sqlite3
+_db_local = threading.local()
+
+def get_db():
+    if not hasattr(_db_local, "conn") or _db_local.conn is None:
+        _db_local.conn = sqlite3.connect(os.path.join(DATA_DIR, "cinecross.db"), timeout=10)
+        _db_local.conn.execute("PRAGMA journal_mode=WAL")
+        _db_local.conn.execute("PRAGMA busy_timeout=5000")
+        _db_local.conn.row_factory = sqlite3.Row
+    return _db_local.conn
+
+def init_db():
+    db = get_db()
+    db.executescript("""
+        CREATE TABLE IF NOT EXISTS task_queue (
+            id TEXT PRIMARY KEY, type TEXT, params TEXT DEFAULT '{}',
+            priority INTEGER DEFAULT 0, status TEXT DEFAULT 'pending',
+            created TEXT, completed TEXT, result TEXT);
+        CREATE TABLE IF NOT EXISTS agent_data (
+            user TEXT, imdb_id TEXT, field TEXT, value TEXT,
+            PRIMARY KEY (user, imdb_id, field));
+        CREATE TABLE IF NOT EXISTS enrichment_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, imdb_id TEXT, title TEXT,
+            year TEXT, ts TEXT, changes TEXT);
+        CREATE TABLE IF NOT EXISTS incoming (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, user TEXT, path TEXT UNIQUE,
+            filename TEXT, size INTEGER, title_guess TEXT, year_guess TEXT,
+            quality TEXT, tmdb_match TEXT, status TEXT DEFAULT 'pending', destination TEXT);
+    """)
+    db.commit()
+
+def db_enqueue_task(task_type, params=None, priority=0):
+    db = get_db()
+    tid = "task_" + str(int(time.time()*1000)) + "_" + str(threading.current_thread().ident % 1000)
+    db.execute("INSERT INTO task_queue (id,type,params,priority,status,created) VALUES (?,?,?,?,?,?)",
+        (tid, task_type, json.dumps(params or {}), priority, "pending", time.strftime("%Y-%m-%d %H:%M:%S")))
+    db.commit()
+    return tid
+
+def db_get_pending_tasks(limit=5):
+    rows = get_db().execute("SELECT * FROM task_queue WHERE status='pending' ORDER BY priority,created LIMIT ?", (limit,)).fetchall()
+    return [{"id":r["id"],"type":r["type"],"params":json.loads(r["params"] or "{}"),"priority":r["priority"],"status":r["status"]} for r in rows]
+
+def db_complete_task(task_id, result=None):
+    db = get_db()
+    db.execute("UPDATE task_queue SET status='done',completed=?,result=? WHERE id=?",
+        (time.strftime("%Y-%m-%d %H:%M:%S"), json.dumps(result) if result else None, task_id))
+    if db.execute("SELECT changes()").fetchone()[0] == 0:
+        db.execute("INSERT OR IGNORE INTO task_queue (id,type,status,completed,result) VALUES (?,?,?,?,?)",
+            (task_id, "batch", "done", time.strftime("%Y-%m-%d %H:%M:%S"), json.dumps(result) if result else None))
+    db.commit()
+
+def db_set_agent_data(user, imdb_id, field, value):
+    get_db().execute("INSERT OR REPLACE INTO agent_data (user,imdb_id,field,value) VALUES (?,?,?,?)",
+        (user, imdb_id, field, str(value)))
+    get_db().commit()
+
+def db_get_agent_field_count(user, field):
+    return get_db().execute("SELECT COUNT(*) FROM agent_data WHERE user=? AND field=?", (user, field)).fetchone()[0]
+
+def db_log_enrichment(imdb_id, title, year, changes):
+    get_db().execute("INSERT INTO enrichment_log (imdb_id,title,year,ts,changes) VALUES (?,?,?,?,?)",
+        (imdb_id, title, year, time.strftime("%Y-%m-%dT%H:%M:%S"), json.dumps(changes)))
+    get_db().commit()
+
 TITLES_FILE = f"{DATA_DIR}/titles.json"
 CATALOG_FILE = f"{DATA_DIR}/catalog.json"
 CATALOG_PREV = f"{DATA_DIR}/catalog_prev.json"
