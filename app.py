@@ -2948,6 +2948,33 @@ def render_library(user):
     html += '</div>'
     html += '</div>'
 
+    # Background activity
+    from datetime import datetime
+    elog = safe_json_load(os.path.join(DATA_DIR, "enrichment_log.json")) or []
+    recent_enriched = sum(1 for e in elog if e.get("ts","") > time.strftime("%Y-%m-%dT%H:", time.localtime(time.time()-3600)))
+    titles_obj = load_titles()
+    alt_done = sum(1 for v in titles_obj.values() if v.get("alt_titles"))
+    alt_total = sum(1 for v in titles_obj.values() if v.get("tmdb_id"))
+    alt_pct = alt_done * 100 // alt_total if alt_total else 0
+
+    html += '<div class="grid" style="margin-bottom:20px">'
+    html += '<div class="card"><b>🔄 Background Activity</b><br>'
+    html += '<small>Enrichment: ' + str(recent_enriched) + ' changes last hour</small><br>'
+    html += '<small>Alt titles: ' + str(alt_done) + '/' + str(alt_total) + ' (' + str(alt_pct) + '%)</small>'
+    html += '<div style="background:#333;border-radius:3px;height:6px;margin-top:4px"><div style="background:#48f;height:6px;width:' + str(alt_pct) + '%;border-radius:3px"></div></div>'
+    html += '<small style="color:var(--muted)">Pulling 10 every 5s from TMDB</small><br>'
+    if elog:
+        html += '<small style="color:var(--muted)">Last enrichment: ' + elog[-1].get("ts","")[:16] + '</small>'
+    html += '</div>'
+    # Recent enrichment changes
+    html += '<div class="card"><b>📋 Recent Changes</b><br>'
+    for e in reversed(elog[-5:]):
+        changes = ", ".join(e.get("changes",{}).keys())
+        html += '<small>' + e.get("title","")[:25] + ': ' + changes + '</small><br>'
+    if not elog: html += '<small style="color:var(--muted)">No changes yet</small>'
+    html += '<br><a href="' + BASE + '/updates" style="font-size:.8em">View all →</a></div>'
+    html += '</div>'
+
     # Quality & codec breakdown
     html += '<div class="grid" style="margin-bottom:20px">'
     html += '<div class="card"><h3>Resolution</h3>' + q_bars + '</div>'
