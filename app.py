@@ -93,6 +93,27 @@ def db_complete_task(task_id, result=None):
             (task_id, "batch", "done", time.strftime("%Y-%m-%d %H:%M:%S"), json.dumps(result) if result else None))
     db.commit()
 
+def db_trim_done(keep=500):
+    db = get_db()
+    db.execute("DELETE FROM task_queue WHERE status='done' AND id NOT IN (SELECT id FROM task_queue WHERE status='done' ORDER BY completed DESC LIMIT ?)", (keep,))
+    db.commit()
+
+def db_get_agent_data(user, imdb_id=None):
+    db = get_db()
+    if imdb_id:
+        rows = db.execute("SELECT field, value FROM agent_data WHERE user=? AND imdb_id=?", (user, imdb_id)).fetchall()
+        return {r["field"]: r["value"] for r in rows}
+    rows = db.execute("SELECT imdb_id, field, value FROM agent_data WHERE user=?", (user,)).fetchall()
+    result = {}
+    for r in rows:
+        result.setdefault(r["imdb_id"], {})[r["field"]] = r["value"]
+    return result
+
+def db_clear_auto_tasks():
+    db = get_db()
+    db.execute("DELETE FROM task_queue WHERE status='pending' AND priority > -1 AND type NOT IN ('exec_code','update_agent')")
+    db.commit()
+
 def db_set_agent_data(user, imdb_id, field, value):
     get_db().execute("INSERT OR REPLACE INTO agent_data (user,imdb_id,field,value) VALUES (?,?,?,?)",
         (user, imdb_id, field, str(value)))
@@ -253,18 +274,12 @@ def generate_tasks_for_library(user):
     if not library: return 0
     
     # Load queue, preserve priority/exec_code tasks and all done tasks
-    queue = load_task_queue()
-    keep = [t for t in queue if t["status"] != "pending" or t.get("priority") == -1 or t["type"] in ("exec_code", "update_agent")]
-    dropped = len(queue) - len(keep)
-    preserved = [t for t in keep if t["status"] == "pending"]
-    if preserved: print("  Preserved " + str(len(preserved)) + " priority tasks: " + ", ".join(t["id"] for t in preserved))
-    if dropped: print("  Cleared " + str(dropped) + " old auto-generated tasks")
+    db_clear_auto_tasks()
     
     new_tasks = []
     def _add(task_type, params, priority):
-        new_tasks.append({"id": f"task_{int(time.time()*1000)}_{len(new_tasks)}", "type": task_type,
-            "params": params or {}, "priority": priority, "status": "pending",
-            "created": time.strftime("%Y-%m-%d %H:%M:%S")})
+        db_enqueue_task(task_type, params, priority)
+        new_tasks.append(1)  # just count
     
     count = 0
     from collections import defaultdict
@@ -304,9 +319,6 @@ def generate_tasks_for_library(user):
         _add("check_quality", {"paths": needs_quality[i:i+50]}, PRIORITY_QUALITY)
         count += 1
 
-    # Save all at once: preserved + new + done
-    new_tasks.sort(key=lambda t: t["priority"])
-    save_task_queue(keep + new_tasks)
     count = len(new_tasks)
     # Scan incoming folder if configured
     incoming = _load_key("incoming_path")
@@ -373,54 +385,33 @@ def request_quality_check(user, imdb_ids):
         enqueue_human_task("check_quality", {"paths": paths})
 
 def enqueue_task(task_type, params=None, priority=0):
-    """Add a task for the agent. Priority: 0=high, 1=medium, 2=low.
-    Types: find_duplicates, check_quality, download_subs, scrape_movie, rename_file"""
-    queue = load_task_queue()
-    queue.append({
-        "id": f"task_{int(time.time()*1000)}",
-        "type": task_type,
-        "params": params or {},
-        "priority": priority,
-        "status": "pending",
-        "created": time.strftime("%Y-%m-%d %H:%M:%S"),
-    })
-    queue.sort(key=lambda t: t["priority"])
-    save_task_queue(queue)
+    """Add a task to the queue (SQLite)."""
+    return db_enqueue_task(task_type, params, priority)
 
 def get_pending_tasks(limit=5):
-    """Get next pending tasks for the agent, highest priority first.
-    Returns small batches so agent stays responsive to human actions."""
-    queue = load_task_queue()
-    pending = sorted([t for t in queue if t["status"] == "pending"], key=lambda t: t["priority"])
-    return pending[:limit]
+    """Get next pending tasks (SQLite)."""
+    return db_get_pending_tasks(limit)
 
 _exec_results = {}  # Persistent store for exec_code results
 
 def complete_task(task_id, result=None):
-    """Mark a task as complete and feed results back into library."""
-    queue = load_task_queue()
-    task = None
-    for t in queue:
-        if t["id"] == task_id:
-            t["status"] = "done"
-            t["result"] = result
-            t["completed"] = time.strftime("%Y-%m-%d %H:%M:%S")
-            task = t
-    # Handle NFO batch results (no matching task)
+    """Mark task complete (SQLite) and apply results."""
+    # Store in SQLite
+    db_complete_task(task_id, result)
+    # Build task dict for _apply_task_result
+    db = get_db()
+    row = db.execute("SELECT * FROM task_queue WHERE id=?", (task_id,)).fetchone()
+    task = dict(row) if row else None
+    if task and task.get("params"):
+        task["params"] = json.loads(task["params"]) if isinstance(task["params"], str) else task["params"]
+    # Handle batch results (nfo_batch_, thumb_)
     if not task and (task_id.startswith("nfo_batch_") or task_id.startswith("thumb_")) and result:
-        fake_task = {"id": task_id, "type": "exec_code", "params": {}}
-        _apply_task_result(fake_task, result)
-    # Feed results back into library data
+        task = {"id": task_id, "type": "exec_code", "params": {}}
+    # Apply results to library
     if task and result and not result.get("error"):
-        print("[complete] Applying " + task.get("type","?") + " " + task_id)
         _apply_task_result(task, result)
-    # Store exec_code results persistently
-    if result and (task_id.startswith("inspect_") or task_id.startswith("nfo_") or (task and task.get("type") == "exec_code")):
-        _exec_results[task_id] = {"result": result, "completed": time.strftime("%Y-%m-%d %H:%M:%S")}
-    # Keep only last 100 completed
-    done = [t for t in queue if t["status"] == "done"]
-    pending = [t for t in queue if t["status"] != "done"]
-    save_task_queue(pending + done[-100:])
+    # Trim old done tasks
+    db_trim_done(500)
 
 def _apply_task_result(task, result):
     """Update library with task results."""
@@ -436,24 +427,20 @@ def _apply_task_result(task, result):
         library = load_user_tmm(user)
         updated = False
         if ttype == "size_files":
-            agent = load_agent_data(user)
             imdb_ids = params.get("imdb_ids", [])
             paths = params.get("paths", [])
             for i, path in enumerate(paths):
                 if path in data:
                     iid = imdb_ids[i] if i < len(imdb_ids) else None
                     if iid:
-                        agent.setdefault(iid, {})["file_size"] = data[path]
-            save_agent_data(user, agent)
-            updated = False  # don't save library
+                        db_set_agent_data(user, iid, "file_size", data[path])
+            updated = False
         elif ttype == "hash_files":
-            agent = load_agent_data(user)
             for path, info in data.items():
                 for iid, lib_info in library.items():
                     if isinstance(lib_info, dict) and lib_info.get("path") == path:
-                        agent.setdefault(iid, {})["file_hash"] = info.get("hash")
-                        agent.setdefault(iid, {})["file_size"] = info.get("size")
-            save_agent_data(user, agent)
+                        if info.get("hash"): db_set_agent_data(user, iid, "file_hash", info["hash"])
+                        if info.get("size"): db_set_agent_data(user, iid, "file_size", info["size"])
             updated = False
         elif ttype == "check_quality":
             for path, info in data.items():
@@ -2782,10 +2769,11 @@ def render_library_nav(user, active="library"):
     ], active)
 
 def _merge_agent_data(library, user):
-    agent = load_agent_data(user)
+    agent = db_get_agent_data(user) if get_db() else (load_agent_data(user) or {})
     for iid, adata in agent.items():
         if iid in library and isinstance(library[iid], dict):
-            library[iid].update(adata)
+            if isinstance(adata, dict):
+                library[iid].update(adata)
     return library
 
 def render_library(user):
