@@ -58,7 +58,11 @@ def safe_json_load(path):
     lock = _get_lock(path)
     with lock:
         if os.path.exists(path):
-            return json.load(open(path))
+            try:
+                return json.load(open(path))
+            except (json.JSONDecodeError, ValueError):
+                print(f"Warning: corrupt JSON in {path}")
+                return None
     return None
 
 def safe_json_save(path, data):
