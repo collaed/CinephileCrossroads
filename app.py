@@ -1067,21 +1067,34 @@ def llm_batch_check_translations(mismatches, max_check=20):
     if not _load_key("llm_url"): return mismatches
     zeros = [m for m in mismatches if m["match"] == 0][:max_check]
     if not zeros: return mismatches
-    # Build a single prompt with all pairs
     lines = []
     for i, m in enumerate(zeros):
-        lines.append(f'{i+1}. "{m["path_title"]}" = "{m["db_title"]}" ({m.get("year","")})?')
-    prompt = "For each pair, is the first name a translation, alternate title, or subtitle of the movie? Answer each line with just the number and YES or NO.\n\n" + "\n".join(lines)
-    answer = llm_ask(prompt, system="You are a multilingual movie title expert. Be concise. Answer only YES or NO per line.", max_tokens=max_check * 10)
+        lines.append(f'{i+1}. File: "{m["path_title"]}" → Movie: "{m["db_title"]}" ({m.get("year","")})')
+    prompt = """I have movie files whose filenames don't match their database title. For each pair, determine if the filename is a translation, alternate title, or original-language title of the listed movie.
+
+IMPORTANT: Answer NO if:
+- The filename is a generic format name (like "avchd", "video_ts", "disc1")
+- The filename is clearly a different movie
+- The filename is a subtitle or bonus feature title
+
+Answer YES only if the filename is genuinely the same movie in another language.
+
+Reply with ONLY the number and YES or NO for each line. Example:
+1. YES
+2. NO
+
+""" + "\n".join(lines)
+    answer = llm_ask(prompt, system="You are a strict multilingual movie title verifier. Only answer YES if you are confident the filename refers to the same movie. When in doubt, answer NO.", max_tokens=max_check * 8)
     if not answer: return mismatches
-    # Parse YES/NO answers
     for line in answer.split("\n"):
         line = line.strip()
-        for i, m in enumerate(zeros):
-            if str(i+1) in line[:4]:
-                if "YES" in line.upper():
-                    m["match"] = 0.75
-                    m["via"] = "🤖 AI translation"
+        import re as _re
+        m2 = _re.match(r"(\d+)\.\s*(YES|NO)", line, _re.IGNORECASE)
+        if m2:
+            idx = int(m2.group(1)) - 1
+            if 0 <= idx < len(zeros) and m2.group(2).upper() == "YES":
+                zeros[idx]["match"] = 0.75
+                zeros[idx]["via"] = "🤖 AI translation"
     return mismatches
 
 def parse_movie_filename(filename):
