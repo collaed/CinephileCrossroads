@@ -902,18 +902,24 @@ def detect_video_source(path):
 
 def _normalize(s):
     s = s.lower()
-    for src, dst in [("ae","a"),("oe","o"),("ue","u"),("/"," "),("&","and"),("-"," ")]:
+    # Expand umlauts first (ä→ae, ö→oe, ü→ue, ß→ss)
+    for src, dst in [("ä","ae"),("ö","oe"),("ü","ue"),("ß","ss")]:
+        s = s.replace(src, dst)
+    # Then collapse transliterations so both forms match (ae→a, oe→o, ue→u)
+    for src, dst in [("ae","a"),("oe","o"),("ue","u")]:
+        s = s.replace(src, dst)
+    for src, dst in [("/"," "),("&","and"),("-"," ")]:
         s = s.replace(src, dst)
     for tag in ["1080p","720p","480p","2160p","4k","uhd","hdr","bluray","blu-ray","webrip",
                 "brrip","dvdrip","hdtv","aac","ac3","dts","x264","x265","hevc","h264",
-                "mbps","telesync","remastered","extended","directors.cut","unrated"]:
+                "mbps","telesync","remastered","extended","directors.cut","unrated","multi"]:
         s = s.replace(tag.lower(), "")
     import unicodedata as _ud
     s = "".join(c for c in _ud.normalize("NFD", s) if _ud.category(c) != "Mn")
     import re as _re
     s = _re.sub(r"[()\[\]{}_.,:;!?\-'\"]", " ", s)
     s = _re.sub(r"\b(19|20)\d{2}\b", "", s)
-    s = _re.sub(r"\b\d{1,3}\b", "", s)  # strip standalone numbers (bitrate remnants)
+    s = _re.sub(r"\b\d{1,3}\b", "", s)
     s = _re.sub(r"\s+", " ", s).strip()
     return s
 
@@ -992,6 +998,7 @@ def find_mismatches(user, threshold=0.2):
     library = load_user_tmm(user)
     titles = load_titles()
     mismatches = []
+    pull_queue = []
     for iid, info in library.items():
         if iid.startswith("_") or not isinstance(info, dict): continue
         path = info.get("path", "")
@@ -1003,17 +1010,78 @@ def find_mismatches(user, threshold=0.2):
         norm_db = _normalize(db_title)
         if not path_title or not norm_db: continue
         score = _fuzzy_match(norm_db, path_title)
-        for alt in [t.get("originalTitle", ""), t.get("original_title", "")] + (t.get("alt_titles") or []):
+        best_via = "title"
+        # Check originalTitle
+        for alt in [t.get("originalTitle", ""), t.get("original_title", "")]:
             if not alt: continue
             alt_norm = _normalize(alt)
             if not alt_norm: continue
-            score = max(score, _fuzzy_match(alt_norm, path_title))
+            s = _fuzzy_match(alt_norm, path_title)
             if alt_norm in path_title or path_title in alt_norm:
-                score = max(score, 0.8)
+                s = max(s, 0.85)
+            if s > score: score, best_via = s, "originalTitle"
+        # Check alt_titles
+        for alt in (t.get("alt_titles") or []):
+            if not alt: continue
+            alt_norm = _normalize(alt)
+            if not alt_norm: continue
+            s = _fuzzy_match(alt_norm, path_title)
+            if alt_norm in path_title or path_title in alt_norm:
+                s = max(s, 0.85)
+            if s > score: score, best_via = s, "alt:" + alt[:20]
+        if score < threshold and not t.get("alt_titles") and t.get("tmdb_id"):
+            pull_queue.append(iid)
         if score < threshold:
             mismatches.append({"iid": iid, "db_title": db_title, "year": str(t.get("year","")),
-                "path_title": path_title, "path": path, "match": round(score, 2)})
+                "path_title": path_title, "path": path, "match": round(score, 2), "via": best_via})
+    # Batch-pull alt titles for mismatches missing them
+    if pull_queue and TMDB_KEY:
+        changed = False
+        for iid in pull_queue[:50]:
+            t = titles[iid]
+            kind = "tv" if t.get("type") in ("tvSeries","tvMiniSeries","tv") else "movie"
+            alt = api_get(f"https://api.themoviedb.org/3/{kind}/{t['tmdb_id']}/alternative_titles?api_key={TMDB_KEY}")
+            if alt:
+                alt_list = alt.get("titles") or alt.get("results") or []
+                t["alt_titles"] = [a["title"] for a in alt_list if a.get("title")][:20]
+                changed = True
+        if changed:
+            save_titles(titles)
+            for m in mismatches:
+                if m["iid"] in pull_queue:
+                    t = titles.get(m["iid"], {})
+                    for alt in (t.get("alt_titles") or []):
+                        if not alt: continue
+                        alt_norm = _normalize(alt)
+                        if not alt_norm: continue
+                        s = _fuzzy_match(alt_norm, m["path_title"])
+                        if alt_norm in m["path_title"] or m["path_title"] in alt_norm:
+                            s = max(s, 0.85)
+                        if s > m["match"]: m["match"], m["via"] = s, "alt:" + alt[:20]
+        mismatches = [m for m in mismatches if m["match"] < threshold]
     mismatches.sort(key=lambda x: x["match"])
+    return mismatches
+
+def llm_batch_check_translations(mismatches, max_check=20):
+    """Use LLM to check if 0% mismatches are actually translations."""
+    if not _load_key("llm_url"): return mismatches
+    zeros = [m for m in mismatches if m["match"] == 0][:max_check]
+    if not zeros: return mismatches
+    # Build a single prompt with all pairs
+    lines = []
+    for i, m in enumerate(zeros):
+        lines.append(f'{i+1}. "{m["path_title"]}" = "{m["db_title"]}" ({m.get("year","")})?')
+    prompt = "For each pair, is the first name a translation, alternate title, or subtitle of the movie? Answer each line with just the number and YES or NO.\n\n" + "\n".join(lines)
+    answer = llm_ask(prompt, system="You are a multilingual movie title expert. Be concise. Answer only YES or NO per line.", max_tokens=max_check * 10)
+    if not answer: return mismatches
+    # Parse YES/NO answers
+    for line in answer.split("\n"):
+        line = line.strip()
+        for i, m in enumerate(zeros):
+            if str(i+1) in line[:4]:
+                if "YES" in line.upper():
+                    m["match"] = 0.75
+                    m["via"] = "🤖 AI translation"
     return mismatches
 
 def parse_movie_filename(filename):
@@ -4176,27 +4244,48 @@ button{{padding:12px 30px;background:#4fc3f7;border:none;border-radius:8px;curso
         elif p.startswith("/confirm/"):
             u = parts[-1]
             mismatches = find_mismatches(u)
+            # LLM batch check for 0% matches (translations)
+            if qs.get("ai", [""])[0] == "1":
+                mismatches = llm_batch_check_translations(mismatches)
+                mismatches = [m for m in mismatches if m["match"] < 0.2]
+                mismatches.sort(key=lambda x: x["match"])
+            # LLM single check if requested
+            llm_check = qs.get("llm", [""])[0]
+            llm_result = ""
+            if llm_check and _load_key("llm_url"):
+                m = next((x for x in mismatches if x["iid"] == llm_check), None)
+                if m:
+                    prompt = f'Is "{m["path_title"]}" a translation or alternate title of the movie "{m["db_title"]}" ({m.get("year","")})? Answer YES or NO, then briefly explain in one sentence.'
+                    answer = llm_ask(prompt, system="You are a multilingual movie expert. Be concise.", max_tokens=80)
+                    llm_result = f'<div class="card" style="margin-bottom:12px;padding:12px"><b>🤖 AI says about {esc(m["db_title"])}:</b> {esc(answer)}</div>'
             rows = ""
             for m in mismatches[:200]:
                 short_path = m["path"].split("/")[-1] if "/" in m["path"] else m["path"].split(chr(92))[-1]
                 if short_path.lower() in ("video_ts.ifo","index.bdmv"):
                     parts_p = m["path"].replace(chr(92),"/").split("/")
                     short_path = "/".join(parts_p[-3:]) if len(parts_p)>=3 else short_path
-                match_color = "#d72" if m["match"] < 0.1 else "#f90" if m["match"] < 0.2 else "#aaa"
-                rows += '<tr><td><a href="' + BASE + '/title/' + m["iid"] + '">' + m["db_title"] + '</a> (' + str(m.get('year','')) + ')</td>'
-                rows += '<td style="font-size:.85em;color:var(--muted);max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + m["path"] + '">' + short_path + '</td>'
-                rows += '<td style="color:' + match_color + '">' + str(int(m["match"]*100)) + '%</td>'
-                rows += '<td><a href="' + BASE + '/confirm-ok/' + u + '/' + m["iid"] + '" class="btn" style="background:#2a5">✅</a> <a href="' + BASE + '/scraper-match/' + u + '/' + m["iid"] + '?q=' + m["db_title"].replace(" ","+") + '" class="btn">🔍</a></td></tr>'
+                pct = int(m["match"]*100)
+                match_color = "#4c8" if pct >= 50 else "#f90" if pct >= 20 else "#d72"
+                via = m.get("via", "")
+                via_badge = ""
+                if via.startswith("alt:"): via_badge = ' <span style="font-size:.7em;color:#48f">🌍 ' + esc(via[4:]) + '</span>'
+                elif via == "originalTitle": via_badge = ' <span style="font-size:.7em;color:#a8f">🔤 original</span>'
+                rows += '<tr><td><a href="' + BASE + '/title/' + m["iid"] + '">' + esc(m["db_title"]) + '</a> (' + str(m.get('year','')) + ')' + via_badge + '</td>'
+                rows += '<td style="font-size:.85em;color:var(--muted);max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(m["path"]) + '">' + esc(short_path) + '</td>'
+                rows += '<td style="color:' + match_color + '">' + str(pct) + '%</td>'
+                llm_btn = ' <a href="' + BASE + '/confirm/' + u + '?llm=' + m["iid"] + '" class="btn" style="background:#346" title="Ask AI">🤖</a>' if _load_key("llm_url") else ""
+                rows += '<td><a href="' + BASE + '/confirm-ok/' + u + '/' + m["iid"] + '" class="btn" style="background:#2a5">✅</a> <a href="' + BASE + '/scraper-match/' + u + '/' + m["iid"] + '?q=' + urllib.parse.quote(m["db_title"]) + '" class="btn">🔍</a>' + llm_btn + '</td></tr>'
             html = page_head(f"To Be Confirmed - {u}")
             html += nav_bar("library", u)
             html += '<div class="page">'
             html += f'<h2>⚠ To Be Confirmed — {len(mismatches)} mismatches</h2>'
-            html += '<p style="color:var(--muted)">Titles where the IMDB match doesn\'t match the filename. Low % = likely wrong match.</p>'
+            html += '<p style="color:var(--muted)">Titles where the filename doesn\'t match any known title (IMDB, original, or translated). Low % = likely wrong match.</p>'
+            if _load_key("llm_url"):
+                html += '<a href="' + BASE + '/confirm/' + u + '?ai=1" class="btn" style="margin-bottom:12px;display:inline-block">🤖 AI Check Translations (top 20)</a> '
+            html += llm_result
             html += '<table><thead><tr><th onclick="sortTable(0)">IMDB Title</th><th>Filename</th><th onclick="sortTable(2)">Match</th><th></th></tr></thead>'
             html += '<tbody>' + rows + '</tbody></table>'
             html += '<script>function sortTable(n){const tb=document.querySelector("tbody"),rows=[...tb.rows],dir=tb.dataset.sort==n?-1:1;tb.dataset.sort=dir==1?n:"";rows.sort((a,b)=>{let x=a.cells[n].textContent,y=b.cells[n].textContent;return(typeof x==="number"&&typeof y==="number"?(x-y):(String(x)).localeCompare(String(y),undefined,{numeric:true}))*dir});rows.forEach(r=>tb.appendChild(r))}</script>'
-            # Incoming files moved to /incoming/<user>
-            # (moved to /incoming page)
             html += '</div>' + page_foot()
             self._page(html, "library", u)
             return
