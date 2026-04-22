@@ -73,6 +73,65 @@ def llm_ask(prompt, system=None, max_tokens=500):
         return ""
 
 # ── Public Domain Movies ──────────────────────────────────────────────
+def movie_companion(imdb_id, question, titles):
+    """Spoiler-aware movie AI companion."""
+    t = titles.get(imdb_id, {})
+    title = t.get("title", "Unknown")
+    plot = (t.get("overview") or t.get("plot") or "")[:300]
+    genres = t.get("genres", "")
+    system = f"You are a movie companion for \"{title}\" ({t.get('year','')}, {genres}). Plot: {plot}. NEVER reveal major spoilers or plot twists unless the user explicitly asks. Be concise."
+    return llm_ask(question, system=system, max_tokens=300)
+
+def movie_summary(imdb_id, style, titles):
+    """Generate movie summary in different styles."""
+    t = titles.get(imdb_id, {})
+    title = t.get("title", "Unknown")
+    plot = (t.get("overview") or t.get("plot") or "")[:500]
+    dirs = t.get("directors", [])
+    dir_str = ", ".join(dirs) if isinstance(dirs, list) else str(dirs)
+    prompts = {
+        "eli5": f"Explain the movie \"{title}\" like I\'m 5 years old. Use simple words and fun comparisons.",
+        "film_school": f"Give a film school analysis of \"{title}\" ({t.get('year','')}) directed by {dir_str}. Cover cinematography, themes, narrative structure, and cultural significance.",
+        "pitch": f"Write a 2-sentence elevator pitch for \"{title}\" that would make someone want to watch it immediately.",
+        "debate": f"Give both sides: why \"{title}\" is a masterpiece AND why it\'s overrated. Be provocative.",
+    }
+    prompt = prompts.get(style, prompts["pitch"])
+    return llm_ask(prompt + f"\nPlot summary: {plot}", max_tokens=400)
+
+def auto_tag_title(imdb_id, titles):
+    """Generate mood/theme tags for a title via LLM."""
+    t = titles.get(imdb_id, {})
+    plot = (t.get("overview") or t.get("plot") or "")[:400]
+    genres = t.get("genres", "")
+    prompt = f"For the movie \"{t.get('title','')}\" ({genres}): {plot}\n\nGenerate 5-8 mood/theme tags. Examples: mind-bending, feel-good, slow-burn, visually-stunning, thought-provoking, edge-of-seat, tear-jerker, dark-humor. Return ONLY comma-separated tags."
+    result = llm_ask(prompt, max_tokens=60)
+    if result:
+        tags = [tag.strip().lower() for tag in result.split(",") if tag.strip()]
+        return tags[:8]
+    return []
+
+def generate_watchlist_rss(user):
+    """Generate RSS feed that drip-releases one watchlist item per day."""
+    wl = load_watchlist(user)
+    titles = load_titles()
+    from datetime import datetime, timedelta
+    items = ""
+    for i, iid in enumerate(wl[:30]):
+        t = titles.get(iid, {})
+        pub_date = (datetime.now() - timedelta(days=len(wl)-i)).strftime("%a, %d %b %Y 08:00:00 +0000")
+        poster = t.get("poster", "")
+        desc = (t.get("overview") or "")[:200]
+        items += f"""<item><title>{esc(t.get("title","?"))} ({t.get("year","")})</title>
+<link>https://www.imdb.com/title/{iid}/</link>
+<description><![CDATA[<img src="{poster}" width="100"><br>{desc}]]></description>
+<pubDate>{pub_date}</pubDate><guid>{iid}</guid></item>\n"""
+    return f"""<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel>
+<title>{esc(user)}\'s Watchlist</title>
+<description>Daily movie recommendation from your watchlist</description>
+<link>{BASE}/watchlist/{user}</link>
+{items}</channel></rss>"""
+
 def search_internet_archive(query, limit=10):
     """Search Internet Archive for free movies."""
     url = "https://archive.org/advancedsearch.php?q=" + urllib.parse.quote(query)
@@ -86,6 +145,16 @@ def search_internet_archive(query, limit=10):
                 for d in data["response"].get("docs", [])]
     return []
 
+def notify(message, user=""):
+    """Send notification via configured webhook/Signal."""
+    webhook_url = _load_key("webhook_url")
+    if not webhook_url: return
+    try:
+        data = json.dumps({"text": message, "user": user}).encode()
+        req = urllib.request.Request(webhook_url, data=data, headers={"Content-Type": "application/json"})
+        urllib.request.urlopen(req, timeout=5)
+    except: pass
+
 def esc(s):
     """Escape HTML to prevent XSS."""
     return _html_escape.escape(str(s)) if s else ""
@@ -97,6 +166,38 @@ def get_db():
         _db_local.conn.execute("PRAGMA busy_timeout=5000")
         _db_local.conn.row_factory = sqlite3.Row
     return _db_local.conn
+
+def init_fts():
+    """Initialize FTS5 full-text search index on titles."""
+    db = get_db()
+    db.execute("""CREATE VIRTUAL TABLE IF NOT EXISTS title_fts USING fts5(
+        imdb_id, title, plot, genres, directors, actors, keywords,
+        tokenize='porter unicode61')""")
+    db.commit()
+
+def rebuild_fts():
+    """Rebuild FTS index from titles.json."""
+    db = get_db()
+    db.execute("DELETE FROM title_fts")
+    titles = load_titles()
+    for iid, t in titles.items():
+        kw = " ".join(t.get("keywords") or []) if isinstance(t.get("keywords"), list) else ""
+        dirs = " ".join(t.get("directors") or []) if isinstance(t.get("directors"), list) else str(t.get("directors",""))
+        acts = " ".join(t.get("actors") or []) if isinstance(t.get("actors"), list) else str(t.get("actors",""))
+        db.execute("INSERT INTO title_fts VALUES (?,?,?,?,?,?,?)",
+            (iid, t.get("title",""), (t.get("overview") or t.get("plot") or "")[:500],
+             t.get("genres",""), dirs, acts, kw))
+    db.commit()
+    print(f"FTS: indexed {len(titles)} titles")
+
+def search_fts(query, limit=50):
+    """Full-text search across titles, plots, cast, keywords."""
+    db = get_db()
+    try:
+        rows = db.execute("SELECT imdb_id, rank FROM title_fts WHERE title_fts MATCH ? ORDER BY rank LIMIT ?",
+            (query, limit)).fetchall()
+        return [r["imdb_id"] for r in rows]
+    except: return []
 
 def init_db():
     db = get_db()
@@ -1511,6 +1612,13 @@ def seasonal_keywords():
 # ── Watchlist ─────────────────────────────────────────────────────────
 
 # ── Social + Alerts ───────────────────────────────────────────────────
+def _notify_streaming_alerts(user):
+    """Check and notify about new streaming availability."""
+    alerts = get_available_alerts(user)
+    if alerts:
+        titles_str = ", ".join(a.get("title","")[:30] for a in alerts[:3])
+        notify(f"🎬 {len(alerts)} watchlisted titles now streaming: {titles_str}", user)
+
 def get_available_alerts(user):
     """Check if any watchlisted titles just became available on streaming."""
     wl = load_watchlist(user)
@@ -2605,6 +2713,9 @@ def render_setup(user):
     html += '<div><label style="display:block;margin-bottom:4px">LLM Token (optional)</label>'
     html += '<input name="llm_token" value="' + _load_key("llm_token") + '" placeholder="Bearer token"></div>'
     html += '</div>'
+    html += '<div><label style="display:block;margin-bottom:4px">Webhook URL (notifications)</label>'
+    html += '<input name="webhook_url" value="' + _load_key("webhook_url") + '" placeholder="https://hooks.slack.com/... or Signal API"></div>'
+    html += '</div>'
     html += '<h4 style="margin-top:20px;margin-bottom:10px">Incoming Folder</h4>'
     html += '<div><label style="display:block;margin-bottom:4px">Download folder path</label>'
     html += '<input name="incoming_path" value="' + _load_key("incoming_path") + '" placeholder="nfs://192.168.0.235/volume1/Movies/.downloads">'
@@ -2889,7 +3000,7 @@ def render_setup_nav(user, active="setup"):
         ("setup", "⚙ Config", f"{BASE}/setup/{user}"),
         ("trakt", "↕ Trakt", f"{BASE}/trakt/sync/{user}"),
         ("export", "⬇ Export", f"{BASE}/export/{user}"),
-        ("import", "📥 Import", f"{BASE}/import/streaming/{user}"), ("rss", "📡 RSS", f"{BASE}/rss/{user}"),
+        ("import", "📥 Import", f"{BASE}/import/streaming/{user}"), ("rss", "📡 RSS", f"{BASE}/rss/{user}"), ("wl-rss", "📋 Watchlist RSS", f"{BASE}/watchlist-rss/{user}"),
     ], active)
 
 def render_library_nav(user, active="library"):
@@ -3300,34 +3411,87 @@ def render_stats(user):
         return '<html><body style="background:#1a1a2e;color:#eee;padding:40px;font-family:sans-serif"><h2>No ratings</h2></body></html>'
     scores = [r["rating"] for r in ratings.values()]
     avg = sum(scores) / len(scores)
-    genre_count, director_count = {}, {}
+    genre_count, director_count, decade_count, lang_count = {}, {}, {}, {}
+    monthly = {}  # year-month -> count
+    yearly_genre = {}  # year -> {genre: count}
     for iid, r in ratings.items():
         t = titles.get(iid, {})
+        # Monthly tracking
+        d = r.get("date", "")
+        if d and len(d) >= 7:
+            ym = d[:7]
+            monthly[ym] = monthly.get(ym, 0) + 1
+            yr = d[:4]
+            yearly_genre.setdefault(yr, {})
+        # Decade
+        y = str(t.get("year", ""))[:4]
+        if y.isdigit():
+            dec = y[:3] + "0s"
+            decade_count[dec] = decade_count.get(dec, 0) + 1
         for g in (t.get("genres") or "").split(","):
             g = g.strip()
-            if g: genre_count[g] = genre_count.get(g, 0) + 1
-        for d in (t.get("directors") or "").split(","):
-            d = d.strip()
-            if d: director_count[d] = director_count.get(d, 0) + 1
+            if g:
+                genre_count[g] = genre_count.get(g, 0) + 1
+                if d and len(d) >= 4: yearly_genre.setdefault(d[:4], {}).setdefault(g, 0); yearly_genre[d[:4]][g] += 1
+        for dd in (t.get("directors") or []) if isinstance(t.get("directors"), list) else (t.get("directors") or "").split(","):
+            dd = dd.strip()
+            if dd: director_count[dd] = director_count.get(dd, 0) + 1
+        # Language from original title presence
+        ot = t.get("originalTitle") or t.get("original_title") or ""
+        if ot and ot != t.get("title", ""):
+            lang_count["Foreign"] = lang_count.get("Foreign", 0) + 1
+        else:
+            lang_count["English"] = lang_count.get("English", 0) + 1
     top_genres = sorted(genre_count.items(), key=lambda x: x[1], reverse=True)[:12]
     top_dirs = sorted(director_count.items(), key=lambda x: x[1], reverse=True)[:10]
+    top_decades = sorted(decade_count.items())
     rating_dist = [sum(1 for s in scores if s == i) for i in range(1, 11)]
     max_bar = max(rating_dist) or 1
+    # Rating streak
+    dates = sorted(set(r.get("date","")[:10] for r in ratings.values() if r.get("date")))
+    streak = 0
+    if dates:
+        from datetime import datetime, timedelta
+        today = datetime.now().date()
+        d = today
+        for _ in range(365):
+            if d.isoformat() in dates or (d - timedelta(days=1)).isoformat() in dates:
+                streak += 1
+                d -= timedelta(days=1)
+            else:
+                break
     dist_bars = "".join('<div style="display:flex;align-items:center;gap:8px;margin:2px 0"><span style="width:30px;text-align:right">' + str(i) + '</span><div style="background:#4fc3f7;height:18px;width:' + str(rating_dist[i-1]/max_bar*300) + 'px;border-radius:3px"></div><span style="color:#888;font-size:.85em">' + str(rating_dist[i-1]) + '</span></div>' for i in range(10, 0, -1))
-    genre_bars = "".join('<div style="display:flex;align-items:center;gap:8px;margin:2px 0"><span style="width:100px;text-align:right;font-size:.85em">' + g + '</span><div style="background:#4fc3f7;height:16px;width:' + str(c/top_genres[0][1]*250) + 'px;border-radius:3px"></div><span style="color:#888;font-size:.85em">' + str(c) + '</span></div>' for g, c in top_genres)
-    dir_list = "".join("<tr><td>" + d + "</td><td>" + str(c) + "</td></tr>" for d, c in top_dirs)
+    genre_bars = "".join('<div style="display:flex;align-items:center;gap:8px;margin:2px 0"><span style="width:100px;text-align:right;font-size:.85em">' + esc(g) + '</span><div style="background:#4fc3f7;height:16px;width:' + str(c/top_genres[0][1]*250) + 'px;border-radius:3px"></div><span style="color:#888;font-size:.85em">' + str(c) + '</span></div>' for g, c in top_genres)
+    dir_list = "".join("<tr><td>" + esc(d) + "</td><td>" + str(c) + "</td></tr>" for d, c in top_dirs)
+    decade_bars = "".join('<div style="display:flex;align-items:center;gap:8px;margin:2px 0"><span style="width:50px;text-align:right;font-size:.85em">' + d + '</span><div style="background:#f7a04f;height:16px;width:' + str(c/max(1,max(x[1] for x in top_decades))*250) + 'px;border-radius:3px"></div><span style="color:#888;font-size:.85em">' + str(c) + '</span></div>' for d, c in top_decades)
+    # Monthly chart (last 24 months)
+    sorted_months = sorted(monthly.items())[-24:]
+    max_m = max((v for _, v in sorted_months), default=1)
+    month_bars = "".join('<div style="display:flex;align-items:end;gap:0"><div style="background:#4fc3f7;width:20px;height:' + str(max(2, v/max_m*80)) + 'px;border-radius:2px 2px 0 0" title="' + m + ': ' + str(v) + '"></div></div>' for m, v in sorted_months)
+    month_labels = '<div style="display:flex;gap:0;font-size:.6em;color:#888">' + "".join('<div style="width:20px;text-align:center;overflow:hidden">' + m[5:7] + '</div>' for m, _ in sorted_months) + '</div>'
     html = page_head(f"Stats - {user}")
     html += nav_bar("ratings", user)
     html += render_ratings_nav(user, "stats")
     html += '<div class="page">'
-    html += '<h2>📊 ' + user + " Stats</h2>"
-    html += '<div style="display:flex;gap:20px;margin-bottom:20px;flex-wrap:wrap">'
-    html += '<div class="card" style="text-align:center"><div style="font-size:3em">' + str(len(ratings)) + '</div>titles</div>'
-    html += '<div class="card" style="text-align:center"><div style="font-size:3em">' + f"{avg:.1f}" + '</div>average</div></div>'
-    html += '<div class="grid"><div class="card"><h3>Rating Distribution</h3>' + dist_bars + '</div>'
+    html += '<h2>📊 ' + esc(user) + " Stats</h2>"
+    # Summary cards
+    html += '<div style="display:flex;gap:15px;margin-bottom:20px;flex-wrap:wrap">'
+    html += '<div class="card" style="text-align:center"><div style="font-size:2.5em">' + str(len(ratings)) + '</div>rated</div>'
+    html += '<div class="card" style="text-align:center"><div style="font-size:2.5em">' + f"{avg:.1f}" + '</div>average</div>'
+    html += '<div class="card" style="text-align:center"><div style="font-size:2.5em">🔥 ' + str(streak) + '</div>day streak</div>'
+    foreign = lang_count.get("Foreign", 0)
+    html += '<div class="card" style="text-align:center"><div style="font-size:2.5em">🌍 ' + str(foreign) + '</div>foreign films</div>'
+    html += '</div>'
+    # Monthly chart
+    html += '<div class="card" style="margin-bottom:15px"><h3>📅 Ratings per Month</h3>'
+    html += '<div style="display:flex;align-items:end;gap:1px;height:90px">' + month_bars + '</div>' + month_labels + '</div>'
+    # Grid
+    html += '<div class="grid">'
+    html += '<div class="card"><h3>Rating Distribution</h3>' + dist_bars + '</div>'
     html += '<div class="card"><h3>Top Genres</h3>' + genre_bars + '</div>'
-    html += '<div class="card"><h3>Top Directors</h3><table>' + dir_list + '</table></div></div>'
-    html += '<p><a href="' + BASE + '/u/' + user + '">← Back</a></p></body></html>'
+    html += '<div class="card"><h3>🎬 Top Directors</h3><table>' + dir_list + '</table></div>'
+    html += '<div class="card"><h3>📅 By Decade</h3>' + decade_bars + '</div>'
+    html += '</div></div>' + page_foot()
     return html
 
 def render_compare(u1, u2):
@@ -3638,6 +3802,95 @@ td{{padding:8px;border-bottom:1px solid #333}}a{{color:#4fc3f7;text-decoration:n
 <p style="color:#888">Titles from your watchlist now available on your streaming services</p>
 <table>{rows if rows else "<tr><td>No watchlisted titles currently available</td></tr>"}</table>
 <p style="margin-top:15px"><a href="{BASE}/u/{u}">← Back</a></p></body></html>""")
+            return
+        elif p.startswith("/search"):
+            query = qs.get("q", [""])[0]
+            results = []
+            if query:
+                fts_ids = search_fts(query)
+                if fts_ids:
+                    titles = load_titles()
+                    results = [(iid, titles.get(iid, {})) for iid in fts_ids if iid in titles]
+            html = page_head("Search")
+            html += nav_bar("ratings", "")
+            html += '<div class="page">'
+            html += '<h2>🔍 Search</h2>'
+            html += '<form method="GET" style="margin-bottom:16px"><input name="q" value="' + esc(query) + '" placeholder="Search titles, plots, cast, keywords..." style="width:400px;padding:8px"> <button class="btn">🔍</button></form>'
+            if results:
+                html += '<div class="poster-grid">'
+                for iid, t in results[:40]:
+                    poster = t.get("poster", "")
+                    img = '<img src="' + poster + '" loading="lazy">' if poster else ""
+                    html += '<a href="' + BASE + '/title/' + iid + '" style="text-decoration:none;color:var(--fg)"><div class="poster-card">' + img
+                    html += '<div class="info"><div class="title">' + esc(t.get("title","")) + '</div>'
+                    html += '<div class="meta">' + str(t.get("year","")) + '</div></div></div></a>'
+                html += '</div>'
+            elif query:
+                html += '<p style="color:var(--muted)">No results for "' + esc(query) + '"</p>'
+            html += '</div>' + page_foot()
+            self._page(html, "ratings", "")
+            return
+        elif p.startswith("/companion/"):
+            iid = parts[-1]
+            question = qs.get("q", [""])[0]
+            titles = load_titles()
+            t = titles.get(iid, {})
+            answer = movie_companion(iid, question, titles) if question else ""
+            html = page_head("Movie Companion")
+            html += '<div class="page">'
+            html += '<h2>🎬 ' + esc(t.get("title","")) + ' — Companion</h2>'
+            html += '<form method="GET" style="margin-bottom:12px"><input name="q" value="' + esc(question) + '" placeholder="Ask about this movie (no spoilers)..." style="width:400px;padding:8px"> <button class="btn">Ask</button></form>'
+            if answer:
+                html += '<div class="card" style="padding:16px;line-height:1.6">' + esc(answer).replace("\n","<br>") + '</div>'
+            styles = [("eli5","🧒 ELI5"),("film_school","🎓 Film School"),("pitch","⚡ Pitch"),("debate","🥊 Debate")]
+            html += '<h3 style="margin-top:20px">📝 Summaries</h3><div style="display:flex;gap:8px;flex-wrap:wrap">'
+            for sid, label in styles:
+                html += '<a href="' + BASE + '/summary/' + iid + '?style=' + sid + '" class="btn">' + label + '</a>'
+            html += '</div>'
+            html += '<p style="margin-top:12px"><a href="' + BASE + '/title/' + iid + '">← Back to title</a></p>'
+            html += '</div>' + page_foot()
+            self._page(html, "discover", "")
+            return
+        elif p.startswith("/summary/"):
+            iid = parts[-1]
+            style = qs.get("style", ["pitch"])[0]
+            titles = load_titles()
+            t = titles.get(iid, {})
+            summary = movie_summary(iid, style, titles)
+            style_labels = {"eli5":"🧒 Explain Like I'm 5","film_school":"🎓 Film School Analysis","pitch":"⚡ Elevator Pitch","debate":"🥊 Masterpiece or Overrated?"}
+            html = page_head("Summary")
+            html += '<div class="page">'
+            html += '<h2>' + style_labels.get(style,"Summary") + '</h2>'
+            html += '<h3>' + esc(t.get("title","")) + ' (' + str(t.get("year","")) + ')</h3>'
+            html += '<div class="card" style="padding:16px;line-height:1.8;font-size:1.05em">' + esc(summary).replace("\n","<br>") + '</div>'
+            html += '<p style="margin-top:12px"><a href="' + BASE + '/companion/' + iid + '">← Companion</a> · <a href="' + BASE + '/title/' + iid + '">Title</a></p>'
+            html += '</div>' + page_foot()
+            self._page(html, "discover", "")
+            return
+        elif p.startswith("/auto-tag/"):
+            iid = parts[-1]
+            titles = load_titles()
+            tags = auto_tag_title(iid, titles)
+            if tags:
+                titles[iid]["ai_tags"] = tags
+                save_titles(titles)
+            self._redirect(f"{BASE}/title/{iid}")
+            return
+        elif p.startswith("/watchlist-rss/"):
+            u = parts[-1]
+            rss = generate_watchlist_rss(u)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/rss+xml")
+            self.end_headers()
+            self.wfile.write(rss.encode())
+            return
+        elif p.startswith("/fts/rebuild"):
+            try:
+                init_fts()
+                rebuild_fts()
+                self._json({"status": "ok"})
+            except Exception as e:
+                self._json({"error": str(e)})
             return
         elif p.startswith("/contribute/pull/"):
             u = parts[-2]
@@ -4872,7 +5125,7 @@ button{{padding:10px 20px;background:#4fc3f7;border:none;border-radius:6px;curso
         elif self.path.startswith("/keys"):
             params = urllib.parse.parse_qs(body.decode())
             existing = json.load(open(KEYS_FILE)) if os.path.exists(KEYS_FILE) else {}
-            for k in ("tmdb", "omdb", "tvdb", "opensubs", "opensubs_user", "opensubs_pass", "agent_token", "incoming_path", "sub_language", "audio_language", "llm_url", "llm_token"):
+            for k in ("tmdb", "omdb", "tvdb", "opensubs", "opensubs_user", "opensubs_pass", "agent_token", "incoming_path", "sub_language", "audio_language", "llm_url", "llm_token", "webhook_url"):
                 v = params.get(k, [""])[0]
                 if v: existing[k] = v.strip()
             keys = existing
@@ -5068,6 +5321,8 @@ if __name__ == "__main__":
         TVDB_KEY = keys.get("tvdb", TVDB_KEY).strip()
         AGENT_TOKEN = keys.get("agent_token", AGENT_TOKEN)
     init_db()
+    try: init_fts()
+    except: pass
     # Migrate JSON data to SQLite if needed
     _migrate_json_to_db()
     migrate_old_data()
