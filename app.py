@@ -73,6 +73,21 @@ def llm_ask(prompt, system=None, max_tokens=500):
         return ""
 
 # ── Public Domain Movies ──────────────────────────────────────────────
+def taste_personality(user):
+    """Generate a personality description from taste profile via LLM."""
+    ratings = load_user_ratings(user)
+    titles = load_titles()
+    top = sorted(ratings.items(), key=lambda x: x[1]["rating"], reverse=True)[:15]
+    top_str = ", ".join(f'{titles.get(iid,{}).get("title","?")} ({r["rating"]})' for iid, r in top)
+    genres = {}
+    for iid, r in ratings.items():
+        for g in (titles.get(iid,{}).get("genres","") or "").split(","):
+            g = g.strip()
+            if g: genres[g] = genres.get(g, 0) + 1
+    top_genres = ", ".join(g for g, _ in sorted(genres.items(), key=lambda x: x[1], reverse=True)[:5])
+    prompt = f"Based on this cinephile's taste, write a fun 2-sentence personality description (like a horoscope for movie lovers). Top genres: {top_genres}. Favorites: {top_str}"
+    return llm_ask(prompt, system="You are a witty film critic writing personality profiles. Be playful and specific.", max_tokens=100)
+
 def movie_companion(imdb_id, question, titles):
     """Spoiler-aware movie AI companion."""
     t = titles.get(imdb_id, {})
@@ -350,6 +365,17 @@ body{font-family:-apple-system,sans-serif;background:var(--bg);color:var(--fg);m
 .card{background:var(--card);padding:15px;border-radius:10px}
 table{border-collapse:collapse;width:100%}th,td{padding:6px 10px;text-align:left;border-bottom:1px solid var(--border)}
 
+.mode-cockpit .page{max-width:none;padding:0 24px}
+.mode-cockpit .widget-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:12px;margin-bottom:20px}
+.mode-cockpit .widget{background:var(--card);border-radius:10px;padding:16px;border:1px solid var(--border,#333)}
+.mode-cockpit .widget h4{font-size:.75em;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin:0 0 8px}
+.mode-cockpit .big-number{font-size:2em;font-weight:700}
+.mode-spreadsheet table{font-size:.8em;width:100%}
+.mode-spreadsheet td,.mode-spreadsheet th{padding:3px 6px;white-space:nowrap}
+.mode-spreadsheet img{height:30px}
+.mode-selector{display:flex;gap:4px;margin-left:8px}
+.mode-selector a{padding:2px 8px;border-radius:4px;font-size:.75em;color:var(--muted);text-decoration:none;border:1px solid transparent}
+.mode-selector a.active,.mode-selector a:hover{border-color:var(--accent,#4fc3f7);color:var(--accent,#4fc3f7)}
 .poster-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:16px;padding:10px 0}
 .poster-card{position:relative;border-radius:8px;overflow:hidden;background:var(--card);transition:transform .2s}
 .poster-card:hover{transform:scale(1.03)}
@@ -1655,6 +1681,13 @@ def taste_compatibility(u1, u2):
     avg_diff = sum(diffs) / len(diffs)
     # 0 diff = 100%, 5 diff = 0%
     return max(0, round((1 - avg_diff / 5) * 100))
+
+def load_collections(user):
+    f = f"{user_dir(user)}/collections.json"
+    return safe_json_load(f) or {}
+
+def save_collections(user, data):
+    safe_json_save(f"{user_dir(user)}/collections.json", data)
 
 def load_watchlist(user):
     f = user_dir(user) + "/watchlist.json"
@@ -3000,7 +3033,7 @@ def render_setup_nav(user, active="setup"):
         ("setup", "⚙ Config", f"{BASE}/setup/{user}"),
         ("trakt", "↕ Trakt", f"{BASE}/trakt/sync/{user}"),
         ("export", "⬇ Export", f"{BASE}/export/{user}"),
-        ("import", "📥 Import", f"{BASE}/import/streaming/{user}"), ("rss", "📡 RSS", f"{BASE}/rss/{user}"), ("wl-rss", "📋 Watchlist RSS", f"{BASE}/watchlist-rss/{user}"),
+        ("import", "📥 Import", f"{BASE}/import/streaming/{user}"), ("rss", "📡 RSS", f"{BASE}/rss/{user}"), ("wl-rss", "📋 Watchlist RSS", f"{BASE}/watchlist-rss/{user}"), ("efficiency", "📊 Efficiency", f"{BASE}/efficiency"),
     ], active)
 
 def render_library_nav(user, active="library"):
@@ -3473,6 +3506,12 @@ def render_stats(user):
     html += nav_bar("ratings", user)
     html += render_ratings_nav(user, "stats")
     html += '<div class="page">'
+    # Taste personality
+    personality = ""
+    if _load_key("llm_url"):
+        personality = taste_personality(user)
+    if personality:
+        html += '<div class="card" style="padding:12px;margin-bottom:16px;border-left:4px solid var(--accent,#4fc3f7);font-style:italic;line-height:1.5">' + esc(personality) + '</div>'
     html += '<h2>📊 ' + esc(user) + " Stats</h2>"
     # Summary cards
     html += '<div style="display:flex;gap:15px;margin-bottom:20px;flex-wrap:wrap">'
@@ -3803,6 +3842,47 @@ td{{padding:8px;border-bottom:1px solid #333}}a{{color:#4fc3f7;text-decoration:n
 <table>{rows if rows else "<tr><td>No watchlisted titles currently available</td></tr>"}</table>
 <p style="margin-top:15px"><a href="{BASE}/u/{u}">← Back</a></p></body></html>""")
             return
+        elif p.startswith("/efficiency"):
+            titles = load_titles()
+            total = len(titles)
+            has_poster = sum(1 for t in titles.values() if t.get("poster"))
+            has_keywords = sum(1 for t in titles.values() if t.get("keywords"))
+            has_rt = sum(1 for t in titles.values() if t.get("rt_score"))
+            has_streaming = sum(1 for t in titles.values() if t.get("providers"))
+            has_trailer = sum(1 for t in titles.values() if t.get("trailer"))
+            has_alt = sum(1 for t in titles.values() if t.get("alt_titles"))
+            has_cast = sum(1 for t in titles.values() if t.get("actors"))
+            has_similar = sum(1 for t in titles.values() if t.get("similar"))
+            def pbar(n, label):
+                p = int(n/max(total,1)*100)
+                color = "#22c55e" if p >= 70 else "#f59e0b" if p >= 40 else "#ef4444"
+                return f'<div style="display:flex;align-items:center;gap:8px;margin:4px 0"><span style="width:120px;font-size:.85em">{label}</span><div style="flex:1;height:8px;background:#333;border-radius:4px"><div style="width:{p}%;height:100%;background:{color};border-radius:4px"></div></div><span style="width:60px;text-align:right;font-size:.8em;font-weight:600">{n}/{total}</span></div>'
+            html = page_head("Enrichment Efficiency")
+            html += nav_bar("setup", "")
+            html += '<div class="page">'
+            html += '<h2>📊 Enrichment Efficiency</h2>'
+            html += '<div class="card" style="padding:16px">'
+            html += pbar(has_poster, "Posters")
+            html += pbar(has_keywords, "Keywords")
+            html += pbar(has_cast, "Cast")
+            html += pbar(has_rt, "RT Scores")
+            html += pbar(has_streaming, "Streaming")
+            html += pbar(has_trailer, "Trailers")
+            html += pbar(has_alt, "Alt Titles")
+            html += pbar(has_similar, "Similar")
+            html += '</div>'
+            # Source hit rates
+            html += '<h3 style="margin-top:16px">API Source Coverage</h3>'
+            html += '<div class="card" style="padding:16px;font-size:.85em">'
+            html += '<table style="width:100%"><tr><th>Source</th><th>Provides</th><th>Coverage</th></tr>'
+            html += f'<tr><td>TMDB</td><td>poster, keywords, cast, streaming, trailer, similar, alt titles</td><td>{int(has_poster/max(total,1)*100)}%</td></tr>'
+            html += f'<tr><td>OMDB</td><td>RT score, Metacritic, plot</td><td>{int(has_rt/max(total,1)*100)}%</td></tr>'
+            html += f'<tr><td>IMDB Dataset</td><td>title, year, genres, rating, votes</td><td>{int(total/max(total,1)*100)}%</td></tr>'
+            html += '</table></div>'
+            html += '<p style="margin-top:12px"><a href="' + BASE + '/enrich" class="btn">▶ Run Enrichment Now</a></p>'
+            html += '</div>' + page_foot()
+            self._page(html, "setup", "")
+            return
         elif p.startswith("/search"):
             query = qs.get("q", [""])[0]
             results = []
@@ -3875,6 +3955,46 @@ td{{padding:8px;border-bottom:1px solid #333}}a{{color:#4fc3f7;text-decoration:n
                 titles[iid]["ai_tags"] = tags
                 save_titles(titles)
             self._redirect(f"{BASE}/title/{iid}")
+            return
+        elif p.startswith("/collections/"):
+            u = parts[-2] if len(parts) >= 3 else parts[-1]
+            action = parts[-1] if len(parts) >= 3 else ""
+            colls = load_collections(u)
+            titles = load_titles()
+            if action == "add" and qs.get("name"):
+                name = qs["name"][0]
+                cid = "c_" + str(int(time.time()))
+                colls[cid] = {"name": name, "items": [], "created": time.strftime("%Y-%m-%d")}
+                save_collections(u, colls)
+                self._redirect(f"{BASE}/collections/{u}")
+                return
+            if action == "item" and qs.get("cid") and qs.get("iid"):
+                cid, iid = qs["cid"][0], qs["iid"][0]
+                if cid in colls:
+                    if iid not in colls[cid]["items"]:
+                        colls[cid]["items"].append(iid)
+                    save_collections(u, colls)
+                self._redirect(f"{BASE}/title/{iid}")
+                return
+            html = page_head("Collections")
+            html += nav_bar("ratings", u)
+            html += '<div class="page">'
+            html += '<h2>📂 Collections</h2>'
+            html += '<form method="GET" action="' + BASE + '/collections/' + u + '/add" style="margin-bottom:16px"><input name="name" placeholder="New collection name..." style="padding:8px"> <button class="btn">+ Create</button></form>'
+            for cid, c in colls.items():
+                html += '<div class="card" style="margin-bottom:12px"><h3>' + esc(c["name"]) + ' <span style="color:var(--muted);font-size:.8em">(' + str(len(c["items"])) + ')</span></h3>'
+                html += '<div class="poster-grid">'
+                for iid in c["items"][:12]:
+                    t = titles.get(iid, {})
+                    poster = t.get("poster", "")
+                    html += '<a href="' + BASE + '/title/' + iid + '"><div class="poster-card">'
+                    if poster: html += '<img src="' + poster + '" loading="lazy">'
+                    html += '<div class="info"><div class="title">' + esc(t.get("title","")) + '</div></div></div></a>'
+                html += '</div></div>'
+            if not colls:
+                html += '<p style="color:var(--muted)">No collections yet. Create one above!</p>'
+            html += '</div>' + page_foot()
+            self._page(html, "ratings", u)
             return
         elif p.startswith("/watchlist-rss/"):
             u = parts[-1]
