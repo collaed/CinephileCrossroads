@@ -4910,6 +4910,34 @@ button{{padding:12px 30px;background:#4fc3f7;border:none;border-radius:8px;curso
             html += local_html
             if t.get("keywords"):
                 html += '<p style="margin-top:15px;color:var(--muted);font-size:.85em">Keywords: ' + ", ".join(t["keywords"][:15]) + '</p>'
+            # L1 mood badges (instant, no LLM)
+            l1 = movie_summary_l1(iid, titles)
+            if l1.get("moods"):
+                html += '<div style="margin-top:8px">'
+                for mood in l1["moods"]:
+                    html += '<span style="background:#234;padding:3px 10px;border-radius:12px;font-size:.8em;margin:2px">🎭 ' + esc(mood) + '</span>'
+                html += '</div>'
+            # AI tags
+            if t.get("ai_tags"):
+                html += '<div style="margin-top:6px">'
+                for tag in t["ai_tags"]:
+                    html += '<span style="background:#342;padding:3px 10px;border-radius:12px;font-size:.8em;margin:2px">🏷 ' + esc(tag) + '</span>'
+                html += '</div>'
+            # Collections
+            u = self._user(parts)
+            colls = load_collections(u) if u else {}
+            if colls:
+                html += '<div style="margin-top:10px"><select onchange="if(this.value)location=this.value" style="padding:4px;background:#16213e;color:#eee;border:1px solid #444;border-radius:4px"><option value="">📂 Add to collection...</option>'
+                for cid, c in colls.items():
+                    html += '<option value="' + BASE + '/collections/' + u + '/item?cid=' + cid + '&iid=' + iid + '">' + esc(c["name"]) + '</option>'
+                html += '</select></div>'
+            # Companion + auto-tag
+            if _load_key("llm_url"):
+                html += '<div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">'
+                html += '<a href="' + BASE + '/companion/' + iid + '" class="btn">🎬 Companion</a>'
+                if not t.get("ai_tags"):
+                    html += '<a href="' + BASE + '/auto-tag/' + iid + '" class="btn" style="background:#346">🏷 Auto-Tag</a>'
+                html += '</div>'
             html += '</div>' + page_foot()
             self._page(html, "ratings", user)
             return
