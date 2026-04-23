@@ -112,10 +112,22 @@ def movie_summary_l1(imdb_id, titles):
     mood = []
     if isinstance(kw, list):
         mood_map = {"revenge":"intense","love":"romantic","murder":"dark","comedy":"funny","friendship":"feel-good",
-            "dystopia":"mind-bending","war":"epic","ghost":"scary","dream":"surreal","heist":"thrilling"}
+            "dystopia":"mind-bending","war":"epic","ghost":"scary","dream":"surreal","heist":"thrilling",
+            "superhero":"epic","chase":"thrilling","twist":"mind-bending","time travel":"mind-bending",
+            "corruption":"dark","prison":"dark","redemption":"feel-good","sacrifice":"epic",
+            "satire":"funny","dark humor":"dark-humor","slapstick":"funny","parody":"funny",
+            "romance":"romantic","wedding":"romantic","forbidden love":"romantic",
+            "serial killer":"scary","horror":"scary","zombie":"scary","haunted":"scary",
+            "space":"epic","alien":"mind-bending","robot":"mind-bending","artificial intelligence":"mind-bending",
+            "drug":"dark","crime":"intense","mafia":"intense","gang":"intense","noir":"dark",
+            "survival":"intense","disaster":"epic","race against time":"thrilling",
+            "coming of age":"feel-good","family":"feel-good","childhood":"feel-good",
+            "loneliness":"melancholic","grief":"melancholic","death":"melancholic",
+            "music":"feel-good","dance":"feel-good","art":"inspiring","biography":"inspiring"}
         for k in kw:
+            kl = k.lower()
             for signal, m in mood_map.items():
-                if signal in k.lower() and m not in mood: mood.append(m)
+                if signal in kl and m not in mood: mood.append(m)
     return {"one_liner": one_liner, "moods": mood[:4], "keywords": top_kw, "level": 1}
 
 def movie_summary(imdb_id, style, titles):
