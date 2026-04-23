@@ -97,6 +97,27 @@ def movie_companion(imdb_id, question, titles):
     system = f"You are a movie companion for \"{title}\" ({t.get('year','')}, {genres}). Plot: {plot}. NEVER reveal major spoilers or plot twists unless the user explicitly asks. Be concise."
     return llm_ask(question, system=system, max_tokens=300)
 
+def movie_summary_l1(imdb_id, titles):
+    """Level 1: Instant summary from metadata only. No LLM needed."""
+    t = titles.get(imdb_id, {})
+    genres = t.get("genres", "")
+    year = t.get("year", "")
+    dirs = t.get("directors", [])
+    dir_str = ", ".join(dirs) if isinstance(dirs, list) else str(dirs)
+    rating = t.get("imdb_rating", "?")
+    rt = t.get("rt_score", "")
+    kw = t.get("keywords", [])
+    top_kw = ", ".join(kw[:5]) if isinstance(kw, list) else ""
+    one_liner = f"{genres} ({year}) directed by {dir_str}. IMDB {rating}/10" + (f", RT {rt}" if rt else "") + "."
+    mood = []
+    if isinstance(kw, list):
+        mood_map = {"revenge":"intense","love":"romantic","murder":"dark","comedy":"funny","friendship":"feel-good",
+            "dystopia":"mind-bending","war":"epic","ghost":"scary","dream":"surreal","heist":"thrilling"}
+        for k in kw:
+            for signal, m in mood_map.items():
+                if signal in k.lower() and m not in mood: mood.append(m)
+    return {"one_liner": one_liner, "moods": mood[:4], "keywords": top_kw, "level": 1}
+
 def movie_summary(imdb_id, style, titles):
     """Generate movie summary in different styles."""
     t = titles.get(imdb_id, {})
@@ -146,6 +167,22 @@ def generate_watchlist_rss(user):
 <description>Daily movie recommendation from your watchlist</description>
 <link>{BASE}/watchlist/{user}</link>
 {items}</channel></rss>"""
+
+def fetch_letterboxd_data(imdb_id, title):
+    """Fetch mood/theme data from Letterboxd (public page scraping)."""
+    try:
+        url = f"https://letterboxd.com/imdb/{imdb_id}/"
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        resp = urllib.request.urlopen(req, timeout=10)
+        text = resp.read().decode(errors="replace")
+        import re
+        # Extract themes from nano-genre tags
+        themes = re.findall(r'href="/films/theme/([^/"]+)/"', text)
+        # Extract average rating
+        rating_m = re.search(r'name="twitter:data2" content="([\d.]+) out of', text)
+        lb_rating = float(rating_m.group(1)) if rating_m else None
+        return {"themes": themes[:10], "lb_rating": lb_rating}
+    except: return {}
 
 def search_internet_archive(query, limit=10):
     """Search Internet Archive for free movies."""
@@ -1638,6 +1675,44 @@ def seasonal_keywords():
 # ── Watchlist ─────────────────────────────────────────────────────────
 
 # ── Social + Alerts ───────────────────────────────────────────────────
+def library_health_report(user):
+    """Library health report — 10 checks like BrainyCat."""
+    library = load_user_tmm(user)
+    titles = load_titles()
+    ratings = load_user_ratings(user)
+    checks = []
+    total = sum(1 for k, v in library.items() if not k.startswith("_") and isinstance(v, dict))
+    # 1. Missing posters
+    no_poster = sum(1 for iid in library if not iid.startswith("_") and not titles.get(iid, {}).get("poster"))
+    checks.append({"name": "Posters", "icon": "🖼", "ok": total - no_poster, "total": total, "issue": f"{no_poster} missing"})
+    # 2. Missing genres
+    no_genre = sum(1 for iid in library if not iid.startswith("_") and not titles.get(iid, {}).get("genres"))
+    checks.append({"name": "Genres", "icon": "🎭", "ok": total - no_genre, "total": total, "issue": f"{no_genre} missing"})
+    # 3. Unrated in library
+    unrated = sum(1 for iid in library if not iid.startswith("_") and iid not in ratings)
+    checks.append({"name": "Rated", "icon": "⭐", "ok": total - unrated, "total": total, "issue": f"{unrated} unrated"})
+    # 4. File sizes known
+    sized = db_get_agent_field_count(user, "file_size") if get_db() else 0
+    checks.append({"name": "File Sizes", "icon": "💾", "ok": sized, "total": total, "issue": f"{total - sized} unknown"})
+    # 5. Hashed
+    hashed = db_get_agent_field_count(user, "file_hash") if get_db() else 0
+    checks.append({"name": "Hashed", "icon": "🔑", "ok": hashed, "total": total, "issue": f"{total - hashed} unhashed"})
+    # 6. Duplicates
+    dupes = sum(1 for v in library.values() if isinstance(v, list))
+    checks.append({"name": "No Duplicates", "icon": "📋", "ok": total - dupes, "total": total, "issue": f"{dupes} duplicate sets"})
+    # 7. Confirmed matches
+    confirmed = sum(1 for iid, v in library.items() if isinstance(v, dict) and v.get("confirmed"))
+    checks.append({"name": "Confirmed", "icon": "✅", "ok": confirmed, "total": total, "issue": f"{total - confirmed} unconfirmed"})
+    # 8. Has keywords (for recommendations)
+    has_kw = sum(1 for iid in library if not iid.startswith("_") and titles.get(iid, {}).get("keywords"))
+    checks.append({"name": "Keywords", "icon": "🏷", "ok": has_kw, "total": total, "issue": f"{total - has_kw} missing"})
+    # 9. Has streaming info
+    has_stream = sum(1 for iid in library if not iid.startswith("_") and titles.get(iid, {}).get("providers"))
+    checks.append({"name": "Streaming", "icon": "📺", "ok": has_stream, "total": total, "issue": f"{total - has_stream} unknown"})
+    # 10. Overall quality score
+    score = int(sum(c["ok"] for c in checks) / max(sum(c["total"] for c in checks), 1) * 100)
+    return {"checks": checks, "score": score, "total": total}
+
 def _notify_streaming_alerts(user):
     """Check and notify about new streaming availability."""
     alerts = get_available_alerts(user)
@@ -3043,7 +3118,7 @@ def render_library_nav(user, active="library"):
         ("tvshows", "📺 TV Shows", f"{BASE}/tvshows/{user}"),
         ("scraper", "🔍 Scraper", f"{BASE}/scraper/{user}"),
         ("org", "🗂 Organize", f"{BASE}/library/org/{user}"),
-        ("confirm", "⚠ Confirm", f"{BASE}/confirm/{user}"), ("incoming", "📥 Incoming", f"{BASE}/incoming/{user}"),
+        ("confirm", "⚠ Confirm", f"{BASE}/confirm/{user}"), ("health", "🏥 Health", f"{BASE}/health/{user}"), ("incoming", "📥 Incoming", f"{BASE}/incoming/{user}"),
     ], active)
 
 def _merge_agent_data(library, user):
@@ -3841,6 +3916,30 @@ td{{padding:8px;border-bottom:1px solid #333}}a{{color:#4fc3f7;text-decoration:n
 <p style="color:#888">Titles from your watchlist now available on your streaming services</p>
 <table>{rows if rows else "<tr><td>No watchlisted titles currently available</td></tr>"}</table>
 <p style="margin-top:15px"><a href="{BASE}/u/{u}">← Back</a></p></body></html>""")
+            return
+        elif p.startswith("/health/"):
+            u = parts[-1]
+            report = library_health_report(u)
+            html = page_head("Library Health")
+            html += nav_bar("library", u)
+            html += render_library_nav(u, "health")
+            html += '<div class="page">'
+            html += '<h2>🏥 Library Health — Score: '
+            sc = report["score"]
+            color = "#22c55e" if sc >= 70 else "#f59e0b" if sc >= 40 else "#ef4444"
+            html += '<span style="color:' + color + ';font-size:1.2em">' + str(sc) + '%</span></h2>'
+            html += '<div style="background:#333;border-radius:8px;height:12px;margin-bottom:20px"><div style="background:' + color + ';height:100%;width:' + str(sc) + '%;border-radius:8px"></div></div>'
+            for c in report["checks"]:
+                p = int(c["ok"]/max(c["total"],1)*100)
+                bc = "#22c55e" if p >= 70 else "#f59e0b" if p >= 40 else "#ef4444"
+                html += '<div style="display:flex;align-items:center;gap:12px;margin:8px 0;padding:8px;background:var(--card,#16213e);border-radius:6px">'
+                html += '<span style="font-size:1.3em">' + c["icon"] + '</span>'
+                html += '<span style="width:120px">' + c["name"] + '</span>'
+                html += '<div style="flex:1;height:8px;background:#333;border-radius:4px"><div style="width:' + str(p) + '%;height:100%;background:' + bc + ';border-radius:4px"></div></div>'
+                html += '<span style="width:80px;text-align:right;font-size:.85em">' + str(c["ok"]) + '/' + str(c["total"]) + '</span>'
+                html += '<span style="width:120px;font-size:.8em;color:var(--muted)">' + c["issue"] + '</span></div>'
+            html += '</div>' + page_foot()
+            self._page(html, "library", u)
             return
         elif p.startswith("/efficiency"):
             titles = load_titles()
