@@ -802,12 +802,68 @@ def get_jobs():
     with _job_lock: return dict(_jobs)
 
 # ── API helpers ───────────────────────────────────────────────────────
+# ── Adaptive Rate Limiter ──────────────────────────────────────────────
+_rate_last = {}   # domain -> last_request_time
+_rate_fails = {}  # domain -> consecutive_failure_count
+_rate_backoff = {} # domain -> backoff_until_time
+
+def _rate_domain(url):
+    for d in ("themoviedb","omdbapi","thetvdb","trakt","archive.org","letterboxd"):
+        if d in url: return d
+    return "default"
+
+def _rate_wait(url):
+    """Rate limit + adaptive backoff. Call before every external request."""
+    domain = _rate_domain(url)
+    now = time.time()
+    # Check backoff
+    until = _rate_backoff.get(domain, 0)
+    if now < until:
+        wait = min(until - now, 300)
+        time.sleep(wait)
+        return
+    # Normal rate limit (1s between calls to same domain)
+    last = _rate_last.get(domain, 0)
+    if now - last < 1.0:
+        time.sleep(1.0 - (now - last))
+    _rate_last[domain] = time.time()
+
+def _rate_ok(url):
+    """Report success — reset failure counter."""
+    _rate_fails[_rate_domain(url)] = 0
+    _rate_backoff[_rate_domain(url)] = 0
+
+def _rate_fail(url):
+    """Report failure — escalate backoff after 3+ consecutive failures."""
+    domain = _rate_domain(url)
+    fails = _rate_fails.get(domain, 0) + 1
+    _rate_fails[domain] = fails
+    if fails >= 3:
+        delay = {3:30, 5:120, 8:600, 12:1800}.get(fails, 3600 if fails < 50 else 21600)
+        for threshold in sorted({3:30, 5:120, 8:600, 12:1800}.keys(), reverse=True):
+            if fails >= threshold:
+                delay = {3:30, 5:120, 8:600, 12:1800}[threshold]
+                break
+        _rate_backoff[domain] = time.time() + delay
+        print(f"[rate] {domain}: {fails} failures, backing off {delay}s")
+
+def _rate_status():
+    """Get rate limiter status for all domains."""
+    now = time.time()
+    return {d: {"fails": _rate_fails.get(d,0), "backed_off": _rate_backoff.get(d,0) > now,
+                "backoff_remaining": max(0, int(_rate_backoff.get(d,0) - now))}
+            for d in set(list(_rate_fails.keys()) + list(_rate_backoff.keys()))}
+
 def api_get(url, headers=None):
+    _rate_wait(url)
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0", **(headers or {})})
     try:
-        with urllib.request.urlopen(req, timeout=10) as r: return json.loads(r.read())
+        with urllib.request.urlopen(req, timeout=10) as r:
+            _rate_ok(url)
+            return json.loads(r.read())
     except Exception as e:
-        if "401" not in str(e): print(f"API error {url[:80]}: {e}")
+        _rate_fail(url)
+        if "401" not in str(e) and "429" not in str(e): print(f"API error {url[:80]}: {e}")
         return None
 
 def api_post(url, data, headers=None):
@@ -2221,6 +2277,22 @@ def anti_recommendations(user, titles, n=10):
             anti.append((iid, t, t["imdb_rating"]))
     anti.sort(key=lambda x: x[2], reverse=True)
     return anti[:n]
+
+def quality_score(t):
+    """Quality score 0-100: how complete is this title's metadata?"""
+    score = 0
+    if t.get("poster"): score += 15
+    if t.get("overview") or t.get("plot"): score += 10
+    if t.get("genres"): score += 10
+    if t.get("keywords") and len(t.get("keywords",[])) >= 3: score += 15
+    if t.get("directors"): score += 10
+    if t.get("actors"): score += 10
+    if t.get("rt_score"): score += 5
+    if t.get("trailer"): score += 5
+    if t.get("providers"): score += 10
+    if t.get("alt_titles"): score += 5
+    if t.get("similar"): score += 5
+    return min(score, 100)
 
 def _richness(t):
     """Score how complete a title's metadata is (0-10). Used to prioritize re-enrichment."""
@@ -3990,6 +4062,16 @@ td{{padding:8px;border-bottom:1px solid #333}}a{{color:#4fc3f7;text-decoration:n
             html += f'<tr><td>OMDB</td><td>RT score, Metacritic, plot</td><td>{int(has_rt/max(total,1)*100)}%</td></tr>'
             html += f'<tr><td>IMDB Dataset</td><td>title, year, genres, rating, votes</td><td>{int(total/max(total,1)*100)}%</td></tr>'
             html += '</table></div>'
+            # Rate limiter status
+            status = _rate_status()
+            if any(v["fails"] > 0 for v in status.values()):
+                html += '<h3 style="margin-top:16px">🚦 API Rate Limiter</h3>'
+                html += '<div class="card" style="padding:16px;font-size:.85em"><table style="width:100%"><tr><th>Domain</th><th>Failures</th><th>Status</th></tr>'
+                for domain, s in sorted(status.items()):
+                    if s["fails"] == 0: continue
+                    st = '<span style="color:#ef4444">⏸ Backed off ' + str(s["backoff_remaining"]) + 's</span>' if s["backed_off"] else '<span style="color:#f59e0b">⚠ ' + str(s["fails"]) + ' fails</span>'
+                    html += '<tr><td>' + esc(domain) + '</td><td>' + str(s["fails"]) + '</td><td>' + st + '</td></tr>'
+                html += '</table></div>'
             html += '<p style="margin-top:12px"><a href="' + BASE + '/enrich" class="btn">▶ Run Enrichment Now</a></p>'
             html += '</div>' + page_foot()
             self._page(html, "setup", "")
