@@ -5571,6 +5571,50 @@ def _resolve_from_imdb_dataset():
             save_titles(titles)
             print(f"Resolved {resolved} titles for {u}")
 
+def _supervised(name, fn, interval):
+    """Run a scheduled task with supervision — restart on crash, log errors."""
+    time.sleep(10 + hash(name) % 20)
+    while True:
+        try:
+            fn()
+        except Exception as e:
+            print(f"[scheduler] {name} error: {e}")
+        time.sleep(interval)
+
+def _sched_enrichment():
+    print("[scheduler] enrichment")
+    enrich_titles(fast=False)
+
+def _sched_alt_titles():
+    if not TMDB_KEY: return
+    titles_db = load_titles()
+    need = [iid for iid, t in titles_db.items() if t.get("tmdb_id") and not t.get("alt_titles")]
+    if not need: return
+    for iid in need[:10]:
+        t = titles_db[iid]
+        kind = "tv" if t.get("type") in ("tvSeries","tvMiniSeries","tv") else "movie"
+        alt = api_get(f"https://api.themoviedb.org/3/{kind}/{t['tmdb_id']}/alternative_titles?api_key={TMDB_KEY}")
+        if alt:
+            alt_list = alt.get("titles") or alt.get("results") or []
+            t["alt_titles"] = [a["title"] for a in alt_list if a.get("title")][:20]
+    save_titles(titles_db)
+    remaining = len(need) - 10
+    if remaining % 500 < 10: print(f"[scheduler] alt titles: {remaining} remaining")
+
+def _sched_catalog():
+    import datetime
+    now = datetime.datetime.now()
+    if now.weekday() == 6 and now.hour == 4:
+        print("[scheduler] catalog refresh")
+        fetch_streaming_catalog()
+
+def _sched_discovery():
+    import datetime
+    now = datetime.datetime.now()
+    if now.weekday() == 6 and now.hour == 5:
+        print("[scheduler] discovery sweep")
+        _discover_highly_rated()
+
 def _scheduler():
     """Supervised scheduler — each task independent, staggered, crash-resilient."""
     tasks = [
