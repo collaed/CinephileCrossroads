@@ -5572,30 +5572,20 @@ def _resolve_from_imdb_dataset():
             print(f"Resolved {resolved} titles for {u}")
 
 def _scheduler():
-    """Background scheduler: enrichment every 90min, catalog+discovery weekly Sunday 4am."""
-    import datetime
-    last_enrich = last_catalog = last_discover = None
-    last_enrich_time = 0
-    while True:
-        now = datetime.datetime.now()
-        # Enrichment every 90 minutes
-        if time.time() - last_enrich_time > 7200:
-            print("Scheduled: enrichment")
-            try:
-                enrich_titles(fast=False)
-            except Exception as e:
-                print(f"Enrichment error: {e}")
-            last_enrich_time = time.time()
-        # Weekly on Sundays at 4am: catalog refresh + discovery + re-seed
-        if now.weekday() == 6 and now.hour == 4 and last_catalog != now.date():
-            print("Scheduled: catalog refresh")
-            fetch_streaming_catalog()
-            last_catalog = now.date()
-        if now.weekday() == 6 and now.hour == 5 and last_discover != now.date():
-            print("Scheduled: discovery sweep")
-            _discover_highly_rated()
-            last_discover = now.date()
-        time.sleep(600)  # Check every 10 min
+    """Supervised scheduler — each task independent, staggered, crash-resilient."""
+    tasks = [
+        ("enrichment", _sched_enrichment, 7200),
+        ("alt_titles", _sched_alt_titles, 5),
+        ("catalog", _sched_catalog, 600),
+        ("discovery", _sched_discovery, 600),
+    ]
+    threads = []
+    for name, fn, interval in tasks:
+        t = threading.Thread(target=_supervised, args=(name, fn, interval), daemon=True)
+        t.start()
+        threads.append(t)
+    print(f"[scheduler] Started {len(tasks)} supervised tasks")
+    for t in threads: t.join()
 
 def _migrate_json_to_db():
     """One-time migration of JSON files to SQLite."""
