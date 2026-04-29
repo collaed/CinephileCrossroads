@@ -827,10 +827,11 @@ def _rate_wait(url):
         wait = min(until - now, 300)
         time.sleep(wait)
         return
-    # Normal rate limit (1s between calls to same domain)
+    # Normal rate limit (2s for TMDB to avoid connection resets with concurrent threads)
     last = _rate_last.get(domain, 0)
-    if now - last < 1.0:
-        time.sleep(1.0 - (now - last))
+    min_gap = 2.0 if domain == "themoviedb" else 1.0
+    if now - last < min_gap:
+        time.sleep(min_gap - (now - last))
     _rate_last[domain] = time.time()
 
 def _rate_ok(url):
