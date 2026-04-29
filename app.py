@@ -807,6 +807,11 @@ _rate_last = {}   # domain -> last_request_time
 _rate_fails = {}  # domain -> consecutive_failure_count
 _rate_backoff = {} # domain -> backoff_until_time
 
+def _is_tv(t):
+    """Check if a title is a TV show (handles inconsistent type values)."""
+    tp = (t.get("type") or "").lower().replace(" ", "")
+    return tp in ("tvseries","tvminiseries","tv","tvepisode")
+
 def _rate_domain(url):
     for d in ("themoviedb","omdbapi","thetvdb","trakt","archive.org","letterboxd"):
         if d in url: return d
@@ -1271,7 +1276,7 @@ def find_mismatches(user, threshold=0.2):
         changed = False
         for iid in pull_queue[:50]:
             t = titles[iid]
-            kind = "tv" if t.get("type") in ("tvSeries","tvMiniSeries","tv") else "movie"
+            kind = "tv" if _is_tv(t) else "movie"
             alt = api_get(f"https://api.themoviedb.org/3/{kind}/{t['tmdb_id']}/alternative_titles?api_key={TMDB_KEY}")
             if alt:
                 alt_list = alt.get("titles") or alt.get("results") or []
@@ -2034,7 +2039,7 @@ def build_taste_profile(user_ratings, titles, user=None):
         # Map show titles to IMDB IDs via titles.json
         title_to_iid = {}
         for iid, t in titles.items():
-            if t.get("type") in ("tvSeries", "tvMiniSeries", "tv"):
+            if _is_tv(t):
                 title_to_iid[t.get("title", "").lower()] = iid
         for show_name, (total, watched) in show_stats.items():
             if total > 0 and watched == total:
@@ -3543,7 +3548,7 @@ def render_scraper(user):
         show_stats.setdefault(show, [0, 0])
         show_stats[show][0] += 1
         if ep.get("playcount", 0) > 0: show_stats[show][1] += 1
-    title_to_iid = {t.get("title", "").lower(): iid for iid, t in titles.items() if t.get("type") in ("tvSeries", "tvMiniSeries", "tv")}
+    title_to_iid = {t.get("title", "").lower(): iid for iid, t in titles.items() if _is_tv(t)}
     for show_name, (total, watched) in show_stats.items():
         if show_name.lower() not in title_to_iid:
             pct = watched * 100 // total if total else 0
@@ -4221,7 +4226,7 @@ td{{padding:8px;border-bottom:1px solid #333}}a{{color:#4fc3f7;text-decoration:n
                 for iid in need[:50]:
                     t = titles[iid]
                     tmdb_id = t["tmdb_id"]
-                    kind = "tv" if t.get("type") in ("tvSeries","tvMiniSeries","tv") else "movie"
+                    kind = "tv" if _is_tv(t) else "movie"
                     alt = api_get(f"https://api.themoviedb.org/3/{kind}/{tmdb_id}/alternative_titles?api_key={TMDB_KEY}")
                     alt_list = (alt.get("titles") or alt.get("results") or []) if alt else []
                     t["alt_titles"] = [a["title"] for a in alt_list if a.get("title")][:15]
@@ -4233,7 +4238,7 @@ td{{padding:8px;border-bottom:1px solid #333}}a{{color:#4fc3f7;text-decoration:n
                 for iid in list(library.keys())[:100]:
                     if iid.startswith("_"): continue
                     t = titles.get(iid, {})
-                    if t.get("type") in ("tvSeries","tvMiniSeries","tv") and not t.get("tvdb_id"):
+                    if _is_tv(t) and not t.get("tvdb_id"):
                         data = tvdb_enrich(iid)
                         if data:
                             t.update({k:v for k,v in data.items() if v})
@@ -5588,11 +5593,11 @@ def _sched_enrichment():
 def _sched_alt_titles():
     if not TMDB_KEY: return
     titles_db = load_titles()
-    need = [iid for iid, t in titles_db.items() if t.get("tmdb_id") and not t.get("alt_titles")]
+    need = [iid for iid, t in titles_db.items() if t.get("tmdb_id") and t["tmdb_id"] and not t.get("alt_titles")]
     if not need: return
     for iid in need[:10]:
         t = titles_db[iid]
-        kind = "tv" if t.get("type") in ("tvSeries","tvMiniSeries","tv") else "movie"
+        kind = "tv" if _is_tv(t) else "movie"
         alt = api_get(f"https://api.themoviedb.org/3/{kind}/{t['tmdb_id']}/alternative_titles?api_key={TMDB_KEY}")
         if alt:
             alt_list = alt.get("titles") or alt.get("results") or []
