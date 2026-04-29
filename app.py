@@ -5591,13 +5591,20 @@ def _supervised(name, fn, interval):
         time.sleep(interval)
 
 def _sched_enrichment():
-    print("[scheduler] enrichment")
-    enrich_titles(fast=False)
+    global _enrichment_running
+    _enrichment_running = True
+    try:
+        print("[scheduler] enrichment")
+        enrich_titles(fast=False)
+    finally:
+        _enrichment_running = False
+
+_enrichment_running = False
 
 def _sched_alt_titles():
     if not TMDB_KEY: return
     # Skip if enrichment is actively running (it hogs TMDB rate limit)
-    if active_job()[1]: return
+    if _enrichment_running: return
     titles_db = load_titles()
     need = [iid for iid, t in titles_db.items() if t.get("tmdb_id") and t["tmdb_id"] and not t.get("alt_titles")]
     if not need: return
