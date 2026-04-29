@@ -867,8 +867,10 @@ def api_get(url, headers=None):
             _rate_ok(url)
             return json.loads(r.read())
     except Exception as e:
-        _rate_fail(url)
-        if "401" not in str(e) and "429" not in str(e): print(f"API error {url[:80]}: {e}")
+        err = str(e)
+        if "429" in err or "500" in err or "502" in err or "503" in err:
+            _rate_fail(url)
+        if "401" not in err and "404" not in err: print(f"API error {url[:80]}: {e}")
         return None
 
 def api_post(url, data, headers=None):
