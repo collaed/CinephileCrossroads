@@ -5596,10 +5596,12 @@ def _sched_enrichment():
 
 def _sched_alt_titles():
     if not TMDB_KEY: return
+    # Skip if enrichment is actively running (it hogs TMDB rate limit)
+    if active_job()[1]: return
     titles_db = load_titles()
     need = [iid for iid, t in titles_db.items() if t.get("tmdb_id") and t["tmdb_id"] and not t.get("alt_titles")]
     if not need: return
-    for iid in need[:10]:
+    for iid in need[:5]:
         t = titles_db[iid]
         kind = "tv" if _is_tv(t) else "movie"
         alt = api_get(f"https://api.themoviedb.org/3/{kind}/{t['tmdb_id']}/alternative_titles?api_key={TMDB_KEY}")
@@ -5607,8 +5609,8 @@ def _sched_alt_titles():
             alt_list = alt.get("titles") or alt.get("results") or []
             t["alt_titles"] = [a["title"] for a in alt_list if a.get("title")][:20]
     save_titles(titles_db)
-    remaining = len(need) - 10
-    if remaining % 500 < 10: print(f"[scheduler] alt titles: {remaining} remaining")
+    remaining = len(need) - 5
+    if remaining % 1000 < 5: print(f"[scheduler] alt titles: {remaining} remaining")
 
 def _sched_catalog():
     import datetime
@@ -5628,7 +5630,7 @@ def _scheduler():
     """Supervised scheduler — each task independent, staggered, crash-resilient."""
     tasks = [
         ("enrichment", _sched_enrichment, 7200),
-        ("alt_titles", _sched_alt_titles, 5),
+        ("alt_titles", _sched_alt_titles, 3),
         ("catalog", _sched_catalog, 600),
         ("discovery", _sched_discovery, 600),
     ]
