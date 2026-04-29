@@ -1780,6 +1780,7 @@ def library_health_report(user):
     checks.append({"name": "Confirmed", "icon": "✅", "ok": confirmed, "total": total, "issue": f"{total - confirmed} unconfirmed"})
     # 8. Has keywords (for recommendations)
     has_kw = sum(1 for iid in library if not iid.startswith("_") and titles.get(iid, {}).get("keywords"))
+    has_cast = sum(1 for iid in library if not iid.startswith("_") and titles.get(iid, {}).get("cast"))
     checks.append({"name": "Keywords", "icon": "🏷", "ok": has_kw, "total": total, "issue": f"{total - has_kw} missing"})
     # 9. Has streaming info
     has_stream = sum(1 for iid in library if not iid.startswith("_") and titles.get(iid, {}).get("providers"))
@@ -2293,8 +2294,8 @@ def quality_score(t):
     if t.get("genres"): score += 10
     if t.get("keywords") and len(t.get("keywords",[])) >= 3: score += 15
     if t.get("directors"): score += 10
-    if t.get("actors"): score += 10
-    if t.get("rt_score"): score += 5
+    if t.get("cast"): score += 10
+    if t.get("rotten_tomatoes"): score += 5
     if t.get("trailer"): score += 5
     if t.get("providers"): score += 10
     if t.get("alt_titles"): score += 5
@@ -4037,12 +4038,12 @@ td{{padding:8px;border-bottom:1px solid #333}}a{{color:#4fc3f7;text-decoration:n
             total = len(titles)
             has_poster = sum(1 for t in titles.values() if t.get("poster"))
             has_keywords = sum(1 for t in titles.values() if t.get("keywords"))
-            has_rt = sum(1 for t in titles.values() if t.get("rt_score"))
+            has_rt = sum(1 for t in titles.values() if t.get("rotten_tomatoes"))
             has_streaming = sum(1 for t in titles.values() if t.get("providers"))
             has_trailer = sum(1 for t in titles.values() if t.get("trailer"))
             has_alt = sum(1 for t in titles.values() if t.get("alt_titles"))
-            has_cast = sum(1 for t in titles.values() if t.get("actors"))
-            has_similar = sum(1 for t in titles.values() if t.get("similar"))
+            has_cast = sum(1 for t in titles.values() if t.get("cast"))
+            has_similar = sum(1 for t in titles.values() if t.get("similar_tmdb"))
             def pbar(n, label):
                 p = int(n/max(total,1)*100)
                 color = "#22c55e" if p >= 70 else "#f59e0b" if p >= 40 else "#ef4444"
