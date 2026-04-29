@@ -5607,7 +5607,7 @@ def _sched_alt_titles():
     # Skip if enrichment is actively running (it hogs TMDB rate limit)
     if _enrichment_running: return
     titles_db = load_titles()
-    need = [iid for iid, t in titles_db.items() if t.get("tmdb_id") and t["tmdb_id"] and not t.get("alt_titles")]
+    need = [iid for iid, t in titles_db.items() if t.get("tmdb_id") and t["tmdb_id"] and "alt_titles" not in t]
     if not need: return
     for iid in need[:5]:
         t = titles_db[iid]
