@@ -5602,7 +5602,8 @@ def _sched_enrichment():
 _enrichment_running = False
 
 def _sched_alt_titles():
-    if not TMDB_KEY: return
+    tmdb_key = _load_key("tmdb") or TMDB_KEY
+    if not tmdb_key: return
     # Skip if enrichment is actively running (it hogs TMDB rate limit)
     if _enrichment_running: return
     titles_db = load_titles()
@@ -5611,7 +5612,7 @@ def _sched_alt_titles():
     for iid in need[:5]:
         t = titles_db[iid]
         kind = "tv" if _is_tv(t) else "movie"
-        alt = api_get(f"https://api.themoviedb.org/3/{kind}/{t['tmdb_id']}/alternative_titles?api_key={TMDB_KEY}")
+        alt = api_get(f"https://api.themoviedb.org/3/{kind}/{t['tmdb_id']}/alternative_titles?api_key={tmdb_key}")
         if alt:
             alt_list = alt.get("titles") or alt.get("results") or []
             t["alt_titles"] = [a["title"] for a in alt_list if a.get("title")][:20]
