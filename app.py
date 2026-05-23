@@ -648,6 +648,25 @@ def generate_tasks_for_library(user):
             seen_transcode.add(folder)
             _add("transcode_dvd", {"path": folder, "crf": 20, "preset": "medium"}, PRIORITY_QUALITY)
 
+    # CPU LANE: audio merge (better video + better audio from different copies, capped at 5)
+    merge_candidates = []
+    for iid, val in library.items():
+        if iid.startswith("_") or not isinstance(val, list) or len(val) < 2: continue
+        entries = [e for e in val if isinstance(e, dict) and e.get("file_size") and e.get("audio") and e.get("path")]
+        if len(entries) < 2: continue
+        if any(e.get("audio_merged") for e in entries): continue
+        def _audio_score(e):
+            tracks = e.get("audio", [])
+            if not isinstance(tracks, list): return 0
+            return max((t.get("channels", 0) * (5 if "dts" in t.get("codec", "").lower() or "truehd" in t.get("codec", "").lower() else 3 if "ac3" in t.get("codec", "").lower() or "eac3" in t.get("codec", "").lower() else 1) for t in tracks if isinstance(t, dict)), default=0)
+        scored = [(e, e.get("video_width", 0), _audio_score(e)) for e in entries]
+        best_video = max(scored, key=lambda x: x[1])
+        best_audio = max(scored, key=lambda x: x[2])
+        if best_video[0] is not best_audio[0] and best_audio[2] > best_video[2] * 2:
+            merge_candidates.append({"target": best_video[0]["path"], "source": best_audio[0]["path"], "dry_run": True})
+    for m in merge_candidates[:5]:
+        _add("merge_audio", m, PRIORITY_QUALITY)
+
     # API LANE: subtitles (capped at 50 per run)
     for iid, path in needs_subs[:50]:
         _add("download_subs", {"imdb_id": iid, "path": path, "language": sub_lang,
