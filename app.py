@@ -280,20 +280,52 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT, user TEXT, path TEXT UNIQUE,
             filename TEXT, size INTEGER, title_guess TEXT, year_guess TEXT,
             quality TEXT, tmdb_match TEXT, status TEXT DEFAULT 'pending', destination TEXT);
+        CREATE TABLE IF NOT EXISTS verification (
+            path TEXT, step TEXT, imdb_id TEXT,
+            status TEXT, result TEXT, version INTEGER DEFAULT 1,
+            ts TEXT);
     """)
     db.commit()
 
+_task_seq = [0]
+
 def db_enqueue_task(task_type, params=None, priority=0):
     db = get_db()
-    tid = "task_" + str(int(time.time()*1000)) + "_" + str(threading.current_thread().ident % 1000)
+    _task_seq[0] = _task_seq[0] + 1
+    tid = f"task_{int(time.time()*1000)}_{_task_seq[0]}"
     db.execute("INSERT INTO task_queue (id,type,params,priority,status,created) VALUES (?,?,?,?,?,?)",
         (tid, task_type, json.dumps(params or {}), priority, "pending", time.strftime("%Y-%m-%d %H:%M:%S")))
     db.commit()
     return tid
 
+TASK_LANES = {
+    "disk": ["validate_match", "hash_files", "size_files", "check_quality", "integrity_check", "scan_extra", "quality_score", "compare_files", "diag"],
+    "cpu": ["contact_sheet", "ssim_compare", "merge_audio", "strip_audio", "generate_thumb", "transcode_dvd"],
+    "api": ["identify_movie", "download_subs"],
+}
+LANE_FOR_TYPE = {t: lane for lane, types in TASK_LANES.items() for t in types}
+
 def db_get_pending_tasks(limit=5):
-    rows = get_db().execute("SELECT * FROM task_queue WHERE status='pending' ORDER BY priority,created LIMIT ?", (limit,)).fetchall()
-    return [{"id":r["id"],"type":r["type"],"params":json.loads(r["params"] or "{}"),"priority":r["priority"],"status":r["status"]} for r in rows]
+    db = get_db()
+    # Return one task per lane — enables true parallel processing by bottleneck
+    results = []
+    seen_ids = set()
+    for lane, types in TASK_LANES.items():
+        placeholders = ",".join(f"'{t}'" for t in types)
+        rows = db.execute(f"SELECT * FROM task_queue WHERE status='pending' AND type IN ({placeholders}) ORDER BY priority, created LIMIT 2").fetchall()
+        for r in rows:
+            if r["id"] not in seen_ids:
+                results.append(r)
+                seen_ids.add(r["id"])
+    # Also grab any uncategorized tasks
+    if len(results) < limit:
+        rows = db.execute("SELECT * FROM task_queue WHERE status='pending' ORDER BY priority, created LIMIT ?", (limit,)).fetchall()
+        for r in rows:
+            if r["id"] not in seen_ids:
+                results.append(r)
+                seen_ids.add(r["id"])
+                if len(results) >= limit: break
+    return [{"id":r["id"],"type":r["type"],"params":json.loads(r["params"] or "{}"),"priority":r["priority"],"status":r["status"]} for r in results[:limit]]
 
 def db_complete_task(task_id, result=None):
     db = get_db()
@@ -390,7 +422,7 @@ def nav_bar(active="ratings", user=""):
     for key, label, href in sections:
         cls = "nav-active" if key == active else ""
         links += f'<a href="{href}" class="nav-link {cls}">{label}</a>'
-    return APP_BANNER + f'<nav class="top-nav"><div class="nav-links">{links}</div>{render_user_bar(u)}</nav>'
+    return APP_BANNER + f'<nav class="top-nav" role="navigation" aria-label="Main"><span class="hamburger" aria-label="Menu" role="button" onclick="toggleNav()">☰</span><div class="nav-links">{links}</div>{render_user_bar(u)}</nav>'
 
 def sub_nav(items, active=""):
     links = ""
@@ -440,18 +472,29 @@ a{color:var(--accent);text-decoration:none}img{border-radius:4px}
 .btn{display:inline-block;padding:6px 14px;border-radius:6px;background:var(--card);border:1px solid var(--border);color:var(--fg);text-decoration:none;font-size:.85em;margin:2px}
 .btn:hover{border-color:var(--accent);color:var(--accent)}.btn-primary{background:var(--accent);color:#1a1a2e;border-color:var(--accent)}
 .x{font-size:.8em;color:var(--muted)}
-@media(max-width:768px){.top-nav{flex-direction:column;gap:8px;padding:8px}.page{padding:10px}table{font-size:.8em}th,td{padding:4px 6px}img{height:50px!important}.x{display:none}}
+@media(max-width:768px){.top-nav{flex-direction:column;gap:8px;padding:8px}.page{padding:10px}table{font-size:.8em}th,td{padding:4px 6px}img{height:50px!important}.x{display:none}.nav-links{display:none;flex-direction:column;width:100%}.nav-links.nav-open{display:flex}.hamburger{display:block;cursor:pointer;font-size:1.5em;padding:4px 8px}}
+@media(min-width:769px){.hamburger{display:none}}
+.bpp-legend{display:inline-flex;gap:8px;align-items:center;font-size:.75em;color:var(--muted);margin-left:12px}
+.bpp-legend span{display:inline-flex;align-items:center;gap:2px}
 """
 
 SHARED_JS = ('<script>'
     'if(localStorage.getItem("theme")==="light")document.body.classList.add("light");'
     'function sortTable(n){var tb=document.querySelector("tbody");if(!tb)return;var rows=[].slice.call(tb.rows),dir=tb.dataset.sort==n?-1:1;tb.dataset.sort=dir==1?n:"";rows.sort(function(a,b){var x=a.cells[n].dataset.sort||a.cells[n].textContent,y=b.cells[n].dataset.sort||b.cells[n].textContent;x=isNaN(x)?x:Number(x);y=isNaN(y)?y:Number(y);return(typeof x==="number"&&typeof y==="number"?(x-y):(String(x)).localeCompare(String(y),undefined,{numeric:true}))*dir});rows.forEach(function(r){tb.appendChild(r)})}'
-    'function filterTable(){var q=(document.getElementById("s")||{}).value;q=q?q.toLowerCase():"";var rows=document.querySelectorAll("tbody tr");rows.forEach(function(r){r.style.display=r.textContent.toLowerCase().indexOf(q)>=0?"":"none"})}'
+    'function filterTable(){var q=(document.getElementById("s")||{}).value;q=q?q.toLowerCase():"";var rows=document.querySelectorAll("tbody tr");rows.forEach(function(r){r.style.display=r.textContent.toLowerCase().indexOf(q)>=0?"":"none"});syncFilterURL()}'
+    # Keyboard: / to focus search, Escape to blur
+    'document.addEventListener("keydown",function(e){if(e.key==="/"&&document.activeElement.tagName!=="INPUT"){e.preventDefault();var s=document.getElementById("s");if(s)s.focus()}if(e.key==="Escape"){document.activeElement.blur()}});'
+    # URL filter sync: read on load, write on change
+    'function syncFilterURL(){var s=document.getElementById("s");if(!s)return;var p=new URLSearchParams(location.search);if(s.value)p.set("q",s.value);else p.delete("q");var selects=document.querySelectorAll("select[name]");selects.forEach(function(sel){if(sel.value)p.set(sel.name,sel.value);else p.delete(sel.name)});history.replaceState(null,"",p.toString()?"?"+p.toString():location.pathname)}'
+    'window.addEventListener("load",function(){var p=new URLSearchParams(location.search);var s=document.getElementById("s");if(s&&p.get("q")){s.value=p.get("q");filterTable()}var selects=document.querySelectorAll("select[name]");selects.forEach(function(sel){var v=p.get(sel.name);if(v){sel.value=v;sel.dispatchEvent(new Event("change"))}})});'
+    # Hamburger menu toggle for mobile
+    'function toggleNav(){var n=document.querySelector(".nav-links");if(n)n.classList.toggle("nav-open")}'
     '</script>')
 
 def page_head(title, extra_css=""):
     return f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>{title}</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#1a1a2e">
 <style>{SHARED_CSS}{extra_css}</style>
 </head><body>"""
 
@@ -491,57 +534,129 @@ def load_agent_status():
     return {}
 
 def generate_tasks_for_library(user):
-    """Analyze library and enqueue tasks for the agent. Priority: 0=dupes, 1=quality, 2=subs."""
+    """Analyze library and enqueue tasks for the agent across all work lanes."""
+    import re as _re
     library = load_user_tmm(user)
     if not library: return 0
-    
-    # Load queue, preserve priority/exec_code tasks and all done tasks
+    titles = load_titles()
+
     db_clear_auto_tasks()
-    
+
     new_tasks = []
     def _add(task_type, params, priority):
         db_enqueue_task(task_type, params, priority)
-        new_tasks.append(1)  # just count
-    
-    count = 0
-    from collections import defaultdict
-    
-    # Collect all needs
-    needs_size = [(iid, library[iid]["path"]) for iid in library
-                  if isinstance(library.get(iid), dict) and library[iid].get("path")
-                  and not library[iid].get("file_size") and not library[iid].get("size")]
-    # Hash ALL files (needed for OpenSubtitles matching)
-    needs_hash = [(iid, info["path"]) for iid, info in library.items()
-                  if isinstance(info, dict) and info.get("path")
-                  and info.get("file_size") and not info.get("file_hash")]
-    sub_lang = _load_key("sub_language") or "eng"
-    needs_subs = [(iid, info["path"]) for iid, info in library.items()
-                  if isinstance(info, dict) and info.get("path")
-                  and not info.get("subtitles") and not info.get("suggested_sub")][:50]
-    needs_quality = [info["path"] for iid, info in library.items()
-                     if isinstance(info, dict) and info.get("path")
-                     and not info.get("video_codec") and not info.get("quality")]
+        new_tasks.append(task_type)
 
-    # Batch sizing at 50 per task
+    sub_lang = _load_key("sub_language") or "eng"
+    needs_size, needs_hash, needs_subs, needs_quality = [], [], [], []
+    needs_validate, needs_ocr, dupe_groups = [], [], []
+
+    # ── Collect all needs across dict and list entries ──
+    for iid, val in library.items():
+        if iid.startswith("_"): continue
+        entries = val if isinstance(val, list) else [val] if isinstance(val, dict) else []
+        t = titles.get(iid, {})
+        try:
+            expected_runtime = int(t.get("runtime", 0) or 0)
+        except (ValueError, TypeError):
+            expected_runtime = 0
+
+        for info in entries:
+            if not isinstance(info, dict) or not info.get("path"): continue
+            path = info["path"]
+            # Disk lane: sizing
+            if not info.get("file_size") and not info.get("size"):
+                needs_size.append((iid, path))
+            # Disk lane: hashing (requires size first)
+            if info.get("file_size") and not info.get("file_hash"):
+                needs_hash.append((iid, path))
+            # Disk lane: quality/mediainfo
+            if not info.get("video_codec") and not info.get("quality"):
+                needs_quality.append(path)
+            # API lane: subtitles
+            if not info.get("subtitles") and not info.get("suggested_sub"):
+                needs_subs.append((iid, path))
+            # Disk lane: runtime validation (only for sized files with expected runtime)
+            if expected_runtime and info.get("file_size") and not info.get("runtime_verified"):
+                try:
+                    actual = int(info.get("runtime", 0) or 0)
+                except (ValueError, TypeError):
+                    actual = 0
+                # Flag if runtime differs by >15 min (skip IFO/kodi bogus values >10000)
+                if actual and actual < 1000 and abs(actual - expected_runtime) > 15:
+                    needs_validate.append({"path": path, "imdb_id": iid, "expected_runtime": expected_runtime})
+
+        # Duplicate detection: multi-copy titles that are sized but not yet compared
+        if isinstance(val, list) and len(val) >= 2:
+            sized_entries = [e for e in val if isinstance(e, dict) and e.get("file_size") and e.get("path")]
+            if len(sized_entries) >= 2 and not any(e.get("dupe_checked") for e in val):
+                dupe_groups.append((iid, [e["path"] for e in sized_entries]))
+
+    # ── Title mismatches needing OCR identification ──
+    mismatches = find_mismatches(user)
+    for m in mismatches:
+        info = library.get(m["iid"])
+        if isinstance(info, dict) and info.get("path") and not info.get("ocr_checked"):
+            needs_ocr.append({"path": info["path"], "imdb_id": m["iid"]})
+
+    # ── Transcoding candidates: DVD_TS folders or high-bitrate files ──
+    transcode_candidates = []
+    for iid, val in library.items():
+        if iid.startswith("_"): continue
+        entries = val if isinstance(val, list) else [val] if isinstance(val, dict) else []
+        for info in entries:
+            if not isinstance(info, dict) or not info.get("path"): continue
+            path = info["path"]
+            # DVD_TS folders → transcode to MKV
+            if "VIDEO_TS" in path or "DVD_TS" in path:
+                if not info.get("transcoded"):
+                    folder = _re.sub(r"/VIDEO_TS.*$", "", path)
+                    transcode_candidates.append(folder)
+
+    # ── Enqueue tasks by lane ──
+
+    # DISK LANE: sizing (batches of 50)
     for i in range(0, len(needs_size), 50):
         batch = needs_size[i:i+50]
-        _add("size_files", {"paths": [p for _,p in batch], "imdb_ids": [i for i,_ in batch]}, PRIORITY_QUALITY)
-        count += 1
-    # Hash dupes
+        _add("size_files", {"paths": [p for _, p in batch], "imdb_ids": [iid for iid, _ in batch]}, PRIORITY_QUALITY)
+
+    # DISK LANE: hashing (batches of 50)
     for i in range(0, len(needs_hash), 50):
         batch = needs_hash[i:i+50]
-        _add("hash_files", {"paths": [p for _,p in batch]}, PRIORITY_QUALITY)
-        count += 1
-    # Subs - interleave with other tasks
-    for iid, path in needs_subs:
-        _add("download_subs", {"imdb_id": iid, "path": path, "language": sub_lang, "os_user": _load_key("opensubs_user"), "os_pass": _load_key("opensubs_pass")}, PRIORITY_SUBS)
-        count += 1
-    # Quality
+        _add("hash_files", {"paths": [p for _, p in batch]}, PRIORITY_QUALITY)
+
+    # DISK LANE: quality/mediainfo (batches of 50)
     for i in range(0, len(needs_quality), 50):
         _add("check_quality", {"paths": needs_quality[i:i+50]}, PRIORITY_QUALITY)
-        count += 1
 
-    count = len(new_tasks)
+    # DISK LANE: runtime validation (batches of 20, lower priority)
+    for i in range(0, min(len(needs_validate), 200), 20):
+        _add("validate_match", {"items": needs_validate[i:i+20]}, PRIORITY_QUALITY)
+
+    # DISK LANE: duplicate detection (batches of 10 groups)
+    for i in range(0, min(len(dupe_groups), 100), 10):
+        batch = dupe_groups[i:i+10]
+        all_paths = []
+        for _, paths in batch:
+            all_paths.extend(paths)
+        _add("find_duplicates", {"paths": all_paths}, PRIORITY_DUPES)
+
+    # CPU LANE: transcoding (one per task, capped at 5 per run)
+    seen_transcode = set()
+    for folder in transcode_candidates[:5]:
+        if folder not in seen_transcode:
+            seen_transcode.add(folder)
+            _add("transcode_dvd", {"path": folder, "crf": 20, "preset": "medium"}, PRIORITY_QUALITY)
+
+    # API LANE: subtitles (capped at 50 per run)
+    for iid, path in needs_subs[:50]:
+        _add("download_subs", {"imdb_id": iid, "path": path, "language": sub_lang,
+             "os_user": _load_key("opensubs_user"), "os_pass": _load_key("opensubs_pass")}, PRIORITY_SUBS)
+
+    # API LANE: OCR identification for title mismatches (capped at 5, expensive)
+    for item in needs_ocr[:5]:
+        _add("identify_movie", {"path": item["path"], "imdb_id": item["imdb_id"]}, PRIORITY_SUBS)
+
     # Scan incoming folder if configured
     incoming = _load_key("incoming_path")
     if incoming:
@@ -558,7 +673,7 @@ def generate_tasks_for_library(user):
             "        if f.lower().endswith(('.mkv','.mp4','.avi','.m4v')):\n"
             "            fp = os.path.join(root, f)\n"
             "            sz = os.path.getsize(fp) if os.path.isfile(fp) else 0\n"
-            "            if sz > 50000000:\n"  # >50MB only
+            "            if sz > 50000000:\n"
             "                nfs = fp.replace(os.sep, '/')\n"
             "                for dst2, src2 in config.get('_path_mappings', {}).items():\n"
             "                    if nfs.startswith(dst2): nfs = src2 + nfs[len(dst2):]\n"
@@ -568,10 +683,12 @@ def generate_tasks_for_library(user):
             "log('[incoming] Found ' + str(len(found)) + ' files')\n"
         )
         _add("exec_code", {"code": code, "description": "Scan incoming folder"}, PRIORITY_QUALITY)
-        count += 1
 
-    print(f"Generated {count} tasks for {user}: {len(needs_size)} sizing, {len(needs_hash)} hashing, {len(needs_subs)} subs, {len(needs_quality)} quality")
-    return count
+    from collections import Counter
+    counts = Counter(new_tasks)
+    summary = ", ".join(f"{n} {t}" for t, n in counts.most_common())
+    print(f"Generated {len(new_tasks)} tasks for {user}: {summary}")
+    return len(new_tasks)
 
 PRIORITY_HUMAN = -1   # User clicked something — do it NOW
 PRIORITY_DUPES = 0    # Duplicate detection
@@ -639,6 +756,33 @@ def _apply_task_result(task, result):
     """Update library with task results."""
     ttype = task["type"]
     params = task.get("params", {})
+    # Handle tasks that don't use the standard "data" format
+    if ttype == "identify_movie":
+        db = get_db()
+        path = result.get("path", "")
+        # Check if this was a mismatch — flag truncated files for human review
+        dur_row = db.execute("SELECT result FROM verification WHERE path=? AND step='duration'", (path,)).fetchone()
+        status = "done"
+        if dur_row:
+            dur = json.loads(dur_row[0])
+            actual = dur.get("actual_min", 0)
+            expected = dur.get("expected_min", 0)
+            if actual < expected * 0.5:
+                status = "truncated"  # Less than half expected = definitely broken
+            elif actual < expected - 15:
+                status = "review_needed"
+        db.execute("""INSERT OR REPLACE INTO verification (path, imdb_id, step, status, result, version, ts)
+            VALUES (?, ?, 'identify', ?, ?, ?, ?)""",
+            (path, "", status, json.dumps(result), VERIFY_VERSION, time.strftime("%Y-%m-%dT%H:%M:%S")))
+        db.commit()
+        # Queue NFO write to persist OCR data alongside the file
+        if path and result.get("frames_ocr", 0) > 0:
+            db_enqueue_task("write_nfo_verification", {"path": path, "ocr_data": result, "status": status}, 35)
+        print(f"[tasks] Stored OCR result [{status}] for {path[-40:]}")
+        return
+    if ttype == "validate_match":
+        _apply_verification_result(result)
+        return
     data = result.get("data", {})
     if not data:
         print(f"[apply] No data for {ttype}")
@@ -666,10 +810,40 @@ def _apply_task_result(task, result):
             updated = False
         elif ttype == "check_quality":
             for path, info in data.items():
-                for iid, lib_info in library.items():
-                    if lib_info.get("path") == path:
-                        lib_info.update({k: v for k, v in info.items() if v})
-                        updated = True
+                # Normalize path for matching (strip nfs:// prefix)
+                norm_path = path
+                if "nfs://" in norm_path:
+                    import re as _re
+                    m = _re.match(r"nfs://[^/]+(/volume1)?(/.+)", norm_path)
+                    if m: norm_path = m.group(2)
+                for iid, lib_entry in library.items():
+                    if iid.startswith("_"): continue
+                    entries = lib_entry if isinstance(lib_entry, list) else [lib_entry] if isinstance(lib_entry, dict) else []
+                    for e in entries:
+                        if not isinstance(e, dict): continue
+                        ep = e.get("path", "")
+                        # Normalize library path too
+                        ep_norm = ep
+                        if "nfs://" in ep_norm:
+                            m2 = _re.match(r"nfs://[^/]+(/volume1)?(/.+)", ep_norm)
+                            if m2: ep_norm = m2.group(2)
+                        if ep_norm == norm_path or ep == path or norm_path.endswith(ep_norm.split("/")[-1] if "/" in ep_norm else ep_norm):
+                            # Flatten video/audio into top-level for UI access
+                            if info.get("video"):
+                                e["video_codec"] = info["video"].get("codec", "")
+                                e["video_width"] = info["video"].get("width", 0)
+                                e["video_height"] = info["video"].get("height", 0)
+                                e["hdr"] = info["video"].get("hdr", "no")
+                            if info.get("audio") and isinstance(info["audio"], list):
+                                e["audio"] = info["audio"]
+                            if info.get("bpp"): e["bpp"] = info["bpp"]
+                            if info.get("quality_verdict"): e["quality_verdict"] = info["quality_verdict"]
+                            if info.get("container"): e["container"] = info["container"]
+                            if info.get("bitrate"): e["bitrate"] = info["bitrate"]
+                            if info.get("duration"): e["runtime"] = info["duration"] // 60
+                            updated = True
+                            break
+            return  # Skip the "no data" check below
         elif (ttype == "scan_incoming" or (ttype == "exec_code" and data.get("files") is not None)):
             # Incoming folder scan results
             incoming_file = os.path.join(DATA_DIR, "users", user, "incoming.json") if user != "default" else None
@@ -1030,7 +1204,7 @@ def tmdb_enrich(imdb_id):
     if not TMDB_KEY: return {}
     data = api_get(f"https://api.themoviedb.org/3/find/{imdb_id}?api_key={TMDB_KEY}&external_source=imdb_id")
     if not data:
-        print(f"[apply] No data for {ttype}")
+        print(f"[tmdb] No data for {imdb_id}")
         return {}
     movies, shows = data.get("movie_results") or [], data.get("tv_results") or []
     if not movies and not shows: return {}
@@ -1040,6 +1214,7 @@ def tmdb_enrich(imdb_id):
     result = {
         "poster": f"https://image.tmdb.org/t/p/w185{r['poster_path']}" if r.get("poster_path") else "",
         "overview": r.get("overview", ""), "tmdb_rating": r.get("vote_average"), "tmdb_id": tmdb_id,
+        "original_language": r.get("original_language", ""),
     }
     # Watch providers
     wp = api_get(f"https://api.themoviedb.org/3/{kind}/{tmdb_id}/watch/providers?api_key={TMDB_KEY}")
@@ -1162,6 +1337,13 @@ def _normalize(s):
     s = _re.sub(r"\b\d{1,3}\b", "", s)
     s = _re.sub(r"\s+", " ", s).strip()
     return s
+
+import re as _re_mod
+def _canonical_path(path):
+    """Normalize library path: strip protocol/host/mount prefix, start at Movies/ or TVShows/."""
+    p = path.replace("\\", "/").rstrip("/")
+    m = _re_mod.search(r"(Movies|TVShows)(/.*)?$", p)
+    return m.group(0) if m else p
 
 def _extract_title_from_path(path):
     parts = path.replace("\\", "/").split("/")
@@ -1677,7 +1859,7 @@ def opensubs_search(imdb_id, languages=None, file_hash=None, file_size=None):
     data = api_get(f"{OPENSUBS_API}/subtitles?{params}",
                    {"Api-Key": api_key, "User-Agent": "CineCross v1.0"})
     if not data:
-        print(f"[apply] No data for {ttype}")
+        print(f"[opensubs] No data for {imdb_id}")
         return []
     results = []
     for s in data.get("data", []):
@@ -1859,7 +2041,7 @@ def tastedive_similar(imdb_id, title):
     q = urllib.parse.quote(title)
     data = api_get(f"https://tastedive.com/api/similar?q={q}&type=movie&limit=5&info=1")
     if not data:
-        print(f"[apply] No data for {ttype}")
+        print(f"[tastedive] No data")
         return []
     results = [{"title": r.get("Name",""), "type": r.get("Type",""), "description": r.get("wTeaser","")} for r in data.get("Similar",{}).get("Results",[])]
     # Cache
@@ -2738,7 +2920,7 @@ def render_ratings(user):
     if leaving:
         lrows = ""
         for l in leaving[:20]:
-            poster = '<img src="' + l.get("poster","") + '" height=40>' if l.get("poster") else ""
+            poster = '<img src="<img src="' + l.get("poster","") + '" height=40 loading="lazy">" height=40 loading="lazy">' if l.get("poster") else ""
             lost = ", ".join(l["lost_from"])
             still = ", ".join(l["still_on"]) or "nowhere"
             lrows += "<tr><td>" + poster + "</td><td>" + l["title"] + " (" + l["year"] + ")</td><td>Left: " + lost + "</td><td>Still on: " + still + "</td></tr>"
@@ -2779,12 +2961,12 @@ def render_ratings(user):
     return page_head(f"{user}'s Ratings ({len(ratings)})") + nav_bar("ratings", user) + render_ratings_nav(user, "ratings") + f"""<div class="page">
 {job_banner}
 <h2>🎬 {user}'s Ratings — {len(ratings)} titles</h2>
-<div class="bar"><input id="s" onkeyup="f()" placeholder="Search..." style="width:220px">
-<select id="g" onchange="f()"><option value="">All genres</option>{genre_opts}</select>
-<select id="mr" onchange="f()"><option value="">Min ★</option>{''.join(f'<option value="{i}">{i}+</option>' for i in range(10,0,-1))}</select>
-<select id="dec" onchange="f()"><option value="">All decades</option><option value="2020">2020s</option><option value="2010">2010s</option><option value="2000">2000s</option><option value="1990">1990s</option><option value="1980">1980s</option><option value="1970">1970s</option><option value="1960">1960s</option><option value="1950">1950s</option></select>
-<select id="st" onchange="f()"><option value="">All streams</option>{"".join('<option value="' + p + '">' + PROVIDER_ICONS.get(p,"▪") + " " + p + '</option>' for p in sorted(user_provs))}</select>
-<select id="vs" onchange="f()"><option value="">All sources</option><option value="bluray">💿 Blu-ray</option><option value="dvd">📀 DVD</option><option value="webrip">🌐 Web</option><option value="remux">💎 Remux</option></select>
+<div class="bar"><input id="s" aria-label="Search titles" onkeyup="f()" placeholder="Search..." style="width:220px">
+<select id="g" name="genre" aria-label="Filter by genre" onchange="f();syncFilterURL()"><option value="">All genres</option>{genre_opts}</select>
+<select id="mr" name="rating" aria-label="Minimum rating" onchange="f();syncFilterURL()"><option value="">Min ★</option>{''.join(f'<option value="{i}">{i}+</option>' for i in range(10,0,-1))}</select>
+<select id="dec" name="decade" aria-label="Filter by decade" onchange="f();syncFilterURL()"><option value="">All decades</option><option value="2020">2020s</option><option value="2010">2010s</option><option value="2000">2000s</option><option value="1990">1990s</option><option value="1980">1980s</option><option value="1970">1970s</option><option value="1960">1960s</option><option value="1950">1950s</option></select>
+<select id="st" name="stream" aria-label="Filter by streaming" onchange="f();syncFilterURL()"><option value="">All streams</option>{"".join('<option value="' + p + '">' + PROVIDER_ICONS.get(p,"▪") + " " + p + '</option>' for p in sorted(user_provs))}</select>
+<select id="vs" name="source" aria-label="Filter by source" onchange="f();syncFilterURL()"><option value="">All sources</option><option value="bluray">💿 Blu-ray</option><option value="dvd">📀 DVD</option><option value="webrip">🌐 Web</option><option value="remux">💎 Remux</option></select>
 <button onclick="document.body.classList.toggle('light');localStorage.setItem('theme',document.body.classList.contains('light')?'light':'dark')" style="background:none;border:1px solid #444;border-radius:4px;cursor:pointer;padding:2px 8px;color:var(--fg)" title="Toggle dark/light theme">🌓</button></div>
 <div style="margin-bottom:8px;font-size:.9em;color:var(--muted)">Mood: <a href="{BASE}/mood/{user}/light" title="Light">☀️</a> <a href="{BASE}/mood/{user}/intense" title="Intense">🔥</a> <a href="{BASE}/mood/{user}/funny" title="Funny">😂</a> <a href="{BASE}/mood/{user}/mind-bending" title="Mind-Bending">🌀</a> <a href="{BASE}/mood/{user}/dark" title="Dark">🌑</a> <a href="{BASE}/mood/{user}/epic" title="Epic">⚔️</a> <a href="{BASE}/mood/{user}/romantic" title="Romantic">💕</a> <a href="{BASE}/mood/{user}/scary" title="Scary">👻</a> <a href="{BASE}/mood/{user}/inspiring" title="Inspiring">✨</a></div>
 <table><thead><tr><th></th><th onclick="sortTable(1)">Title</th><th onclick="sortTable(2)">Year</th><th onclick="sortTable(3)">★</th><th onclick="sortTable(4)">IMDB</th><th>Scores</th><th>Stream</th><th onclick="sortTable(7)">Genres</th><th onclick="sortTable(8)">Rated</th><th>💾</th></tr></thead>
@@ -2822,7 +3004,7 @@ def render_recs(user):
         cards = ""
         for iid, t, score in items:
             poster_url = t.get("poster", "")
-            poster_img = '<img src="' + poster_url + '" loading="lazy">' if poster_url else '<div style="width:100%;aspect-ratio:2/3;background:var(--border);display:flex;align-items:center;justify-content:center;font-size:.7em;color:var(--muted)">No poster</div>'
+            poster_img = '<img src="' + poster_url + '" loading="lazy" alt="' + t.get("title","").replace('"','') + '">' if poster_url else '<div style="width:100%;aspect-ratio:2/3;background:var(--border);display:flex;align-items:center;justify-content:center;font-size:.7em;color:var(--muted)">No poster</div>'
             provs = " ".join(PROVIDER_ICONS.get(p,"") for p in t.get("providers",[]) if p in get_user_active_providers(user))
             imdb_r = str(t.get("imdb_rating",""))
             wl = '<a href="' + BASE + '/watchlist/add/' + iid + '" style="text-decoration:none">🤍</a>' if iid not in watchlist else '<a href="' + BASE + '/watchlist/rm/' + iid + '" style="text-decoration:none">❤️</a>'
@@ -3022,6 +3204,82 @@ def analyze_show(show_name, seasons_data):
     return analysis
 
 
+def render_verification(user):
+    """Verification results page — shows duration mismatches and identification results."""
+    db = get_db()
+    db.execute("""CREATE TABLE IF NOT EXISTS verification (
+        path TEXT, step TEXT, imdb_id TEXT,
+        status TEXT, result TEXT, version INTEGER DEFAULT 1, ts TEXT, PRIMARY KEY (path, step))""")
+    titles = load_titles()
+    
+    # Get all verification results
+    rows = db.execute("SELECT path, imdb_id, step, status, result, ts FROM verification ORDER BY status, ts DESC").fetchall()
+    
+    # Stats
+    total = len(rows)
+    mismatches = [r for r in rows if r[3] == "mismatch"]
+    variants = [r for r in rows if r[3] == "possible_variant"]
+    ok = [r for r in rows if r[3] == "ok"]
+    identified = [r for r in rows if r[2] == "identify"]
+    
+    html = page_head(f"Verification - {user}")
+    html += nav_bar("library", user)
+    html += render_library_nav(user, "verify")
+    html += '<div class="page">'
+    html += '<h2>🔍 File Verification</h2>'
+    html += f'<div class="grid"><div class="card"><b>Checked</b><br><span style="font-size:2em">{total}</span></div>'
+    html += f'<div class="card"><b>OK</b><br><span style="font-size:2em;color:#2ecc71">{len(ok)}</span></div>'
+    html += f'<div class="card"><b>Variants</b><br><span style="font-size:2em;color:#f39c12">{len(variants)}</span></div>'
+    html += f'<div class="card" style="border:1px solid #d72"><b>Mismatches</b><br><span style="font-size:2em;color:#e74c3c">{len(mismatches)}</span></div>'
+    html += f'<div class="card"><b>Identified (OCR)</b><br><span style="font-size:2em;color:#4fc3f7">{len(identified)}</span></div></div>'
+    
+    # Show mismatches first
+    if mismatches:
+        html += '<h3 style="color:#e74c3c">❌ Duration Mismatches (>15 min difference)</h3>'
+        html += '<table><thead><tr><th>Title</th><th>Actual</th><th>Expected</th><th>Diff</th><th>Path</th><th>Action</th></tr></thead><tbody>'
+        for path, iid, step, status, result_json, ts in mismatches:
+            r = json.loads(result_json) if result_json else {}
+            t = titles.get(iid, {})
+            title = t.get("title", "?")
+            year = t.get("year", "")
+            html += f'<tr><td><a href="{BASE}/title/{iid}">{title}</a> ({year})</td>'
+            html += f'<td>{r.get("actual_min",0):.0f} min</td><td>{r.get("expected_min",0)} min</td>'
+            html += f'<td style="color:#e74c3c;font-weight:bold">+{r.get("diff_min",0):.0f}</td>'
+            html += f'<td style="font-size:.75em;color:var(--muted)">{path.split("/")[-2]}</td>'
+            html += f'<td><a href="{BASE}/verify/{user}?identify={path}" class="btn">🔍 OCR</a></td></tr>'
+        html += '</tbody></table>'
+    
+    # Show variants
+    if variants:
+        html += '<h3 style="color:#f39c12">🟡 Possible Variants (5-15 min difference)</h3>'
+        html += '<table><thead><tr><th>Title</th><th>Actual</th><th>Expected</th><th>Diff</th><th>Note</th></tr></thead><tbody>'
+        for path, iid, step, status, result_json, ts in variants[:20]:
+            r = json.loads(result_json) if result_json else {}
+            t = titles.get(iid, {})
+            html += f'<tr><td><a href="{BASE}/title/{iid}">{t.get("title","?")}</a> ({t.get("year","")})</td>'
+            html += f'<td>{r.get("actual_min",0):.0f}</td><td>{r.get("expected_min",0)}</td>'
+            html += f'<td style="color:#f39c12">{r.get("diff_min",0):.0f}</td>'
+            html += f'<td style="font-size:.8em;color:var(--muted)">Likely extended/director\'s cut</td></tr>'
+        html += '</tbody></table>'
+    
+    # Show OCR identification results
+    if identified:
+        html += '<h3 style="color:#4fc3f7">🔬 OCR Identification Results</h3>'
+        for path, iid, step, status, result_json, ts in identified[:10]:
+            r = json.loads(result_json) if result_json else {}
+            html += f'<div class="card" style="margin-bottom:10px"><b>{r.get("path","?").split("/")[-1][:50]}</b> ({r.get("duration_min",0):.0f} min)'
+            if r.get("directors"): html += f'<br>Directors: {", ".join(r["directors"][:3])}'
+            if r.get("names_found"): html += f'<br>Names: {", ".join(r["names_found"][:10])}'
+            html += f'<br><small style="color:var(--muted)">{ts}</small></div>'
+    
+    if not rows:
+        html += '<p style="color:var(--muted)">No files verified yet. The pipeline runs every 5 minutes and checks 20 files per cycle.</p>'
+    
+    html += '</div>'
+    html += SHARED_JS + page_foot()
+    return html
+
+
 def render_tvshows(user):
     """TV Shows screen: episodes grouped by show/season, quality, duplicates."""
     library = load_user_tmm(user)
@@ -3211,7 +3469,7 @@ def render_library_nav(user, active="library"):
         ("tvshows", "📺 TV Shows", f"{BASE}/tvshows/{user}"),
         ("scraper", "🔍 Scraper", f"{BASE}/scraper/{user}"),
         ("org", "🗂 Organize", f"{BASE}/library/org/{user}"),
-        ("confirm", "⚠ Confirm", f"{BASE}/confirm/{user}"), ("health", "🏥 Health", f"{BASE}/health/{user}"), ("incoming", "📥 Incoming", f"{BASE}/incoming/{user}"),
+        ("confirm", "⚠ Confirm", f"{BASE}/confirm/{user}"), ("verify", "🔬 Verify", f"{BASE}/verify/{user}"), ("health", "🏥 Health", f"{BASE}/health/{user}"), ("incoming", "📥 Incoming", f"{BASE}/incoming/{user}"),
     ], active)
 
 def _merge_agent_data(library, user):
@@ -3281,7 +3539,8 @@ def render_library(user):
     dupes.sort(key=lambda x: len(x[1]), reverse=True)
 
     # Build duplicate cards (column layout)
-    dupe_cards = ""
+    dupe_cards = '<form id="batch-delete" method="POST" action="' + BASE + '/library/' + user + '/batch-delete"><input type="hidden" name="confirm" value="yes_delete">'
+    dupe_cards += '<div style="margin-bottom:12px"><button type="submit" class="btn btn-primary" onclick="return confirm(\'Delete \'+document.querySelectorAll(\\\'input[name=paths]:checked\\\').length+\\\' selected files?\\\')">🗑 Delete Selected</button> <span style="color:var(--muted);font-size:.85em">Check files to remove, then click delete</span></div>'
     codec_map = {"hevc": "x265/HEVC", "h265": "x265/HEVC", "h264": "x264/AVC", "avc": "x264/AVC",
                  "mpeg2": "MPEG-2", "mpeg2video": "MPEG-2", "av1": "AV1", "vp9": "VP9", "vc1": "VC-1"}
     for name, entries in dupes[:50]:
@@ -3350,11 +3609,12 @@ def render_library(user):
             dupe_cards += '<div style="font-size:.85em;color:#888">Subs: ' + sub_str + '</div>'
             dupe_cards += badge
             dupe_cards += '<div style="margin-top:6px">' + open_btn + '</div>'
-
+            dupe_cards += '<label style="display:flex;align-items:center;gap:4px;margin-top:6px;cursor:pointer"><input type="checkbox" name="paths" value="' + path + '"> <span style="font-size:.75em;color:#f90">Select for deletion</span></label>'
             dupe_cards += '<div style="font-size:.75em;color:#8ab;margin-top:4px;word-break:break-all;font-family:monospace">' + path.split("/")[-2] + '/' + path.split("/")[-1] + '</div>'
             dupe_cards += '</div>'
 
         dupe_cards += '</div></div>'
+    dupe_cards += '</form>'
 
     # Quality bars
     q_bars = ""
@@ -3371,6 +3631,7 @@ def render_library(user):
     html += render_library_nav(user, "library")
     html += '<div class="page">'
     html += '<h2>📚 Library Curation</h2>'
+    html += '<div class="bpp-legend"><span style="color:#e74c3c">● Starved</span><span style="color:#f39c12">● Low</span><span style="color:#f1c40f">● OK</span><span style="color:#2ecc71">● Good</span> <span style="color:var(--muted)">(quality dot = bits-per-pixel vs resolution)</span></div>'
 
     # Comprehensive status
     eps = library.get("_episodes", {})
@@ -3754,7 +4015,7 @@ def render_catalog():
     if leaving:
         lrows = ""
         for l in leaving[:20]:
-            poster = '<img src="' + l.get("poster","") + '" height=40>' if l.get("poster") else ""
+            poster = '<img src="<img src="' + l.get("poster","") + '" height=40 loading="lazy">" height=40 loading="lazy">' if l.get("poster") else ""
             lost = ", ".join(l["lost_from"])
             still = ", ".join(l["still_on"]) or "nowhere"
             lrows += "<tr><td>" + poster + "</td><td>" + l["title"] + " (" + l["year"] + ")</td><td>Left: " + lost + "</td><td>Still on: " + still + "</td></tr>"
@@ -3832,6 +4093,94 @@ class H(BaseHTTPRequestHandler):
             return
         if p == '/api':
             self._json({'titles': len(load_titles()), 'users': {u: len(load_user_ratings(u)) for u in list_users()}})
+            return
+        if p == '/api/search':
+            q = qs.get('q', [''])[0]
+            user = qs.get('user', [''])[0] or (list_users() or [''])[0]
+            limit = int(qs.get('limit', ['20'])[0])
+            titles = load_titles()
+            ratings = load_user_ratings(user) if user else {}
+            library = load_user_tmm(user) if user else {}
+            results = []
+            if q:
+                ids = search_fts(q, limit)
+                if not ids:
+                    ql = q.lower()
+                    ids = [iid for iid, t in titles.items() if ql in (t.get("title","")+" "+t.get("originalTitle","")).lower()][:limit]
+                for iid in ids:
+                    t = titles.get(iid, {})
+                    r = {"id": iid, "title": t.get("title",""), "year": t.get("year",""), "type": t.get("type",""),
+                         "genres": t.get("genres",""), "imdb_rating": t.get("imdb_rating",""), "rt_score": t.get("rt_score",""),
+                         "overview": t.get("overview","")[:200]}
+                    if iid in ratings: r["user_rating"] = ratings[iid].get("rating")
+                    if iid in library: r["in_library"] = True
+                    results.append(r)
+            self._json({"results": results, "count": len(results)})
+            return
+        if p == '/api/title':
+            iid = qs.get('id', [''])[0]
+            titles = load_titles()
+            t = titles.get(iid, {})
+            if not t:
+                self._json({"error": "not found"})
+                return
+            user = qs.get('user', [''])[0] or (list_users() or [''])[0]
+            ratings = load_user_ratings(user) if user else {}
+            library = load_user_tmm(user) if user else {}
+            info = dict(t)
+            info["id"] = iid
+            if iid in ratings: info["user_rating"] = ratings[iid].get("rating")
+            if iid in library:
+                lib_entry = library[iid]
+                if isinstance(lib_entry, list):
+                    info["library"] = [{"path": e.get("path",""), "quality": e.get("quality",""), "file_size": e.get("file_size",0)} for e in lib_entry]
+                elif isinstance(lib_entry, dict):
+                    info["library"] = [{"path": lib_entry.get("path",""), "quality": lib_entry.get("quality",""), "file_size": lib_entry.get("file_size",0)}]
+            self._json(info)
+            return
+        if p == '/api/recommendations':
+            user = qs.get('user', [''])[0] or (list_users() or [''])[0]
+            n = int(qs.get('n', ['20'])[0])
+            titles = load_titles()
+            recs = get_5cat_recommendations(user, titles, n_per_cat=n//5 or 4)
+            out = {}
+            for cat, items in recs.items():
+                out[cat] = [{"id": iid, "title": titles.get(iid,{}).get("title",""), "year": titles.get(iid,{}).get("year",""),
+                             "score": round(sc, 2), "genres": titles.get(iid,{}).get("genres","")} for iid, sc in items]
+            self._json(out)
+            return
+        if p == '/api/stats':
+            user = qs.get('user', [''])[0] or (list_users() or [''])[0]
+            titles = load_titles()
+            ratings = load_user_ratings(user)
+            library = load_user_tmm(user)
+            genres = {}; decades = {}; quality = {}
+            for iid, r in ratings.items():
+                t = titles.get(iid, {})
+                for g in (t.get("genres","") or "").split(","): 
+                    g = g.strip()
+                    if g: genres[g] = genres.get(g, 0) + 1
+                y = t.get("year","")
+                if y: decades[y[:3]+"0s"] = decades.get(y[:3]+"0s", 0) + 1
+            for iid, info in library.items():
+                if iid.startswith("_"): continue
+                entries = info if isinstance(info, list) else [info] if isinstance(info, dict) else []
+                for e in entries:
+                    q = e.get("quality","")
+                    if q: quality[q+"p" if q.isdigit() else q] = quality.get(q+"p" if q.isdigit() else q, 0) + 1
+            self._json({"rated": len(ratings), "library": len([k for k in library if not k.startswith("_")]),
+                        "genres": dict(sorted(genres.items(), key=lambda x:-x[1])[:15]),
+                        "decades": dict(sorted(decades.items())), "quality": quality})
+            return
+        if p == '/api/queue_task':
+            ttype = qs.get('type', [''])[0]
+            params = json.loads(qs.get('params', ['{}'])[0])
+            if ttype:
+                tid = f"task_{int(time.time()*1000)}_{id(self)%1000}"
+                db_enqueue_task(ttype, params, 0)
+                self._json({"queued": tid})
+            else:
+                self._json({"error": "missing type"})
             return
 
 
@@ -4667,7 +5016,7 @@ td{{padding:8px;border-bottom:1px solid #333}}a{{color:#4fc3f7;text-decoration:n
                     title = r.get("title") or r.get("name", "")
                     year = (r.get("release_date") or r.get("first_air_date") or "")[:4]
                     poster = f"https://image.tmdb.org/t/p/w92{r['poster_path']}" if r.get("poster_path") else ""
-                    matches.append(f'<a href="{BASE}/scraper-apply/{u}/{iid}/{r["id"]}/{r.get("media_type","movie")}" style="display:flex;gap:8px;align-items:center;padding:8px;background:var(--card);border-radius:6px;margin:4px 0;text-decoration:none;color:var(--fg)"><img src="{poster}" height="60">{title} ({year})</a>')
+                    matches.append(f'<a href="{BASE}/scraper-apply/{u}/{iid}/{r["id"]}/{r.get("media_type","movie")}" style="display:flex;gap:8px;align-items:center;padding:8px;background:var(--card);border-radius:6px;margin:4px 0;text-decoration:none;color:var(--fg)"><img src="{poster}" height="60" loading="lazy">{title} ({year})</a>')
                 self._page(page_head("Match") + nav_bar("library", u) + '<div class="page"><h3>Select match</h3>' + "".join(matches) + f'<p><a href="{BASE}/scraper/{u}">← Back</a></p></div>' + page_foot(), "library", u)
             else:
                 self._redirect(f"{BASE}/scraper/{u}")
@@ -4967,6 +5316,24 @@ button{{padding:12px 30px;background:#4fc3f7;border:none;border-radius:8px;curso
                 if lib_info.get("quality") or lib_info.get("video_height"): local_html += f' · {lib_info.get("video_height") or lib_info.get("quality","")}p'
                 if lib_info.get("video_codec"): local_html += f' · {lib_info.get("video_codec","")}'
                 if lib_info.get("file_size"): local_html += f' · {int(lib_info["file_size"])/(1024**3):.1f} GB'
+                # BPP quality indicator with color
+                bpp = lib_info.get("bpp", 0)
+                if not bpp and lib_info.get("file_size") and lib_info.get("video_height") and lib_info.get("video_width"):
+                    # Compute BPP on the fly
+                    w, h = lib_info.get("video_width", 1920), lib_info.get("video_height", 1080)
+                    runtime_s = lib_info.get("runtime", 0)
+                    if not runtime_s and iid in titles:
+                        runtime_s = int(titles[iid].get("runtime", 0) or 0) * 60
+                    if runtime_s > 0:
+                        vbr = (lib_info["file_size"] * 8 * 0.9) / runtime_s  # 90% video estimate
+                        bpp = vbr / (w * h * 24)
+                if bpp:
+                    # Color: red (<0.04) -> orange (0.04-0.07) -> yellow (0.07-0.1) -> green (>0.1)
+                    if bpp < 0.04: bpp_color = "#e74c3c"
+                    elif bpp < 0.07: bpp_color = "#f39c12"
+                    elif bpp < 0.12: bpp_color = "#f1c40f"
+                    else: bpp_color = "#2ecc71"
+                    local_html += f' · <span style="color:{bpp_color};font-weight:bold" title="Bits per pixel: {bpp:.3f}">●</span>'
                 local_html += '</p>'
                 if lib_info.get("audio"):
                     audio = lib_info["audio"]
@@ -5068,6 +5435,10 @@ td{{padding:8px;border-bottom:1px solid #333}}a{{color:#4fc3f7}}</style></head>
         elif p.startswith("/tvshows/"):
             u = parts[-1] if len(parts) > 1 else self._user(parts)
             self._page(render_tvshows(u), "library", u)
+            return
+        elif p.startswith("/verify/"):
+            u = parts[-1] if len(parts) > 1 else self._user(parts)
+            self._page(render_verification(u), "library", u)
             return
         elif p.startswith("/library/"):
             u = parts[-1] if len(parts) > 1 else self._user(parts)
@@ -5268,6 +5639,21 @@ button{{padding:10px 20px;background:#4fc3f7;border:none;border-radius:6px;curso
             except: pass
             self._json({"status": "ok"})
             return
+        # Batch delete from library duplicates page
+        if "/batch-delete" in self.path:
+            import urllib.parse as _up
+            form_data = _up.parse_qs(body.decode())
+            paths = form_data.get("paths", [])
+            confirm = form_data.get("confirm", [""])[0]
+            user = parts[1] if len(parts) > 1 else ""
+            if confirm == "yes_delete" and paths:
+                # Queue delete tasks for each path
+                for path in paths:
+                    tid = f"del_{int(time.time()*1000)}_{hash(path)%10000}"
+                    db_enqueue_task("delete_file", {"path": path, "confirm": "yes_delete"}, 1)
+                print(f"[batch-delete] Queued {len(paths)} deletions for {user}")
+            self._redirect(f"{BASE}/library/{user}")
+            return
         # Library push - handle early
         if self.path.startswith("/api/library/"):
             user = parts[-1]
@@ -5280,19 +5666,19 @@ button{{padding:10px 20px;background:#4fc3f7;border:none;border-radius:6px;curso
                     if iid in library and isinstance(library[iid], dict) and isinstance(info, dict):
                         existing_path = library[iid].get("path", "")
                         new_path = info.get("path", "")
-                        if existing_path and new_path and existing_path != new_path:
+                        if existing_path and new_path and _canonical_path(existing_path) != _canonical_path(new_path):
                             # Same IMDB ID, different paths = true duplicate
                             library[iid] = [library[iid], info]
                         else:
                             library[iid].update(info)
                     elif iid in library and isinstance(library[iid], list) and isinstance(info, dict):
                         # Already a list, add if new path
-                        paths = [e.get("path") for e in library[iid]]
-                        if info.get("path") not in paths:
+                        canon_paths = [_canonical_path(e.get("path", "")) for e in library[iid]]
+                        if _canonical_path(info.get("path", "")) not in canon_paths:
                             library[iid].append(info)
                         else:
                             for e in library[iid]:
-                                if e.get("path") == info.get("path"): e.update(info)
+                                if _canonical_path(e.get("path", "")) == _canonical_path(info.get("path", "")): e.update(info); break
                     else:
                         library[iid] = info
                 save_user_tmm(user, library)
@@ -5634,6 +6020,78 @@ def _sched_discovery():
         print("[scheduler] discovery sweep")
         _discover_highly_rated()
 
+VERIFY_VERSION = 1  # Bump this to re-run verification on all files
+
+def _sched_verification():
+    """Pipeline: pick unverified files, queue validate_match and identify_movie tasks."""
+    db = get_db()
+    # Ensure table exists
+    db.execute("""CREATE TABLE IF NOT EXISTS verification (
+        path TEXT, step TEXT, imdb_id TEXT,
+        status TEXT, result TEXT, version INTEGER DEFAULT 1, ts TEXT, PRIMARY KEY (path, step))""")
+    db.commit()
+    
+    titles = load_titles()
+    users = [u for u in list_users() if load_user_ratings(u)]
+    if not users: return
+    user = users[0]
+    library = load_user_tmm(user)
+    
+    # Find files not yet verified at current version
+    verified = set(r[0] for r in db.execute(
+        "SELECT path FROM verification WHERE version >= ? AND step='duration'", (VERIFY_VERSION,)).fetchall())
+    
+    # Pick candidates: have path + file_size, not yet verified
+    candidates = []
+    for iid, info in library.items():
+        if iid.startswith("_"): continue
+        t = titles.get(iid, {})
+        runtime = int(t.get("runtime", 0) or 0)
+        if not runtime: continue
+        entries = info if isinstance(info, list) else [info] if isinstance(info, dict) else []
+        for e in entries:
+            if not isinstance(e, dict): continue
+            path = e.get("path", "")
+            if path and e.get("file_size", 0) > 50000000 and path not in verified:
+                candidates.append({"path": path, "imdb_id": iid, "expected_runtime": runtime})
+    
+    if not candidates:
+        return
+    
+    # Queue batch of 100 per cycle
+    batch = candidates[:100]
+    tid = f"verify_{int(time.time()*1000)}"
+    db_enqueue_task("validate_match", {"items": batch}, 20)
+    print(f"[verification] Queued {len(batch)} files ({len(candidates)} remaining)")
+
+
+def _apply_verification_result(task_result):
+    """Store verification results in the DB. Auto-escalate suspicious ones to OCR."""
+    db = get_db()
+    db.execute("""CREATE TABLE IF NOT EXISTS verification (
+        path TEXT, step TEXT, imdb_id TEXT,
+        status TEXT, result TEXT, version INTEGER DEFAULT 1, ts TEXT, PRIMARY KEY (path, step))""")
+    data = task_result.get("data", [])
+    escalate = []
+    for item in data:
+        db.execute("""INSERT OR REPLACE INTO verification (path, imdb_id, step, status, result, version, ts)
+            VALUES (?, ?, 'duration', ?, ?, ?, ?)""",
+            (item["path"], item.get("imdb_id",""), item["status"],
+             json.dumps(item), VERIFY_VERSION, time.strftime("%Y-%m-%dT%H:%M:%S")))
+        # Auto-escalate: mismatches always, variants where file is SHORTER (not a DC)
+        actual = item.get("actual_min", 0)
+        expected = item.get("expected_min", 0)
+        if item["status"] == "mismatch":
+            escalate.append(item["path"])
+        elif item["status"] == "possible_variant" and actual < expected:
+            # File shorter than expected = suspicious (DC would be longer)
+            escalate.append(item["path"])
+    db.commit()
+    # Queue OCR identification for suspicious files
+    for path in escalate[:10]:  # Max 10 per batch to avoid overload
+        db_enqueue_task("identify_movie", {"path": path}, 25)
+
+
 def _scheduler():
     """Supervised scheduler — each task independent, staggered, crash-resilient."""
     tasks = [
@@ -5641,6 +6099,7 @@ def _scheduler():
         ("alt_titles", _sched_alt_titles, 3),
         ("catalog", _sched_catalog, 600),
         ("discovery", _sched_discovery, 600),
+        ("verification", _sched_verification, 300),
     ]
     threads = []
     for name, fn, interval in tasks:

@@ -182,6 +182,51 @@ The Docker image includes NFS client for direct media access. See `docker-compos
 - **Auto-enrichment** every 2 hours with OMDB rate limiting
 - **20K+ title capacity** tested with full library
 
+## 🤖 MCP Server (`mcp_server.py`)
+
+A zero-dependency Model Context Protocol server that exposes your CineCross data to LLM clients (Claude Desktop, Kiro, Cursor, etc.).
+
+**Tools available:**
+- `search_titles` — search by title, director, actor, genre, keyword
+- `get_title` — full metadata for an IMDB ID
+- `get_recommendations` — personalized taste-matched picks (5 categories)
+- `get_stats` — library/ratings statistics
+- `queue_task` — send tasks to the LAN agent (mediainfo, contact_sheet, etc.)
+
+### Claude Desktop config (`claude_desktop_config.json`)
+
+```json
+{
+  "mcpServers": {
+    "cinecross": {
+      "command": "python3",
+      "args": ["/path/to/mcp_server.py", "--server", "https://your-domain.com/cinecross", "--user", "yourname"]
+    }
+  }
+}
+```
+
+### Kiro config (`.kiro/settings.json`)
+
+```json
+{
+  "mcpServers": {
+    "cinecross": {
+      "command": "python3",
+      "args": ["/path/to/mcp_server.py", "--server", "https://your-domain.com/cinecross", "--user", "yourname"]
+    }
+  }
+}
+```
+
+### Environment variables (alternative)
+
+```bash
+export CINECROSS_URL=https://your-domain.com/cinecross
+export CINECROSS_USER=yourname
+python3 mcp_server.py
+```
+
 ## License
 
 MIT

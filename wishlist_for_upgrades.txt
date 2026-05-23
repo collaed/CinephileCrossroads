@@ -1,0 +1,16 @@
+# Movies — Upgrade Wishlist
+
+Files where we have a version but want a better/longer/complete one.
+
+## Longer cuts needed
+- **Cleopatra (1963)** [tt0056937] — have 251 min, want 320 min roadshow cut
+- **Andrei Rublev (1966)** [tt0060107] — have 97 min (truncated!), want 183 min director's cut
+
+## Possibly truncated (verify with OCR)
+- **Cast a Giant Shadow (1966)** — 86 min actual vs 146 min expected
+- **David Gilmour: Live at Pompeii (2017)** — 68 min vs 125 min (missing extras/bonus?)
+- **Ion (1979)** — 96 min vs 205 min (Part 1 only?)
+
+## Multi-part combined (runtime correct, metadata wrong)
+- **The Scent of Incense Part 1** — 203 min actual, tagged as 88 min (has all parts)
+- **Dr. Syn, Alias the Scarecrow (1963)** — 151 min (3 TV episodes combined)

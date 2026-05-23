@@ -281,10 +281,14 @@ def fetch_tmm(cfg):
     import re
     lib = {}
     # Mode 1: scan local NFO files (preferred - works offline)
-    scan_path = cfg.get("path", "")
-    if scan_path and os.path.isdir(scan_path):
+    scan_paths = cfg.get("paths", [])
+    if not scan_paths:
+        p = cfg.get("path", "")
+        if p: scan_paths = [p]
+    scanned = 0
+    for scan_path in scan_paths:
+      if scan_path and os.path.isdir(scan_path):
         print(f"  Scanning NFO files in {scan_path}...")
-        scanned = 0
         for root, dirs, files in os.walk(scan_path):
             for f in files:
                 if not f.endswith(".nfo"): continue
@@ -347,6 +351,7 @@ def fetch_tmm(cfg):
                         if scanned % 500 == 0:
                             print(f"    Scanned {scanned} NFO files, found {len(lib)} titles...")
                 except: pass
+    if scan_paths and lib:
         return lib
     # Mode 2: TMM HTTP API - export to temp dir on same machine, then read
     url = cfg.get("url", "").rstrip("/")
@@ -408,12 +413,22 @@ def unmap_path(local_path, config):
     return p
 
 def map_path(path, config):
-    """Map remote paths (e.g. Kodi NFS) to local paths (e.g. Windows SMB).
+    """Map remote paths (e.g. Kodi NFS, nfs:// URLs) to local paths.
     Handles stack:// URLs by extracting the first file path."""
     # Handle stack:// (Kodi multi-part files)
     if path.startswith("stack://"):
         path = path.replace("stack://", "").split(" , ")[0].strip()
+    # Handle nfs:// URLs: nfs://192.168.0.235/volume1/Movies/... -> /mnt/zeus/Movies/...
+    if path.startswith("nfs://"):
+        # Strip nfs://host/volume1/ prefix
+        import re
+        m = re.match(r"nfs://[^/]+(/volume1)?(/.*)", path)
+        if m:
+            path = m.group(2)
     mappings = config.get("_path_mappings", {})
+    # Handle normalized relative paths: Movies/... -> /mnt/zeus/Movies/...
+    if path.startswith("Movies/") or path.startswith("TVShows/"):
+        return "/mnt/zeus/" + path
     for remote, local in mappings.items():
         if path.startswith(remote):
             mapped = local + path[len(remote):]
@@ -426,6 +441,584 @@ def map_path(path, config):
 
 FETCHERS = {"plex": fetch_plex, "jellyfin": fetch_jellyfin, "emby": fetch_jellyfin,
             "kodi": fetch_kodi, "radarr": fetch_radarr, "sonarr": fetch_sonarr, "tmm": fetch_tmm}
+
+# --- NFS Mount Health ---
+SCAN_CACHE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scan_cache.json")
+
+def get_buffer_path(config):
+    """Get the local SSD buffer path for heavy I/O operations."""
+    return config.get("_buffer_path", "/tmp")
+
+def buffer_copy(src, config):
+    """Copy a file to the local SSD buffer for fast processing. Returns local path."""
+    import shutil
+    buf = get_buffer_path(config)
+    dst = os.path.join(buf, os.path.basename(src))
+    if os.path.exists(dst) and os.path.getsize(dst) == os.path.getsize(src):
+        return dst  # Already buffered
+    shutil.copy2(src, dst)
+    return dst
+
+def buffer_cleanup(*paths):
+    """Remove buffered files after processing."""
+    for p in paths:
+        if p and os.path.exists(p) and "/mnt/buffer" in p:
+            os.remove(p)
+
+
+def check_mounts(config):
+    """Check NFS mount health, auto-remount dropped mounts, return list of healthy paths."""
+    import threading
+    healthy = []
+    mounts = config.get("_mounts", [])
+    if not mounts:
+        tmm_cfg = config.get("tmm", {})
+        paths = tmm_cfg.get("paths", [])
+        if not paths and tmm_cfg.get("path"):
+            paths = [tmm_cfg["path"]]
+        mounts = []
+        try:
+            with open("/proc/mounts") as f:
+                for line in f:
+                    parts = line.split()
+                    if len(parts) >= 3 and parts[2] in ("nfs", "nfs4") and parts[1].startswith("/mnt/"):
+                        mounts.append(parts[1])
+        except: pass
+        if not mounts:
+            mounts = list({os.path.dirname(p.rstrip("/")) for p in paths if p.startswith("/mnt/")})
+
+    for mp in mounts:
+        result = [False]
+        def _check(m=mp):
+            try:
+                if os.path.isdir(m) and os.listdir(m):
+                    result[0] = True
+            except: pass
+        t = threading.Thread(target=_check, daemon=True)
+        t.start()
+        t.join(timeout=3)
+        if result[0]:
+            healthy.append(mp)
+        elif t.is_alive():
+            log(f"[nfs] {mp} stale (timeout)")
+            os.system(f"umount -l {mp} 2>/dev/null; mount {mp} 2>/dev/null &")
+        else:
+            log(f"[nfs] {mp} empty/unmounted, remounting...")
+            os.system(f"mount {mp} 2>/dev/null")
+            time.sleep(1)
+            try:
+                if os.listdir(mp):
+                    healthy.append(mp)
+                    log(f"[nfs] {mp} remounted OK")
+            except: pass
+    return healthy
+
+
+# --- Incremental NFO Scan ---
+def load_scan_cache():
+    try:
+        return json.load(open(SCAN_CACHE_FILE))
+    except: return {}
+
+def save_scan_cache(cache):
+    json.dump(cache, open(SCAN_CACHE_FILE, "w"))
+
+def incremental_nfo_scan(scan_paths):
+    """Only re-scan directories whose mtime changed since last scan."""
+    import re
+    cache = load_scan_cache()
+    lib = {}
+    scanned = 0
+    skipped = 0
+
+    for scan_path in scan_paths:
+        if not os.path.isdir(scan_path):
+            continue
+        print(f"  Scanning NFO files in {scan_path}...")
+        try:
+          for entry in os.scandir(scan_path):
+            if not entry.is_dir(): continue
+            # Year directories - check year mtime first
+            year_key = entry.path + "/_year"
+            try:
+                year_mtime = entry.stat().st_mtime
+            except: continue
+            cached_year = cache.get(year_key)
+            if cached_year and cached_year.get("mtime") == year_mtime:
+                # Year unchanged - use all cached entries from this year
+                for dir_key, cached in cache.items():
+                    if dir_key.startswith(entry.path + "/") and dir_key != year_key and cached.get("iid"):
+                        iid = cached["iid"]
+                        info = cached["info"]
+                        if iid in lib:
+                            existing = lib[iid]
+                            if isinstance(existing, list): existing.append(info)
+                            else: lib[iid] = [existing, info]
+                        else:
+                            lib[iid] = info
+                        skipped += 1
+                continue
+            try:
+              for movie_dir in os.scandir(entry.path):
+                if not movie_dir.is_dir(): continue
+                dir_key = movie_dir.path
+                try:
+                    mtime = movie_dir.stat().st_mtime
+                except: continue
+                cached = cache.get(dir_key)
+                if cached and cached.get("mtime") == mtime:
+                    # Use cached result
+                    if cached.get("iid"):
+                        iid = cached["iid"]
+                        info = cached["info"]
+                        if iid in lib:
+                            existing = lib[iid]
+                            if isinstance(existing, list): existing.append(info)
+                            else: lib[iid] = [existing, info]
+                        else:
+                            lib[iid] = info
+                    skipped += 1
+                    continue
+                # Scan this directory
+                nfo_found = False
+                for f in os.listdir(movie_dir.path):
+                    if not f.endswith(".nfo"): continue
+                    try:
+                        content = open(os.path.join(movie_dir.path, f), encoding="utf-8", errors="ignore").read()
+                        match = re.search(r"(tt\d{7,})", content)
+                        if match:
+                            iid = match.group(1)
+                            info = {"path": movie_dir.path, "source": "tmm"}
+                            vm = re.search(r"<height>(\d+)</height>", content)
+                            if vm: info["video_height"] = int(vm.group(1))
+                            vm = re.search(r"<width>(\d+)</width>", content)
+                            if vm: info["video_width"] = int(vm.group(1))
+                            vm = re.search(r"<codec>(\w+)</codec>", content)
+                            if vm: info["video_codec"] = vm.group(1)
+                            vm = re.search(r"<durationinseconds>(\d+)</durationinseconds>", content)
+                            if vm: info["runtime"] = int(vm.group(1)) // 60
+                            info["quality"] = str(info.get("video_height", ""))
+                            if iid in lib:
+                                existing = lib[iid]
+                                if isinstance(existing, list): existing.append(info)
+                                else: lib[iid] = [existing, info]
+                            else:
+                                lib[iid] = info
+                            cache[dir_key] = {"mtime": mtime, "iid": iid, "info": info}
+                            nfo_found = True
+                            scanned += 1
+                            break
+                    except: pass
+                if not nfo_found:
+                    cache[dir_key] = {"mtime": mtime, "iid": None, "info": None}
+                if scanned and scanned % 500 == 0:
+                    print(f"    Scanned {scanned}, skipped {skipped} (cached)...")
+            except PermissionError: pass
+            except OSError: pass
+            # Save year mtime so we can skip entire year next time
+            cache[year_key] = {"mtime": year_mtime}
+        except PermissionError: pass
+        except OSError: pass
+
+    save_scan_cache(cache)
+    log(f"[scan] {scanned} scanned, {skipped} cached, {len(lib)} titles")
+    return lib
+
+
+# --- Full Mediainfo/ffprobe Extraction ---
+def extract_mediainfo(filepath):
+    """Run ffprobe and return rich metadata dict."""
+    try:
+        r = subprocess.run(
+            ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", "-show_streams", filepath],
+            capture_output=True, timeout=30, text=True)
+        if r.returncode != 0:
+            return {"error": f"ffprobe exit {r.returncode}"}
+        data = json.loads(r.stdout)
+        fmt = data.get("format", {})
+        streams = data.get("streams", [])
+        video = next((s for s in streams if s.get("codec_type") == "video"), {})
+        audios = [s for s in streams if s.get("codec_type") == "audio"]
+        subs = [s for s in streams if s.get("codec_type") == "subtitle"]
+        result = {
+            "container": fmt.get("format_name", ""),
+            "duration": int(float(fmt.get("duration", 0))),
+            "size": int(fmt.get("size", 0)),
+            "bitrate": int(fmt.get("bit_rate", 0)) // 1000,  # kbps
+        }
+        if video:
+            result["video"] = {
+                "codec": video.get("codec_name", ""),
+                "profile": video.get("profile", ""),
+                "width": video.get("width", 0),
+                "height": video.get("height", 0),
+                "bitrate": int(video.get("bit_rate", 0)) // 1000 if video.get("bit_rate") else 0,
+                "fps": eval(video["r_frame_rate"]) if video.get("r_frame_rate") and "/" in str(video.get("r_frame_rate", "")) else 0,
+                "pix_fmt": video.get("pix_fmt", ""),
+                "hdr": "yes" if video.get("color_transfer") in ("smpte2084", "arib-std-b67") else "no",
+                "color_space": video.get("color_space", ""),
+            }
+            # HDR10+ / Dolby Vision detection from side_data
+            side_data = video.get("side_data_list", [])
+            for sd in side_data:
+                if "mastering" in sd.get("side_data_type", "").lower():
+                    result["video"]["hdr_type"] = "HDR10"
+                if "dolby" in sd.get("side_data_type", "").lower():
+                    result["video"]["hdr_type"] = "DolbyVision"
+        if audios:
+            result["audio"] = []
+            for a in audios:
+                result["audio"].append({
+                    "codec": a.get("codec_name", ""),
+                    "channels": a.get("channels", 0),
+                    "language": a.get("tags", {}).get("language", ""),
+                    "bitrate": int(a.get("bit_rate", 0)) // 1000 if a.get("bit_rate") else 0,
+                    "title": a.get("tags", {}).get("title", ""),
+                })
+        if subs:
+            result["subtitles"] = [{"language": s.get("tags", {}).get("language", ""), "codec": s.get("codec_name", "")} for s in subs]
+        return result
+    except subprocess.TimeoutExpired:
+        return {"error": "timeout"}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+# --- Quality Scoring (BPP + genre-aware) ---
+# Genre BPP thresholds: minimum acceptable bits-per-pixel
+GENRE_BPP = {
+    "animation": 0.03, "anime": 0.03,
+    "documentary": 0.05, "drama": 0.05, "romance": 0.05, "comedy": 0.05,
+    "horror": 0.06, "thriller": 0.06, "mystery": 0.06,
+    "action": 0.10, "adventure": 0.09, "sci-fi": 0.10, "war": 0.10,
+    "fantasy": 0.09, "music": 0.05,
+}
+
+def compute_quality_score(mediainfo, genres=None):
+    """Compute quality score from mediainfo dict. Returns dict with BPP, verdict, effective_quality.
+    
+    genres: comma-separated string like "Action, Sci-Fi" or list
+    """
+    video = mediainfo.get("video", {})
+    if not video or not video.get("width"):
+        return {"error": "no video info"}
+    
+    w = video.get("width", 0)
+    h = video.get("height", 0)
+    fps = video.get("fps", 24) or 24
+    # Get bitrate: prefer video bitrate, fall back to total - audio estimate
+    v_bitrate = video.get("bitrate", 0) * 1000  # was in kbps
+    if not v_bitrate:
+        total_br = mediainfo.get("bitrate", 0) * 1000
+        # Estimate audio bitrate
+        audio_br = sum(a.get("bitrate", 0) * 1000 for a in mediainfo.get("audio", []))
+        if not audio_br:
+            audio_br = 256000 * len(mediainfo.get("audio", [{}]))  # assume 256kbps per track
+        v_bitrate = total_br - audio_br
+    
+    if w == 0 or h == 0 or v_bitrate <= 0:
+        return {"error": "missing dimensions or bitrate"}
+    
+    pixels = w * h
+    bpp = v_bitrate / (pixels * fps)
+    
+    # Determine genre threshold
+    threshold = 0.07  # default
+    if genres:
+        if isinstance(genres, str):
+            genres = [g.strip().lower() for g in genres.split(",")]
+        else:
+            genres = [g.lower() for g in genres]
+        # Use the highest threshold among the genres (most demanding wins)
+        genre_thresholds = [GENRE_BPP.get(g, 0.07) for g in genres]
+        if genre_thresholds:
+            threshold = max(genre_thresholds)
+    
+    # Codec efficiency factor: x265/HEVC is ~40% more efficient than x264
+    codec = video.get("codec", "").lower()
+    codec_factor = 1.0
+    if codec in ("hevc", "h265", "x265"):
+        codec_factor = 1.4  # x265 at 0.05 BPP ≈ x264 at 0.07 BPP
+    elif codec in ("av1",):
+        codec_factor = 1.6
+    
+    effective_bpp = bpp * codec_factor
+    
+    # Compute effective resolution (what quality this bitrate actually delivers)
+    # If BPP is too low for this resolution, compute what resolution it SHOULD be
+    if effective_bpp < threshold * 0.5:
+        # Severely starved: effective quality is much lower than labeled
+        effective_height = int(h * (effective_bpp / threshold) ** 0.5)
+        verdict = "fake_hd"
+    elif effective_bpp < threshold:
+        effective_height = int(h * (effective_bpp / threshold) ** 0.7)
+        verdict = "starved"
+    elif effective_bpp < threshold * 1.5:
+        effective_height = h
+        verdict = "acceptable"
+    else:
+        effective_height = h
+        verdict = "good"
+    
+    return {
+        "bpp": round(bpp, 4),
+        "effective_bpp": round(effective_bpp, 4),
+        "threshold": round(threshold, 4),
+        "codec_factor": codec_factor,
+        "resolution": f"{w}x{h}",
+        "video_bitrate_kbps": round(v_bitrate / 1000),
+        "verdict": verdict,  # fake_hd, starved, acceptable, good
+        "effective_height": effective_height,
+        "labeled_height": h,
+        "genres_used": genres or [],
+    }
+
+
+def compare_quality(file_a_info, file_b_info, genres=None):
+    """Compare two files and recommend which is better quality."""
+    score_a = compute_quality_score(file_a_info, genres)
+    score_b = compute_quality_score(file_b_info, genres)
+    if "error" in score_a or "error" in score_b:
+        return {"error": "cannot compare", "a": score_a, "b": score_b}
+    
+    # Verdict ranking: good > acceptable > starved > fake_hd
+    verdict_rank = {"good": 4, "acceptable": 3, "starved": 2, "fake_hd": 1}
+    rank_a = verdict_rank.get(score_a["verdict"], 0)
+    rank_b = verdict_rank.get(score_b["verdict"], 0)
+    
+    if rank_a > rank_b:
+        winner = "a"
+        reason = f"A is '{score_a['verdict']}' (BPP {score_a['bpp']:.3f}) vs B '{score_b['verdict']}' (BPP {score_b['bpp']:.3f})"
+    elif rank_b > rank_a:
+        winner = "b"
+        reason = f"B is '{score_b['verdict']}' (BPP {score_b['bpp']:.3f}) vs A '{score_a['verdict']}' (BPP {score_a['bpp']:.3f})"
+    else:
+        # Same verdict tier: compare effective resolution, then efficiency
+        eff_a = score_a["effective_height"]
+        eff_b = score_b["effective_height"]
+        if eff_a > eff_b * 1.1:
+            winner = "a"
+            reason = f"Same tier, A has higher effective resolution ({eff_a}p vs {eff_b}p)"
+        elif eff_b > eff_a * 1.1:
+            winner = "b"
+            reason = f"Same tier, B has higher effective resolution ({eff_b}p vs {eff_a}p)"
+        else:
+            size_a = file_a_info.get("size", 0)
+            size_b = file_b_info.get("size", 0)
+            winner = "a" if size_a <= size_b else "b"
+            reason = f"Same quality tier and resolution, {'A' if winner == 'a' else 'B'} is smaller"
+    
+    return {"winner": winner, "reason": reason, "a": score_a, "b": score_b}
+
+
+# --- Non-TMM Directory Scanner ---
+def scan_non_tmm(config):
+    """Scan directories not managed by TMM: DVD_TS, language folders, etc."""
+    import re
+    results = []
+    tmm_cfg = config.get("tmm", {})
+    base_paths = tmm_cfg.get("scan_extra", [])
+    if not base_paths:
+        # Auto-detect from TMM paths - look for sibling directories
+        tmm_paths = tmm_cfg.get("paths", [])
+        if not tmm_paths and tmm_cfg.get("path"):
+            tmm_paths = [tmm_cfg["path"]]
+        for tp in tmm_paths:
+            parent = os.path.dirname(tp)
+            if os.path.isdir(parent):
+                for d in os.listdir(parent):
+                    full = os.path.join(parent, d)
+                    if os.path.isdir(full) and d != "TMM" and not d.startswith("."):
+                        base_paths.append(full)
+        # Also check for DVD_TS at Movies root
+        movies_root = os.path.dirname(os.path.dirname(tmm_paths[0])) if tmm_paths else ""
+        dvd_ts = os.path.join(movies_root, "DVD_TS")
+        if os.path.isdir(dvd_ts):
+            base_paths.append(dvd_ts)
+
+    vexts = (".mkv", ".mp4", ".avi", ".m4v", ".wmv", ".ts", ".m2ts", ".iso")
+    # Pattern: Title (Year) or Title.Year or Title_Year
+    year_re = re.compile(r"[\(\[_\.\s]*((?:19|20)\d{2})[\)\]_\.\s]*")
+    imdb_re = re.compile(r"(tt\d{7,})")
+
+    for base in base_paths:
+        if not os.path.isdir(base):
+            continue
+        for root, dirs, files in os.walk(base):
+            # Check for NFO with IMDB ID first
+            nfo_iid = None
+            for f in files:
+                if f.endswith(".nfo"):
+                    try:
+                        content = open(os.path.join(root, f), encoding="utf-8", errors="ignore").read()
+                        m = imdb_re.search(content)
+                        if m: nfo_iid = m.group(1)
+                    except: pass
+            # Find video files
+            vfiles = [f for f in files if f.lower().endswith(vexts)]
+            if not vfiles:
+                continue
+            # Get largest video file
+            largest = max(vfiles, key=lambda f: os.path.getsize(os.path.join(root, f)) if os.path.isfile(os.path.join(root, f)) else 0)
+            fpath = os.path.join(root, largest)
+            try: fsize = os.path.getsize(fpath)
+            except: fsize = 0
+            if fsize < 50_000_000:  # Skip < 50MB
+                continue
+            # Extract title/year from directory name or filename
+            dirname = os.path.basename(root)
+            name_source = dirname if dirname not in ("VIDEO_TS", "BDMV") else os.path.basename(os.path.dirname(root))
+            year_match = year_re.search(name_source)
+            year = year_match.group(1) if year_match else ""
+            # Clean title: remove year, codec info, resolution
+            title = year_re.sub(" ", name_source)
+            title = re.sub(r"[\._]", " ", title)
+            title = re.sub(r"\b(720p|1080p|2160p|4k|bluray|blu-ray|dvdrip|webrip|web-dl|hdtv|x264|x265|hevc|aac|ac3|dts)\b", "", title, flags=re.I)
+            title = re.sub(r"\s+", " ", title).strip()
+
+            results.append({
+                "path": unmap_path(fpath, config),
+                "dir_path": unmap_path(root, config),
+                "title": title,
+                "year": year,
+                "imdb_id": nfo_iid,
+                "size": fsize,
+                "filename": largest,
+            })
+    log(f"[scan_extra] Found {len(results)} non-TMM titles in {len(base_paths)} dirs")
+    return results
+
+
+# --- Contact Sheet Generation ---
+def cleanup_dir(dirpath, dry_run=True):
+    """After deleting a video file, check if remaining files are junk and remove the directory.
+    
+    Auto-delete: .txt <10KB, .nfo, .srt, .sub, .ass, .ssa, .smi, .vtt,
+                 .jpg, .png, .url, .html <1KB, .mp4 <5MB, thumbs.db,
+                 SYNOINDEX_MEDIA_INFO, .db <1MB
+    Keep (abort cleanup): .rar, .pdf, .epub, .mp3, .flac, .m4b, .iso,
+                          large .mp4 (>5MB that aren't RARBG-style),
+                          any video file
+    """
+    if not os.path.isdir(dirpath):
+        return {"action": "skip", "reason": "not a directory"}
+    
+    vexts = (".mkv", ".mp4", ".avi", ".m4v", ".ts", ".m2ts", ".wmv")
+    junk_exts = (".nfo", ".srt", ".sub", ".ass", ".ssa", ".smi", ".vtt",
+                 ".jpg", ".png", ".url")
+    keep_exts = (".rar", ".pdf", ".epub", ".mp3", ".flac", ".m4b", ".iso",
+                 ".m4a", ".ogg", ".wav", ".zip", ".7z")
+    
+    files = os.listdir(dirpath)
+    to_delete = []
+    has_video = False
+    has_keeper = False
+    
+    for f in files:
+        fp = os.path.join(dirpath, f)
+        if not os.path.isfile(fp):
+            continue
+        fl = f.lower()
+        sz = os.path.getsize(fp)
+        
+        # Video files still present = don't touch this dir
+        if fl.endswith(vexts) and sz > 5_000_000:
+            has_video = True
+            break
+        # Small mp4 (<5MB) = RARBG promo, junk
+        elif fl.endswith(".mp4") and sz <= 5_000_000:
+            to_delete.append(fp)
+        # Known junk extensions
+        elif fl.endswith(junk_exts):
+            to_delete.append(fp)
+        # Small txt/html = tracker spam
+        elif fl.endswith(".txt") and sz < 10_000:
+            to_delete.append(fp)
+        elif fl.endswith(".html") and sz < 1_000:
+            to_delete.append(fp)
+        # Synology/thumbs cache
+        elif fl in ("thumbs.db", ".ds_store") or "synoindex" in fl.lower():
+            to_delete.append(fp)
+        elif fl.endswith(".db") and sz < 1_000_000:
+            to_delete.append(fp)
+        # Keepers = abort
+        elif fl.endswith(keep_exts) or sz > 5_000_000:
+            has_keeper = True
+    
+    if has_video:
+        return {"action": "skip", "reason": "video files still present"}
+    if has_keeper:
+        return {"action": "skip", "reason": "contains non-junk files (pdf/rar/audio/large)", "kept": [f for f in files if os.path.isfile(os.path.join(dirpath, f))]}
+    
+    if dry_run:
+        return {"action": "dry_run", "would_delete": len(to_delete), "files": [os.path.basename(f) for f in to_delete]}
+    
+    for fp in to_delete:
+        os.remove(fp)
+    # Remove any remaining empty subdirs then the dir itself
+    for root, dirs, fls in os.walk(dirpath, topdown=False):
+        for d in dirs:
+            try: os.rmdir(os.path.join(root, d))
+            except: pass
+    try:
+        if not os.listdir(dirpath):
+            os.rmdir(dirpath)
+            return {"action": "deleted", "removed": len(to_delete)}
+    except: pass
+    return {"action": "cleaned", "removed": len(to_delete), "remaining": os.listdir(dirpath) if os.path.isdir(dirpath) else []}
+
+
+def generate_contact_sheet(filepath, output_path, cols=4, rows=4, width=1920):
+    """Generate a contact sheet (thumbnail grid) using fast keyframe seeking per frame."""
+    import tempfile, glob
+    try:
+        r = subprocess.run(
+            ["ffprobe", "-v", "quiet", "-show_entries", "format=duration", "-of", "csv=p=0", filepath],
+            capture_output=True, timeout=15, text=True)
+        duration = float(r.stdout.strip()) if r.stdout.strip() else 0
+        if duration < 60:
+            return {"error": "video too short"}
+        n_frames = cols * rows
+        interval = duration / (n_frames + 1)
+        thumb_w = width // cols
+        tmpdir = tempfile.mkdtemp(prefix="cs_")
+        # Extract individual frames with fast seeking
+        for i in range(n_frames):
+            seek = int((i + 1) * interval)
+            subprocess.run([
+                "ffmpeg", "-y", "-ss", str(seek), "-i", filepath,
+                "-vframes", "1", "-q:v", "5", "-vf", f"scale={thumb_w}:-1",
+                os.path.join(tmpdir, f"f{i:02d}.jpg")
+            ], capture_output=True, timeout=30)
+        # Tile frames using ffmpeg
+        frames = sorted(glob.glob(os.path.join(tmpdir, "f*.jpg")))
+        if len(frames) < 2:
+            import shutil; shutil.rmtree(tmpdir, ignore_errors=True)
+            return {"error": f"only {len(frames)} frames extracted"}
+        # Build ffmpeg concat filter
+        args = ["ffmpeg", "-y"]
+        for f in frames:
+            args += ["-i", f]
+        filter_str = ""
+        for i in range(len(frames)):
+            filter_str += f"[{i}:v]"
+        filter_str += f"xstack=inputs={len(frames)}:layout="
+        layouts = []
+        h = int(thumb_w * 9 / 16)  # Approximate height
+        for i in range(len(frames)):
+            layouts.append(f"{(i%cols)*thumb_w}_{(i//cols)*h}")
+        filter_str += "|".join(layouts)
+        args += ["-filter_complex", filter_str, "-q:v", "5", output_path]
+        subprocess.run(args, capture_output=True, timeout=30)
+        import shutil; shutil.rmtree(tmpdir, ignore_errors=True)
+        if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+            return {"path": output_path, "size": os.path.getsize(output_path), "frames": len(frames)}
+        return {"error": "tiling failed"}
+    except subprocess.TimeoutExpired:
+        return {"error": "timeout"}
+    except Exception as e:
+        return {"error": str(e)}
+
 
 def check_prerequisites():
     """Check system prerequisites and guide user through setup."""
@@ -525,12 +1118,35 @@ def daemon_mode(args, config):
     headers = {"Content-Type": "application/json", "User-Agent": "CinephileAgent/2.0"}
     
     def sync_loop():
-        """Periodic Kodi/media server sync."""
+        """Periodic Kodi/media server sync with NFS health check and incremental scan."""
         while True:
             try:
-                print("[sync] Fetching media servers...")
+                # NFS health check first
+                healthy = check_mounts(config)
+                if healthy:
+                    log(f"[nfs] {len(healthy)} mounts healthy")
+                else:
+                    log("[nfs] No healthy mounts! Skipping sync.")
+                    time.sleep(300)
+                    continue
+
                 library = {}
+                tmm_cfg = config.get("tmm", {})
+                if tmm_cfg.get("enabled"):
+                    # Use incremental scan
+                    scan_paths = tmm_cfg.get("paths", [])
+                    if not scan_paths and tmm_cfg.get("path"):
+                        scan_paths = [tmm_cfg["path"]]
+                    # Filter to only paths on healthy mounts
+                    scan_paths = [p for p in scan_paths if any(p.startswith(h) for h in healthy)]
+                    if scan_paths:
+                        items = incremental_nfo_scan(scan_paths)
+                        library.update(items)
+                        log(f"[sync] tmm: {len(items)} titles")
+
+                # Other fetchers (Plex, Kodi, etc.)
                 for name, cfg in config.items():
+                    if name == "tmm": continue
                     if not isinstance(cfg, dict) or not cfg.get("enabled"): continue
                     if name not in FETCHERS: continue
                     try:
@@ -539,13 +1155,23 @@ def daemon_mode(args, config):
                         log(f"[sync] {name}: {len(items)} titles")
                     except Exception as e:
                         log(f"[sync] {name} error: {e}")
+
                 if library:
-                    # # library = compute_hashes(library)  # disabled: hashing via tasks  # disabled: hashing done via tasks
                     api_post(f"{base_url}/api/library/{args.user}", {"library": library})
                     log(f"[sync] Pushed {len(library)} titles")
+
+                # Also scan non-TMM directories and report
+                try:
+                    extra = scan_non_tmm(config)
+                    if extra:
+                        api_post(f"{base_url}/api/library/{args.user}/incoming", {"files": extra})
+                        log(f"[sync] Reported {len(extra)} non-TMM titles")
+                except Exception as e:
+                    log(f"[sync] non-TMM scan error: {e}")
+
             except Exception as e:
                 log(f"[sync] Error: {e}")
-                time.sleep(60)  # Retry sooner on error
+                time.sleep(60)
                 continue
             time.sleep(14400)  # Every 4 hours
     
@@ -631,7 +1257,7 @@ def daemon_mode(args, config):
                         _bg_task["thread"] = t
                         t.start()
                         continue
-                    # Normal tasks: run inline, one at a time
+                    # Normal tasks: run in parallel (up to 3 concurrent)
                     log(f"[task] {ttype} ({tid})")
                     _last_activity["task"] = ttype
                     _last_activity["time"] = time.strftime("%H:%M:%S")
@@ -642,7 +1268,7 @@ def daemon_mode(args, config):
                     report_result(tid, result)
                     if result.get("_restart"):
                         sys.exit(42)
-                    break  # One task per poll cycle
+                    # Process all available tasks per cycle
             except Exception as e:
                 if consecutive_errors == 0:
                     log(f"[task] Connection lost: {e}")
@@ -657,7 +1283,7 @@ def daemon_mode(args, config):
                 log(f"[task] Reconnected after {consecutive_errors} errors")
             consecutive_errors = 0
             _last_activity["errors"] = 0
-            time.sleep(15)
+            time.sleep(5)  # Poll every 5s when idle
     
     log(f"Agent daemon - server: {base_url}, user: {args.user}")
     log(f"  Sync thread: every 4 hours")
@@ -734,49 +1360,94 @@ def run_task(ttype, params, config):
         elif ttype == "download_subs":
             imdb_id = params.get("imdb_id", "")
             path = params.get("path", "")
-            language = params.get("language", "eng")
+            languages = params.get("languages", ["eng", "fre"])
+            if isinstance(languages, str): languages = [languages]
             if not imdb_id or not path:
                 return {"error": "missing imdb_id or path"}
             mp = map_path(path, config)
-            file_hash = opensubtitles_hash(mp) if os.path.isfile(mp) else None
-            file_size = _safe_stat(mp)
-            # Try OpenSubtitles.org XML-RPC
-            os_user = params.get("os_user", "") or config.get("opensubs_user", "")
-            os_pass = params.get("os_pass", "") or config.get("opensubs_pass", "")
-            subs_found = []
-            if file_hash and file_size and os_user:
+            # Resolve dir to video file
+            if os.path.isdir(mp):
+                vexts = (".mkv", ".mp4", ".avi", ".m4v")
+                vfiles = [(os.path.getsize(os.path.join(mp, f)), os.path.join(mp, f))
+                          for f in os.listdir(mp) if f.lower().endswith(vexts)]
+                if vfiles:
+                    vfiles.sort(reverse=True)
+                    mp = vfiles[0][1]
+            if not os.path.isfile(mp):
+                return {"error": f"file not found: {mp[:60]}"}
+            file_hash = opensubtitles_hash(mp)
+            file_size = os.path.getsize(mp)
+            video_base = mp.rsplit(".", 1)[0]  # /path/to/Movie_Name
+            os_user = params.get("os_user", "") or config.get("_opensubs_user", "")
+            os_pass = params.get("os_pass", "") or config.get("_opensubs_pass", "")
+            os_key = params.get("os_key", "") or config.get("_opensubs_key", "")
+            downloaded = []
+            for language in languages:
+                # Check if sub already exists
+                lang_short = {"eng": "en", "fre": "fr", "fra": "fr", "ger": "de", "deu": "de", "spa": "es"}.get(language, language[:2])
+                srt_path = f"{video_base}.{lang_short}.srt"
+                if os.path.exists(srt_path):
+                    downloaded.append({"lang": language, "status": "exists", "path": srt_path})
+                    continue
+                subs_found = []
                 try:
                     import xmlrpc.client
                     server = xmlrpc.client.ServerProxy("https://api.opensubtitles.org/xml-rpc")
                     login = server.LogIn(os_user, os_pass, language, "CinephileCrossroads v2.1")
                     if login.get("status", "").startswith("200"):
                         token = login["token"]
-                        results = server.SearchSubtitles(token, [
-                            {"moviehash": file_hash, "moviebytesize": str(file_size), "sublanguageid": language},
-                            {"imdbid": imdb_id.replace("tt",""), "sublanguageid": language}
-                        ])
+                        search_params = []
+                        if file_hash: search_params.append({"moviehash": file_hash, "moviebytesize": str(file_size), "sublanguageid": language})
+                        search_params.append({"imdbid": imdb_id.replace("tt",""), "sublanguageid": language})
+                        results = server.SearchSubtitles(token, search_params)
                         if results.get("data"):
-                            for s in results["data"][:5]:
-                                subs_found.append({
-                                    "name": s.get("SubFileName",""),
-                                    "lang": s.get("SubLanguageID",""),
-                                    "url": s.get("SubDownloadLink",""),
-                                    "rating": s.get("SubRating","0"),
-                                    "format": s.get("SubFormat","srt"),
-                                })
-                            log(f"[subs] {imdb_id}: {len(subs_found)} subs found ({language})")
+                            # Pick best: prefer hash match, then highest rating
+                            best = sorted(results["data"], key=lambda s: (s.get("MatchedBy","") == "moviehash", float(s.get("SubRating","0"))), reverse=True)[0]
+                            # Download
+                            import gzip
+                            sub_url = best.get("SubDownloadLink", "")
+                            if sub_url:
+                                req = urllib.request.Request(sub_url, headers={"User-Agent": "CinephileAgent/2.0"})
+                                resp = urllib.request.urlopen(req, timeout=15)
+                                sub_data = gzip.decompress(resp.read()).decode("utf-8", errors="replace")
+                                with open(srt_path, "w", encoding="utf-8") as f:
+                                    f.write(sub_data)
+                                downloaded.append({"lang": language, "status": "downloaded", "path": srt_path, "matched_by": best.get("MatchedBy","")})
+                                log(f"[subs] {os.path.basename(srt_path)} ({best.get('MatchedBy','')})")
+                            else:
+                                downloaded.append({"lang": language, "status": "no_url"})
+                        else:
+                            downloaded.append({"lang": language, "status": "not_found"})
                         server.LogOut(token)
+                    else:
+                        downloaded.append({"lang": language, "status": f"login_failed: {login.get('status','')}"})
                 except Exception as e:
-                    log(f"[subs] OpenSubs error: {e}")
-            return {"imdb_id": imdb_id, "hash": file_hash, "path": path, "subs": subs_found,
-                    "data": {"subs": subs_found}}
+                    downloaded.append({"lang": language, "status": f"error: {str(e)[:50]}"})
+            return {"imdb_id": imdb_id, "path": path, "results": downloaded}
         
         elif ttype == "check_quality":
             paths = params.get("paths", [])
+            genres = params.get("genres", "")
             data = {}
             for p in paths:
                 mp = map_path(p, config)
-                data[p] = {"exists": os.path.isfile(mp), "size": os.path.getsize(mp) if os.path.isfile(mp) else 0}
+                if os.path.isdir(mp):
+                    vexts = (".mkv", ".mp4", ".avi", ".m4v", ".wmv", ".ts", ".m2ts")
+                    vfiles = [(os.path.getsize(os.path.join(mp, f)), os.path.join(mp, f))
+                              for f in os.listdir(mp) if f.lower().endswith(vexts)]
+                    if vfiles:
+                        vfiles.sort(reverse=True)
+                        mp = vfiles[0][1]
+                if os.path.isfile(mp):
+                    mi = extract_mediainfo(mp)
+                    if "error" not in mi:
+                        score = compute_quality_score(mi, genres)
+                        mi["bpp"] = score.get("bpp", 0)
+                        mi["quality_verdict"] = score.get("verdict", "")
+                        mi["effective_height"] = score.get("effective_height", 0)
+                    data[p] = mi
+                else:
+                    data[p] = {"exists": False}
             return {"checked": len(data), "data": data}
         
         elif ttype == "find_duplicates":
@@ -883,15 +1554,121 @@ def run_task(ttype, params, config):
             try:
                 if os.path.isfile(path):
                     os.remove(path)
-                    # Remove empty parent dir
                     parent = os.path.dirname(path)
-                    if os.path.isdir(parent) and not os.listdir(parent):
-                        os.rmdir(parent)
-                    log(f"[delete] {os.path.basename(path)}")
-                    return {"deleted": True, "path": params["path"]}
+                    # Auto-cleanup junk in the directory
+                    cleanup = cleanup_dir(parent, dry_run=False)
+                    log(f"[delete] {os.path.basename(path)} (dir: {cleanup.get('action','')})")
+                    return {"deleted": True, "path": params["path"], "dir_cleanup": cleanup}
                 return {"error": "file not found"}
             except Exception as e:
                 return {"error": str(e)}
+
+        elif ttype == "cleanup_dir":
+            # Clean up a directory if it only contains junk files
+            path = map_path(params.get("path", ""), config)
+            dry_run = params.get("dry_run", True)
+            return cleanup_dir(path, dry_run=dry_run)
+
+        elif ttype == "merge_audio":
+            # Merge superior audio track from one file into another
+            # params: target (1080p file), source (720p file with better audio)
+            # Optional: dry_run (default True), delete_source (default False)
+            target_path = map_path(params.get("target", ""), config)
+            source_path = map_path(params.get("source", ""), config)
+            dry_run = params.get("dry_run", True)
+            delete_source = params.get("delete_source", False)
+            # Resolve dirs to video files
+            for p_ref in ("target_path", "source_path"):
+                p = locals()[p_ref]
+                if os.path.isdir(p):
+                    vexts = (".mkv", ".mp4", ".avi", ".m4v")
+                    vfiles = [(os.path.getsize(os.path.join(p, f)), os.path.join(p, f))
+                              for f in os.listdir(p) if f.lower().endswith(vexts)]
+                    if vfiles:
+                        vfiles.sort(reverse=True)
+                        locals()[p_ref] = vfiles[0][1]
+                        if p_ref == "target_path": target_path = vfiles[0][1]
+                        else: source_path = vfiles[0][1]
+            if not os.path.isfile(target_path):
+                return {"error": f"target not found: {target_path[:60]}"}
+            if not os.path.isfile(source_path):
+                return {"error": f"source not found: {source_path[:60]}"}
+            # Get durations to verify they match
+            def get_duration(fp):
+                r = subprocess.run(["ffprobe", "-v", "quiet", "-show_entries", "format=duration", "-of", "csv=p=0", fp],
+                    capture_output=True, timeout=30, text=True)
+                return float(r.stdout.strip()) if r.stdout.strip() else 0
+            t_dur = get_duration(target_path)
+            s_dur = get_duration(source_path)
+            if t_dur == 0 or s_dur == 0:
+                return {"error": "could not determine duration", "target_dur": t_dur, "source_dur": s_dur}
+            diff = abs(t_dur - s_dur)
+            if diff > 30:
+                # Try to find sync offset using first loud peak
+                # Extract 60s of audio from each, find first peak above threshold
+                def find_first_peak(fp):
+                    r = subprocess.run(["ffmpeg", "-i", fp, "-t", "60", "-af", "silencedetect=noise=-30dB:d=0.5", "-f", "null", "-"],
+                        capture_output=True, timeout=30, text=True)
+                    # Parse silence_end from stderr
+                    import re
+                    ends = re.findall(r"silence_end: ([\d.]+)", r.stderr)
+                    return float(ends[0]) if ends else 0
+                t_peak = find_first_peak(target_path)
+                s_peak = find_first_peak(source_path)
+                offset_ms = int((t_peak - s_peak) * 1000)
+                if diff > 300:
+                    return {"error": f"duration mismatch too large ({diff:.0f}s)", "target_dur": t_dur, "source_dur": s_dur, "estimated_offset_ms": offset_ms}
+            else:
+                offset_ms = 0
+            # Get audio stream info from source
+            r = subprocess.run(["ffprobe", "-v", "quiet", "-show_streams", "-select_streams", "a", "-print_format", "json", source_path],
+                capture_output=True, timeout=15, text=True)
+            src_audio = json.loads(r.stdout).get("streams", [])
+            # Find the best audio track (most channels, best codec)
+            best = max(src_audio, key=lambda s: s.get("channels", 0) * 10 + (5 if "dts" in s.get("codec_name","") else 3))
+            best_idx = src_audio.index(best)
+            info = {
+                "target": os.path.basename(target_path),
+                "source": os.path.basename(source_path),
+                "source_audio": f"{best.get('codec_name','')} {best.get('channels',0)}ch {best.get('tags',{}).get('language','')}",
+                "target_duration": round(t_dur),
+                "source_duration": round(s_dur),
+                "offset_ms": offset_ms,
+            }
+            if dry_run:
+                return {"action": "dry_run", **info}
+            # Execute merge with mkvmerge (using SSD buffer for speed)
+            buf = get_buffer_path(config)
+            local_target = buffer_copy(target_path, config)
+            local_source = buffer_copy(source_path, config)
+            output = os.path.join(buf, os.path.basename(target_path).rsplit(".", 1)[0] + ".merged.mkv")
+            cmd = ["mkvmerge", "-o", output, local_target, "--no-video", "--no-subtitles"]
+            if offset_ms:
+                cmd += ["--sync", f"0:{offset_ms}"]
+            cmd += [local_source]
+            r = subprocess.run(cmd, capture_output=True, timeout=600, text=True)
+            buffer_cleanup(local_target, local_source)
+            if r.returncode not in (0, 1):
+                buffer_cleanup(output)
+                return {"error": f"mkvmerge failed: {r.stderr[:200]}"}
+            if not os.path.exists(output):
+                return {"error": "output file not created"}
+            # Copy merged file back to NFS and replace original
+            import shutil
+            dest = target_path.rsplit(".", 1)[0] + ".mkv" if not target_path.endswith(".mkv") else target_path
+            orig_size = os.path.getsize(target_path)
+            new_size = os.path.getsize(output)
+            shutil.copy2(output, dest)
+            if dest != target_path:
+                os.remove(target_path)
+            buffer_cleanup(output)
+            result = {"action": "merged", "new_size": new_size, "added_bytes": new_size - orig_size, **info}
+            if delete_source:
+                os.remove(source_path)
+                cleanup_dir(os.path.dirname(source_path), dry_run=False)
+                result["source_deleted"] = True
+            log(f"[merge] {info['source_audio']} → {os.path.basename(dest)} (offset {offset_ms}ms)")
+            return result
 
         elif ttype == "generate_thumb":
             # Generate thumbnail for a video file
@@ -934,6 +1711,591 @@ def run_task(ttype, params, config):
                 "disk_free": shutil.disk_usage("/").free if hasattr(shutil, "disk_usage") else "?",
                 "paths": path_info,
             }
+
+        elif ttype == "mediainfo":
+            # Full media analysis via ffprobe
+            paths = params.get("paths", [])
+            if not paths and params.get("path"):
+                paths = [params["path"]]
+            data = {}
+            for p in paths:
+                mp = map_path(p, config)
+                # Handle directory paths (find video file inside)
+                if os.path.isdir(mp):
+                    vexts = (".mkv", ".mp4", ".avi", ".m4v", ".wmv", ".ts", ".m2ts")
+                    vfiles = [(os.path.getsize(os.path.join(mp, f)), os.path.join(mp, f))
+                              for f in os.listdir(mp) if f.lower().endswith(vexts)]
+                    if vfiles:
+                        vfiles.sort(reverse=True)
+                        mp = vfiles[0][1]
+                if os.path.isfile(mp):
+                    data[p] = extract_mediainfo(mp)
+            return {"analyzed": len(data), "data": data}
+
+        elif ttype == "contact_sheet":
+            # Generate contact sheet thumbnail grid
+            path = params.get("path", "")
+            mp = map_path(path, config)
+            if os.path.isdir(mp):
+                vexts = (".mkv", ".mp4", ".avi", ".m4v", ".wmv", ".ts", ".m2ts")
+                vfiles = [(os.path.getsize(os.path.join(mp, f)), os.path.join(mp, f))
+                          for f in os.listdir(mp) if f.lower().endswith(vexts)]
+                if vfiles:
+                    vfiles.sort(reverse=True)
+                    mp = vfiles[0][1]
+            cols = params.get("cols", 4)
+            rows = params.get("rows", 4)
+            width = params.get("width", 1920)
+            tmp = os.path.join("/tmp", f"cs_{os.path.basename(mp)}.jpg")
+            result = generate_contact_sheet(mp, tmp, cols, rows, width)
+            if "error" not in result and os.path.exists(tmp):
+                with open(tmp, "rb") as f:
+                    result["image"] = base64.b64encode(f.read()).decode()
+                os.remove(tmp)
+                result["path"] = path
+            return result
+
+        elif ttype == "validate_match":
+            # Validate that a file matches its IMDB ID by comparing duration
+            # params: paths (list of {path, imdb_id, expected_runtime})
+            items = params.get("items", [])
+            if params.get("path"):
+                items = [{"path": params["path"], "imdb_id": params.get("imdb_id",""), "expected_runtime": params.get("expected_runtime",0)}]
+            results = []
+            for item in items:
+                mp = map_path(item["path"], config)
+                if os.path.isdir(mp):
+                    vexts = (".mkv", ".mp4", ".avi", ".m4v")
+                    vfiles = [(os.path.getsize(os.path.join(mp, f)), os.path.join(mp, f))
+                              for f in os.listdir(mp) if f.lower().endswith(vexts)]
+                    if vfiles:
+                        vfiles.sort(reverse=True)
+                        mp = vfiles[0][1]
+                if not os.path.isfile(mp):
+                    results.append({"path": item["path"], "status": "not_found"})
+                    continue
+                r = subprocess.run(["ffprobe", "-v", "quiet", "-show_entries", "format=duration", "-of", "csv=p=0", mp],
+                    capture_output=True, timeout=15, text=True)
+                actual_s = float(r.stdout.strip()) if r.stdout.strip() else 0
+                actual_min = actual_s / 60
+                expected = item.get("expected_runtime", 0)
+                if expected and actual_min:
+                    diff = abs(actual_min - expected)
+                    if diff <= 5: status = "ok"
+                    elif diff <= 15: status = "possible_variant"  # director's cut etc
+                    else: status = "mismatch"
+                else:
+                    status = "no_reference"
+                results.append({"path": item["path"], "imdb_id": item.get("imdb_id",""),
+                    "actual_min": round(actual_min, 1), "expected_min": expected,
+                    "diff_min": round(abs(actual_min - expected), 1) if expected else None, "status": status})
+            flagged = [r for r in results if r["status"] == "mismatch"]
+            return {"checked": len(results), "flagged": len(flagged), "data": results}
+
+        elif ttype == "identify_movie":
+            # Identify an unknown movie by OCR-ing end credits
+            # params: path, duration (optional, speeds up seeking)
+            path = params.get("path", "")
+            mp = map_path(path, config)
+            if os.path.isdir(mp):
+                vexts = (".mkv", ".mp4", ".avi", ".m4v", ".vob")
+                # Check for VIDEO_TS subfolder
+                vts_sub = os.path.join(mp, "VIDEO_TS")
+                scan_dir = vts_sub if os.path.isdir(vts_sub) else mp
+                vfiles = [(os.path.getsize(os.path.join(scan_dir, f)), os.path.join(scan_dir, f))
+                          for f in os.listdir(scan_dir) if f.lower().endswith(vexts)
+                          and os.path.getsize(os.path.join(scan_dir, f)) > 10_000_000]
+                if vfiles:
+                    vfiles.sort(reverse=True)
+                    mp = vfiles[0][1]
+            if not os.path.isfile(mp):
+                return {"error": "file not found"}
+            # Get duration
+            r = subprocess.run(["ffprobe", "-v", "quiet", "-show_entries", "format=duration", "-of", "csv=p=0", mp],
+                capture_output=True, timeout=30, text=True)
+            duration = float(r.stdout.strip()) if r.stdout.strip() else params.get("duration", 0)
+            if duration < 60:
+                return {"error": "too short or can't read duration"}
+            import tempfile, glob
+            tmpdir = tempfile.mkdtemp(prefix="ocr_")
+            # Phase 1: First 30 seconds (certification cards: BBFC, CNC, FSK, MPAA)
+            for i in range(6):  # 6 frames in first 30s = every 5s
+                subprocess.run(["ffmpeg", "-y", "-ss", str(i * 5 + 2), "-i", mp,
+                    "-vframes", "1", "-vf", "scale=1920:-1", f"{tmpdir}/h{i:03d}.png"],
+                    capture_output=True, timeout=15)
+            # Phase 2: Last 10 minutes (end credits)
+            credits_start = max(0, duration - 600)
+            n_frames = 20  # 20 frames over 10 min
+            interval = 600 / n_frames
+            for i in range(n_frames):
+                t = credits_start + i * interval
+                subprocess.run(["ffmpeg", "-y", "-ss", str(int(t)), "-i", mp,
+                    "-vframes", "1", "-vf", "scale=1920:-1,negate,eq=contrast=1.5:brightness=0.1", f"{tmpdir}/f{i:03d}.png"],
+                    capture_output=True, timeout=15)
+            # OCR via Intello batch API (certification mode for opening, credits mode for end)
+            all_text = []
+            opening_text = []
+            intello_url = config.get("_intello_url", "")
+            intello_token = config.get("_intello_token", "")
+            opening_frames = sorted(glob.glob(f"{tmpdir}/h*.png"))
+            credit_frames = sorted(glob.glob(f"{tmpdir}/f*.png"))
+
+            def _intello_batch(frames, mode):
+                """Send frames to Intello batch OCR via JSON/base64."""
+                if not intello_url or not frames:
+                    return []
+                all_results = []
+                chunk_size = 20
+                for chunk_start in range(0, len(frames), chunk_size):
+                    chunk = frames[chunk_start:chunk_start + chunk_size]
+                    for attempt in range(3):
+                        try:
+                            frame_data = []
+                            for fp in chunk:
+                                jpg_path = fp.replace(".png", ".jpg")
+                                subprocess.run(["ffmpeg", "-y", "-i", fp, "-q:v", "8", jpg_path],
+                                    capture_output=True, timeout=5)
+                                src = jpg_path if os.path.exists(jpg_path) else fp
+                                with open(src, "rb") as f:
+                                    frame_data.append({"filename": os.path.basename(fp), "data": base64.b64encode(f.read()).decode()})
+                                if os.path.exists(jpg_path): os.remove(jpg_path)
+                            payload = json.dumps({"frames": frame_data, "language": "auto", "mode": mode}).encode()
+                            headers = {"Content-Type": "application/json", "User-Agent": "CinephileAgent/2.0"}
+                            if intello_token:
+                                headers["Authorization"] = f"Bearer {intello_token}"
+                            req = urllib.request.Request(f"{intello_url}/api/v1/ocr/batch", data=payload, headers=headers)
+                            resp = json.loads(urllib.request.urlopen(req, timeout=120).read())
+                            results = resp.get("results", resp if isinstance(resp, list) else [])
+                            all_results.extend(results)
+                            break
+                        except Exception as e:
+                            if attempt < 2:
+                                time.sleep(5 * (attempt + 1))
+                            else:
+                                log(f"[ocr] Intello batch failed after 3 attempts: {e}")
+                return all_results
+
+            # Try Intello batch first
+            opening_results = _intello_batch(opening_frames, "certification")
+            credit_results = _intello_batch(credit_frames, "credits")
+
+            if opening_results:
+                for r in (opening_results if isinstance(opening_results, list) else opening_results.get("results", [])):
+                    text = r.get("text", "") if isinstance(r, dict) else str(r)
+                    if text and len(text) > 3:
+                        opening_text.append(text)
+            if credit_results:
+                for r in (credit_results if isinstance(credit_results, list) else credit_results.get("results", [])):
+                    text = r.get("text", "") if isinstance(r, dict) else str(r)
+                    if text and len(text) > 3:
+                        all_text.append(text)
+
+            # Fallback to local Tesseract if Intello returned nothing
+            if not opening_text and not all_text:
+                for png in opening_frames + credit_frames:
+                    is_opening = "/h" in png
+                    r = subprocess.run(["tesseract", png, "stdout", "-l", "eng+fra", "--psm", "6"],
+                        capture_output=True, timeout=10, text=True)
+                    text = r.stdout.strip()
+                    if text and len(text) > 3:
+                        if is_opening:
+                            opening_text.append(text)
+                        else:
+                            all_text.append(text)
+            # Cleanup
+            import shutil
+            shutil.rmtree(tmpdir, ignore_errors=True)
+            # Parse credits text for useful info
+            combined = "\n".join(all_text)
+            # Extract names and roles
+            import re
+            # Common credit patterns
+            directors = re.findall(r"(?:directed by|director|réalisé par|réalisation)\s*[:\-]?\s*(.+)", combined, re.I)
+            actors = re.findall(r"(?:starring|cast|avec|interprétation)\s*[:\-]?\s*(.+)", combined, re.I)
+            writers = re.findall(r"(?:written by|screenplay|scénario)\s*[:\-]?\s*(.+)", combined, re.I)
+            # Look for title - often in large text at the end or beginning of credits
+            # Also extract all capitalized multi-word sequences as potential names
+            names = re.findall(r"\b([A-Z][a-z]+ [A-Z][a-z]+(?:\s[A-Z][a-z]+)?)\b", combined)
+            # Deduplicate
+            names = list(dict.fromkeys(names))[:30]
+            return {
+                "path": path,
+                "duration_min": round(duration / 60, 1),
+                "frames_ocr": len(all_text),
+                "directors": [d.strip() for d in directors[:3]],
+                "actors": [a.strip() for a in actors[:5]],
+                "writers": [w.strip() for w in writers[:3]],
+                "names_found": names[:20],
+                "raw_text_sample": combined[:1500],
+                "opening_text": "\n".join(opening_text)[:500],
+            }
+
+        elif ttype == "write_nfo_verification":
+            # Write OCR verification results into the movie's NFO file
+            # params: path, ocr_data (opening_text, names, directors, status)
+            path = params.get("path", "")
+            ocr_data = params.get("ocr_data", {})
+            status = params.get("status", "verified")
+            mp = map_path(path, config)
+            if os.path.isdir(mp):
+                # Find NFO in the directory
+                nfos = [f for f in os.listdir(mp) if f.endswith(".nfo")]
+                if not nfos:
+                    return {"error": "no NFO found"}
+                nfo_path = os.path.join(mp, nfos[0])
+            elif os.path.isfile(mp):
+                nfo_path = mp.rsplit(".", 1)[0] + ".nfo"
+            else:
+                return {"error": "path not found"}
+            if not os.path.exists(nfo_path):
+                return {"error": f"NFO not found: {nfo_path[-40:]}"}
+            try:
+                content = open(nfo_path, "r", encoding="utf-8", errors="replace").read()
+                # Build verification XML block
+                verify_xml = f"\n  <!--CineCross verification {time.strftime('%Y-%m-%d')}-->\n"
+                verify_xml += f"  <tag>cinecross:verified</tag>\n"
+                if status == "mismatch":
+                    verify_xml += f"  <tag>cinecross:review_needed</tag>\n"
+                opening = ocr_data.get("opening_text", "").strip()
+                if opening:
+                    # Extract clean title/distributor from opening
+                    safe_opening = opening.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")[:200]
+                    verify_xml += f"  <tag>cinecross:opening:{safe_opening[:60]}</tag>\n"
+                directors = ocr_data.get("directors", [])
+                if directors:
+                    for d in directors[:2]:
+                        safe_d = d.replace("&", "&amp;").replace("<", "&lt;")[:50]
+                        verify_xml += f"  <tag>cinecross:ocr_director:{safe_d}</tag>\n"
+                names = ocr_data.get("names_found", [])
+                if names:
+                    for n in names[:5]:
+                        safe_n = n.replace("&", "&amp;").replace("<", "&lt;")[:50]
+                        verify_xml += f"  <tag>cinecross:ocr_name:{safe_n}</tag>\n"
+                # Insert before </movie>
+                if "</movie>" in content:
+                    content = content.replace("</movie>", verify_xml + "</movie>")
+                    open(nfo_path, "w", encoding="utf-8").write(content)
+                    return {"written": nfo_path, "tags_added": verify_xml.count("<tag>")}
+                return {"error": "no </movie> tag found in NFO"}
+            except Exception as e:
+                return {"error": str(e)}
+
+        elif ttype == "transcode_dvd":
+            # Transcode a DVD_TS folder to a single x265 MKV
+            # params: path, crf (default 20), preset (default slow), delete_source (default False)
+            path = params.get("path", "")
+            crf = params.get("crf", 20)
+            preset = params.get("preset", "slow")
+            delete_source = params.get("delete_source", False)
+            mp = map_path(path, config)
+            if not os.path.isdir(mp):
+                return {"error": "directory not found"}
+            # Find VIDEO_TS subfolder or VOBs directly
+            vts_dir = os.path.join(mp, "VIDEO_TS") if os.path.isdir(os.path.join(mp, "VIDEO_TS")) else mp
+            vobs = sorted([os.path.join(vts_dir, f) for f in os.listdir(vts_dir)
+                          if f.upper().endswith(".VOB") and not f.upper().startswith("VTS_00")
+                          and os.path.getsize(os.path.join(vts_dir, f)) > 10_000_000])
+            if not vobs:
+                # Try ISO file
+                isos = [f for f in os.listdir(mp) if f.lower().endswith(".iso")]
+                if isos:
+                    return {"error": "ISO files not supported yet — mount first"}
+                return {"error": "no VOB files found"}
+            # Get source info
+            src_size = sum(os.path.getsize(v) for v in vobs)
+            # Probe first VOB for streams
+            r = subprocess.run(["ffprobe", "-v", "quiet", "-show_streams", "-print_format", "json", vobs[0]],
+                capture_output=True, timeout=30, text=True)
+            streams = json.loads(r.stdout).get("streams", []) if r.returncode == 0 else []
+            audio_streams = [s for s in streams if s.get("codec_type") == "audio"]
+            sub_streams = [s for s in streams if s.get("codec_type") == "subtitle"]
+            # Build ffmpeg command
+            buf = get_buffer_path(config)
+            dirname = os.path.basename(mp)
+            output = os.path.join(buf, f"{dirname}.mkv")
+            # Concat VOBs via concat protocol
+            concat_input = "concat:" + "|".join(vobs)
+            # Try VAAPI hardware encoding, fall back to software
+            vaapi_dev = "/dev/dri/renderD128"
+            use_vaapi = os.path.exists(vaapi_dev)
+            if use_vaapi:
+                cmd = ["ffmpeg", "-y", "-vaapi_device", vaapi_dev, "-i", concat_input,
+                       "-map", "0:v:0",
+                       "-vf", "format=nv12,hwupload",
+                       "-c:v", "hevc_vaapi", "-qp", str(crf)]
+            else:
+                cmd = ["ffmpeg", "-y", "-i", concat_input,
+                       "-map", "0:v:0",
+                       "-c:v", "libx265", "-crf", str(crf), "-preset", preset,
+                       "-pix_fmt", "yuv420p"]
+            # Map all audio streams
+            for i in range(len(audio_streams)):
+                cmd += ["-map", f"0:a:{i}"]
+            cmd += ["-c:a", "aac", "-b:a", "192k"]  # Transcode audio to AAC
+            # Map subtitles if any
+            for i in range(len(sub_streams)):
+                cmd += ["-map", f"0:s:{i}"]
+            cmd += ["-c:s", "copy"]
+            cmd += [output]
+            log(f"[transcode] Starting: {dirname} ({src_size/1073741824:.1f} GB, {len(vobs)} VOBs)")
+            r = subprocess.run(cmd, capture_output=True, timeout=7200, text=True)  # 2h max
+            if not os.path.exists(output) or os.path.getsize(output) < 1_000_000:
+                buffer_cleanup(output)
+                # Extract actual error from stderr (skip progress lines)
+                err_lines = [l for l in (r.stderr or "").split("\n") if l.strip() and not l.strip().startswith("frame=") and "size=" not in l]
+                return {"error": f"ffmpeg failed (rc={r.returncode}): {' '.join(err_lines[-3:])}"}
+            # Verify output duration
+            r2 = subprocess.run(["ffprobe", "-v", "quiet", "-show_entries", "format=duration", "-of", "csv=p=0", output],
+                capture_output=True, timeout=15, text=True)
+            out_duration = float(r2.stdout.strip()) if r2.stdout.strip() else 0
+            # Get source duration
+            r3 = subprocess.run(["ffprobe", "-v", "quiet", "-show_entries", "format=duration", "-of", "csv=p=0", concat_input],
+                capture_output=True, timeout=30, text=True)
+            src_duration = float(r3.stdout.strip()) if r3.stdout.strip() else 0
+            if src_duration > 0 and abs(out_duration - src_duration) > 30:
+                buffer_cleanup(output)
+                return {"error": f"duration mismatch: src={src_duration:.0f}s out={out_duration:.0f}s"}
+            # Move output to destination
+            import shutil
+            new_size = os.path.getsize(output)
+            dest = os.path.join(os.path.dirname(mp), f"{dirname}.mkv")
+            shutil.move(output, dest)
+            saved = src_size - new_size
+            log(f"[transcode] Done: {dirname} — {src_size/1073741824:.1f}GB → {new_size/1073741824:.1f}GB (saved {saved/1073741824:.1f}GB)")
+            # Delete source DVD folder if requested
+            if delete_source:
+                shutil.rmtree(mp, ignore_errors=True)
+            return {"action": "transcoded", "source_size": src_size, "output_size": new_size,
+                    "saved_bytes": saved, "duration": int(out_duration),
+                    "output": dest, "source_deleted": delete_source}
+
+        elif ttype == "integrity_check":
+            # Check file integrity by decoding with ffmpeg - detects truncation/corruption
+            paths = params.get("paths", [])
+            if params.get("path"): paths = [params["path"]]
+            results = {}
+            for p in paths:
+                mp = map_path(p, config)
+                if os.path.isdir(mp):
+                    vexts = (".mkv", ".mp4", ".avi", ".m4v")
+                    vfiles = [(os.path.getsize(os.path.join(mp, f)), os.path.join(mp, f))
+                              for f in os.listdir(mp) if f.lower().endswith(vexts)]
+                    if vfiles:
+                        vfiles.sort(reverse=True)
+                        mp = vfiles[0][1]
+                if not os.path.isfile(mp):
+                    results[p] = {"status": "not_found"}
+                    continue
+                # Run ffmpeg decode check (only first+last 60s to save time)
+                duration = 0
+                try:
+                    r = subprocess.run(["ffprobe", "-v", "quiet", "-show_entries", "format=duration", "-of", "csv=p=0", mp],
+                        capture_output=True, timeout=15, text=True)
+                    duration = float(r.stdout.strip()) if r.stdout.strip() else 0
+                except: pass
+                errors = []
+                # Check beginning (first 30s)
+                r = subprocess.run(["ffmpeg", "-v", "error", "-i", mp, "-t", "30", "-f", "null", "-"],
+                    capture_output=True, timeout=60, text=True)
+                if r.stderr.strip():
+                    errors.append({"position": "start", "errors": r.stderr.strip()[:200]})
+                # Check end (last 30s)
+                if duration > 60:
+                    r = subprocess.run(["ffmpeg", "-v", "error", "-ss", str(int(duration - 30)), "-i", mp, "-f", "null", "-"],
+                        capture_output=True, timeout=60, text=True)
+                    if r.stderr.strip():
+                        errors.append({"position": "end", "errors": r.stderr.strip()[:200]})
+                results[p] = {"status": "corrupt" if errors else "ok", "errors": errors, "duration": int(duration)}
+            return {"checked": len(results), "data": results}
+
+        elif ttype == "scan_extra":
+            # Scan non-TMM directories on demand
+            return {"files": scan_non_tmm(config)}
+
+        elif ttype == "quality_score":
+            # Score file quality using BPP + genre awareness
+            # params: paths (list), genres (optional, comma-separated)
+            paths = params.get("paths", [])
+            if params.get("path"): paths = [params["path"]]
+            genres = params.get("genres", "")
+            results = {}
+            for p in paths:
+                mp = map_path(p, config)
+                if os.path.isdir(mp):
+                    vexts = (".mkv", ".mp4", ".avi", ".m4v")
+                    vfiles = [(os.path.getsize(os.path.join(mp, f)), os.path.join(mp, f))
+                              for f in os.listdir(mp) if f.lower().endswith(vexts)]
+                    if vfiles:
+                        vfiles.sort(reverse=True)
+                        mp = vfiles[0][1]
+                if os.path.isfile(mp):
+                    mi = extract_mediainfo(mp)
+                    if "error" not in mi:
+                        results[p] = compute_quality_score(mi, genres)
+                        results[p]["file"] = os.path.basename(mp)
+                        results[p]["size_gb"] = round(os.path.getsize(mp) / 1073741824, 2)
+                    else:
+                        results[p] = mi
+            return {"scored": len(results), "data": results}
+
+        elif ttype == "compare_files":
+            # Compare two files and recommend which is better
+            # params: file_a, file_b, genres (optional)
+            a_path = map_path(params.get("file_a", ""), config)
+            b_path = map_path(params.get("file_b", ""), config)
+            genres = params.get("genres", "")
+            # Resolve dirs
+            for ref in ("a_path", "b_path"):
+                p = locals()[ref]
+                if os.path.isdir(p):
+                    vexts = (".mkv", ".mp4", ".avi", ".m4v")
+                    vfiles = [(os.path.getsize(os.path.join(p, f)), os.path.join(p, f))
+                              for f in os.listdir(p) if f.lower().endswith(vexts)]
+                    if vfiles:
+                        vfiles.sort(reverse=True)
+                        if ref == "a_path": a_path = vfiles[0][1]
+                        else: b_path = vfiles[0][1]
+            mi_a = extract_mediainfo(a_path)
+            mi_b = extract_mediainfo(b_path)
+            if "error" in mi_a: return {"error": f"file_a: {mi_a['error']}"}
+            if "error" in mi_b: return {"error": f"file_b: {mi_b['error']}"}
+            result = compare_quality(mi_a, mi_b, genres)
+            result["file_a"] = os.path.basename(a_path)
+            result["file_b"] = os.path.basename(b_path)
+            return result
+
+        elif ttype == "ssim_compare":
+            # Perceptual quality comparison using SSIM (sampled frames)
+            # Uses the higher-quality file as reference
+            # params: reference (better file), distorted (file to score), samples (frames to compare, default 60)
+            ref_path = map_path(params.get("reference", ""), config)
+            dist_path = map_path(params.get("distorted", ""), config)
+            samples = params.get("samples", 60)
+            # Resolve dirs
+            for ref in ("ref_path", "dist_path"):
+                p = locals()[ref]
+                if os.path.isdir(p):
+                    vexts = (".mkv", ".mp4", ".avi", ".m4v")
+                    vfiles = [(os.path.getsize(os.path.join(p, f)), os.path.join(p, f))
+                              for f in os.listdir(p) if f.lower().endswith(vexts)]
+                    if vfiles:
+                        vfiles.sort(reverse=True)
+                        if ref == "ref_path": ref_path = vfiles[0][1]
+                        else: dist_path = vfiles[0][1]
+            if not os.path.isfile(ref_path): return {"error": f"reference not found"}
+            if not os.path.isfile(dist_path): return {"error": f"distorted not found"}
+            # Get duration to compute sample interval
+            r = subprocess.run(["ffprobe", "-v", "quiet", "-show_entries", "format=duration", "-of", "csv=p=0", ref_path],
+                capture_output=True, timeout=30, text=True)
+            duration = float(r.stdout.strip()) if r.stdout.strip() else 0
+            if duration < 60: return {"error": "video too short"}
+            # Sample every N seconds
+            interval = duration / samples
+            # Buffer files locally for fast frame decoding
+            local_ref = buffer_copy(ref_path, config)
+            local_dist = buffer_copy(dist_path, config)
+            # Run SSIM comparison with frame sampling
+            import re as _re
+            r = subprocess.run([
+                "ffmpeg", "-i", local_dist, "-i", local_ref,
+                "-lavfi", f"[0:v]fps=1/{interval:.0f}[d];[1:v]fps=1/{interval:.0f}[r];[d][r]scale2ref[d2][r2];[d2][r2]ssim=stats_file=-",
+                "-f", "null", "-"
+            ], capture_output=True, timeout=600, text=True)
+            buffer_cleanup(local_ref, local_dist)
+            # Parse SSIM output from stderr
+            ssim_values = _re.findall(r"All:([\d.]+)", r.stderr)
+            if not ssim_values:
+                return {"error": f"SSIM failed: {r.stderr[-200:]}"}
+            scores = [float(v) for v in ssim_values]
+            avg_ssim = sum(scores) / len(scores)
+            min_ssim = min(scores)
+            # SSIM interpretation: >0.98 = transparent, 0.95-0.98 = good, 0.90-0.95 = noticeable, <0.90 = bad
+            if avg_ssim > 0.98: verdict = "transparent"
+            elif avg_ssim > 0.95: verdict = "good"
+            elif avg_ssim > 0.90: verdict = "noticeable_loss"
+            else: verdict = "significant_loss"
+            return {
+                "ssim_avg": round(avg_ssim, 4),
+                "ssim_min": round(min_ssim, 4),
+                "samples": len(scores),
+                "verdict": verdict,
+                "reference": os.path.basename(ref_path),
+                "distorted": os.path.basename(dist_path),
+            }
+
+        elif ttype == "strip_audio":
+            # Remove audio tracks by language from MKV files using mkvmerge
+            # params: path, languages (list of langs to remove, e.g. ["rus","hin"])
+            # Optional: original_language - won't strip if track matches this
+            # Optional: imdb_id - used to auto-detect original language from TMDB
+            path = params.get("path", "")
+            remove_langs = [l.lower() for l in params.get("languages", ["rus"])]
+            original_lang = params.get("original_language", "").lower()
+            dry_run = params.get("dry_run", True)
+            # Auto-detect original language from TMDB if imdb_id provided and no original_language
+            if not original_lang and params.get("imdb_id"):
+                try:
+                    iid = params["imdb_id"]
+                    url = f"{config.get('_server','')}/api/title?id={iid}&user={config.get('_user','ecb')}"
+                    r = urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "CinephileAgent/2.0"}), timeout=10)
+                    tdata = json.loads(r.read())
+                    original_lang = (tdata.get("original_language") or "").lower()
+                except: pass
+            # Safety: if removing Russian and original language IS Russian, abort
+            if original_lang and any(original_lang.startswith(l[:2]) for l in remove_langs):
+                return {"action": "skipped", "reason": f"original language is '{original_lang}' - matches removal list"}
+            mp = map_path(path, config)
+            # Resolve directory to video file
+            if os.path.isdir(mp):
+                vexts = (".mkv",)
+                vfiles = [(os.path.getsize(os.path.join(mp, f)), os.path.join(mp, f))
+                          for f in os.listdir(mp) if f.lower().endswith(vexts)]
+                if vfiles:
+                    vfiles.sort(reverse=True)
+                    mp = vfiles[0][1]
+            if not os.path.isfile(mp) or not mp.lower().endswith(".mkv"):
+                return {"error": "not an MKV file", "path": mp}
+            # Get track info via mkvmerge --identify
+            r = subprocess.run(["mkvmerge", "-J", mp], capture_output=True, timeout=15, text=True)
+            if r.returncode != 0:
+                return {"error": f"mkvmerge identify failed: {r.stderr[:100]}"}
+            mkv_info = json.loads(r.stdout)
+            tracks = mkv_info.get("tracks", [])
+            audio_tracks = [t for t in tracks if t.get("type") == "audio"]
+            to_remove = []
+            to_keep = []
+            for t in audio_tracks:
+                lang = (t.get("properties", {}).get("language", "") or "").lower()
+                lang_ietf = (t.get("properties", {}).get("language_ietf", "") or "").lower()
+                tid = t["id"]
+                is_target = lang in remove_langs or lang_ietf in remove_langs or any(l in lang for l in remove_langs)
+                is_original = lang == original_lang or lang_ietf == original_lang
+                if is_target and not is_original:
+                    to_remove.append({"id": tid, "language": lang or lang_ietf, "codec": t.get("codec","")})
+                else:
+                    to_keep.append({"id": tid, "language": lang or lang_ietf})
+            if not to_remove:
+                return {"action": "none", "reason": "no matching tracks to remove", "audio_tracks": [{"id": t["id"], "lang": t.get("properties",{}).get("language","")} for t in audio_tracks]}
+            if not to_keep:
+                return {"action": "none", "reason": "would remove ALL audio tracks - aborting", "to_remove": to_remove}
+            if dry_run:
+                return {"action": "dry_run", "would_remove": to_remove, "keeping": to_keep, "path": path}
+            # Execute: mkvmerge -o tmp --audio-tracks !tid1,!tid2 input
+            exclude_ids = ",".join(str(t["id"]) for t in to_remove)
+            tmp_out = mp + ".tmp.mkv"
+            r = subprocess.run(["mkvmerge", "-o", tmp_out, "--audio-tracks", "!" + exclude_ids, mp],
+                capture_output=True, timeout=600, text=True)
+            if r.returncode not in (0, 1):  # 1 = warnings
+                if os.path.exists(tmp_out): os.remove(tmp_out)
+                return {"error": f"mkvmerge failed: {r.stderr[:200]}"}
+            # Replace original
+            orig_size = os.path.getsize(mp)
+            new_size = os.path.getsize(tmp_out)
+            os.replace(tmp_out, mp)
+            saved = orig_size - new_size
+            log(f"[strip] {os.path.basename(mp)}: removed {len(to_remove)} tracks, saved {saved/1048576:.0f} MB")
+            return {"action": "stripped", "removed": to_remove, "kept": to_keep,
+                    "original_size": orig_size, "new_size": new_size, "saved_bytes": saved}
         
         else:
             return {"error": f"Unknown task: {ttype}"}
@@ -1013,6 +2375,15 @@ def main():
                         info["local_path"] = mapped
                     if os.name == "nt":
                         mapped = mapped.replace("/", "\\")
+                    # If path is a directory, find the largest video file inside
+                    if os.path.isdir(mapped):
+                        vexts = (".mkv", ".mp4", ".avi", ".m4v", ".wmv", ".ts", ".m2ts")
+                        vfiles = [(os.path.getsize(os.path.join(mapped, f)), os.path.join(mapped, f))
+                                  for f in os.listdir(mapped) if f.lower().endswith(vexts)]
+                        if vfiles:
+                            vfiles.sort(reverse=True)
+                            mapped = vfiles[0][1]
+                            info["file_path"] = mapped
                     short = os.path.basename(mapped)[:40]
                     print(f"    [{total_sized+total_not_found+1}] {short}...", end="\r")
                     if os.path.isfile(mapped):
