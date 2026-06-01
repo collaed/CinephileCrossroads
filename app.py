@@ -271,7 +271,7 @@ def init_db():
             priority INTEGER DEFAULT 0, status TEXT DEFAULT 'pending',
             created TEXT, completed TEXT, result TEXT);
         CREATE TABLE IF NOT EXISTS agent_data (
-            user TEXT, imdb_id TEXT, field TEXT, value TEXT,
+            user TEXT, imdb_id TEXT, field TEXT, value TEXT, updated_at TEXT,
             PRIMARY KEY (user, imdb_id, field));
         CREATE TABLE IF NOT EXISTS enrichment_log (
             id INTEGER PRIMARY KEY AUTOINCREMENT, imdb_id TEXT, title TEXT,
@@ -358,8 +358,8 @@ def db_clear_auto_tasks():
     db.commit()
 
 def db_set_agent_data(user, imdb_id, field, value):
-    get_db().execute("INSERT OR REPLACE INTO agent_data (user,imdb_id,field,value) VALUES (?,?,?,?)",
-        (user, imdb_id, field, str(value)))
+    get_db().execute("INSERT OR REPLACE INTO agent_data (user,imdb_id,field,value,updated_at) VALUES (?,?,?,?,?)",
+        (user, imdb_id, field, str(value), time.strftime("%Y-%m-%d %H:%M:%S")))
     get_db().commit()
 
 def db_get_agent_field_count(user, field):
@@ -6130,10 +6130,34 @@ def _apply_verification_result(task_result):
         db_enqueue_task("identify_movie", {"path": path}, 25)
 
 def _sched_reconcile():
-    """Flush agent_data (sizes, hashes) into library JSON every 10 min."""
+    """Flush agent_data (sizes, hashes) into library JSON every 10 min. Re-verify oldest 20 every hour."""
     for user in list_users():
         n = reconcile_agent_data(user)
         if n: print(f"[scheduler] reconciled {n} titles for {user}")
+    # Every ~hour (6th call at 600s interval), re-queue 20 oldest entries for re-verification
+    if not hasattr(_sched_reconcile, "_count"): _sched_reconcile._count = 0
+    _sched_reconcile._count += 1
+    if _sched_reconcile._count % 6 == 0:
+        db = get_db()
+        # Oldest file_size entries (NULL updated_at sorts first, then oldest)
+        oldest = db.execute("""SELECT imdb_id FROM agent_data WHERE user='ecb' AND field='file_size'
+            ORDER BY COALESCE(updated_at, '2000-01-01') LIMIT 20""").fetchall()
+        if oldest:
+            library = load_user_tmm("ecb")
+            paths = []
+            iids = []
+            for row in oldest:
+                iid = row[0]
+                if iid not in library: continue
+                entries = library[iid] if isinstance(library[iid], list) else [library[iid]]
+                for e in entries:
+                    if isinstance(e, dict) and e.get("path"):
+                        paths.append(e["path"])
+                        iids.append(iid)
+                        break
+            if paths:
+                db_enqueue_task("size_files", {"paths": paths[:20], "imdb_ids": iids[:20]}, PRIORITY_SUBS)
+                print(f"[scheduler] re-verify: queued 20 oldest sizes")
 
 def _scheduler():
     """Supervised scheduler — each task independent, staggered, crash-resilient."""
