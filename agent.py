@@ -1293,11 +1293,27 @@ def daemon_mode(args, config):
     task_loop()  # Run task loop in main thread
 
 def _safe_stat(path, timeout=5):
-    """os.path.getsize with timeout to avoid SMB hangs."""
+    """os.path.getsize with timeout to avoid SMB hangs. Resolves dirs to largest video file."""
     import threading
     result = [None]
     def _do():
-        try: result[0] = os.path.getsize(path)
+        try:
+            if os.path.isdir(path):
+                vexts = (".mkv", ".mp4", ".avi", ".m4v", ".ts", ".vob", ".iso")
+                best = 0
+                for f in os.listdir(path):
+                    if f.lower().endswith(vexts):
+                        sz = os.path.getsize(os.path.join(path, f))
+                        if sz > best: best = sz
+                # Also check VIDEO_TS subfolder
+                vts = os.path.join(path, "VIDEO_TS")
+                if os.path.isdir(vts):
+                    for f in os.listdir(vts):
+                        if f.lower().endswith(".vob"):
+                            best += os.path.getsize(os.path.join(vts, f))
+                result[0] = best if best > 0 else None
+            else:
+                result[0] = os.path.getsize(path)
         except: pass
     t = threading.Thread(target=_do, daemon=True)
     t.start()
