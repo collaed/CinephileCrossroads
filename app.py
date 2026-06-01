@@ -3501,14 +3501,26 @@ def render_library_nav(user, active="library"):
 def _merge_agent_data(library, user):
     agent = db_get_agent_data(user) if get_db() else (load_agent_data(user) or {})
     for iid, adata in agent.items():
-        if iid in library and isinstance(library[iid], dict):
-            if isinstance(adata, dict):
+        if iid not in library: continue
+        if isinstance(adata, dict):
+            entries = library[iid] if isinstance(library[iid], list) else [library[iid]] if isinstance(library[iid], dict) else []
+            for e in entries:
+                if not isinstance(e, dict): continue
                 for k, v in adata.items():
+                    if not v: continue
                     try:
                         if k in ("file_size",) and v: v = int(v)
                     except (ValueError, TypeError): pass
-                    library[iid][k] = v
+                    if not e.get(k): e[k] = v
     return library
+
+def reconcile_agent_data(user):
+    """Flush agent_data (SQLite) into tmm_library.json. Call periodically."""
+    library = load_user_tmm(user)
+    if not library: return 0
+    library = _merge_agent_data(library, user)
+    save_user_tmm(user, library)
+    return sum(1 for k in library if not k.startswith("_"))
 
 def render_library(user):
     """Library page with sub-navigation."""
@@ -6117,6 +6129,11 @@ def _apply_verification_result(task_result):
     for path in escalate[:10]:  # Max 10 per batch to avoid overload
         db_enqueue_task("identify_movie", {"path": path}, 25)
 
+def _sched_reconcile():
+    """Flush agent_data (sizes, hashes) into library JSON every 10 min."""
+    for user in list_users():
+        n = reconcile_agent_data(user)
+        if n: print(f"[scheduler] reconciled {n} titles for {user}")
 
 def _scheduler():
     """Supervised scheduler — each task independent, staggered, crash-resilient."""
@@ -6126,6 +6143,7 @@ def _scheduler():
         ("catalog", _sched_catalog, 600),
         ("discovery", _sched_discovery, 600),
         ("verification", _sched_verification, 300),
+        ("reconcile", _sched_reconcile, 600),
     ]
     threads = []
     for name, fn, interval in tasks:
