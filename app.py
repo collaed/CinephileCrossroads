@@ -301,7 +301,7 @@ def db_enqueue_task(task_type, params=None, priority=0):
 TASK_LANES = {
     "disk": ["validate_match", "hash_files", "size_files", "check_quality", "integrity_check", "scan_extra", "quality_score", "compare_files", "diag"],
     "cpu": ["contact_sheet", "ssim_compare", "merge_audio", "strip_audio", "generate_thumb", "transcode_dvd", "sync_subs"],
-    "api": ["identify_movie", "download_subs"],
+    "api": ["identify_movie", "download_subs", "search_upgrade"],
 }
 LANE_FOR_TYPE = {t: lane for lane, types in TASK_LANES.items() for t in types}
 
@@ -5615,7 +5615,14 @@ td{{padding:8px;border-bottom:1px solid #333}}a{{color:#4fc3f7}}</style></head>
                         db_enqueue_task("transcode_dvd", {"path": e["path"], "crf": 22, "preset": "medium"}, PRIORITY_HUMAN)
                         break
             elif action == "flag_upgrade" and iid:
-                # Mark for upgrade search — future: trigger Radarr/search
+                # Queue search_upgrade task for the agent (Radarr/Sonarr are local to beirao)
+                titles = load_titles()
+                t = titles.get(iid, {})
+                is_tv = t.get("type") in ("tvSeries", "tvMiniSeries")
+                db_enqueue_task("search_upgrade", {
+                    "imdb_id": iid, "tmdb_id": t.get("tmdb_id", 0), "tvdb_id": t.get("tvdb_id", 0),
+                    "title": t.get("title", ""), "year": t.get("year", ""), "is_tv": is_tv
+                }, PRIORITY_HUMAN)
                 db = get_db()
                 db.execute("INSERT OR REPLACE INTO agent_data (user,imdb_id,field,value,updated_at) VALUES (?,?,?,?,?)",
                     (u, iid, "upgrade_wanted", "1", time.strftime("%Y-%m-%d %H:%M:%S")))

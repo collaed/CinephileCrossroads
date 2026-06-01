@@ -1506,6 +1506,44 @@ def run_task(ttype, params, config):
                     log(f"[sync] {os.path.basename(srt)} shift={max_shift}ms drift={drift}ms")
             return {"synced": len(synced), "skipped": len(skipped), "details": synced, "already_ok": skipped}
 
+        elif ttype == "search_upgrade":
+            # Add to Radarr/Sonarr and trigger search for better quality
+            is_tv = params.get("is_tv", False)
+            tmdb_id = params.get("tmdb_id", 0)
+            tvdb_id = params.get("tvdb_id", 0)
+            title = params.get("title", "")
+            year = params.get("year", "")
+            if is_tv:
+                url = config.get("sonarr", {}).get("url", "http://localhost:8989")
+                key = config.get("sonarr", {}).get("token", "")
+                if not key or not tvdb_id:
+                    return {"error": "sonarr not configured or no tvdb_id"}
+                payload = json.dumps({"tvdbId": int(tvdb_id), "title": title, "qualityProfileId": 4,
+                    "rootFolderPath": "/tv", "monitored": True, "addOptions": {"searchForMissingEpisodes": True}})
+            else:
+                url = config.get("radarr", {}).get("url", "http://localhost:7878")
+                key = config.get("radarr", {}).get("token", "")
+                if not key or not tmdb_id:
+                    return {"error": "radarr not configured or no tmdb_id"}
+                payload = json.dumps({"tmdbId": int(tmdb_id), "title": title, "year": int(year) if year else 0,
+                    "qualityProfileId": 4, "rootFolderPath": "/movies", "monitored": True,
+                    "addOptions": {"searchForMovie": True}})
+            endpoint = f"{url}/api/v3/{'series' if is_tv else 'movie'}"
+            req = urllib.request.Request(endpoint, data=payload.encode(),
+                headers={"X-Api-Key": key, "Content-Type": "application/json"})
+            try:
+                resp = urllib.request.urlopen(req, timeout=15)
+                result = json.loads(resp.read())
+                log(f"[upgrade] {'Sonarr' if is_tv else 'Radarr'}: added {title} ({year})")
+                return {"status": "added", "title": title, "id": result.get("id")}
+            except urllib.error.HTTPError as e:
+                body = e.read().decode()
+                if "already been added" in body.lower() or "exists" in body.lower():
+                    # Already in Radarr/Sonarr — trigger manual search instead
+                    log(f"[upgrade] {title} already in {'Sonarr' if is_tv else 'Radarr'}, triggering search")
+                    return {"status": "already_exists", "title": title}
+                return {"error": f"HTTP {e.code}: {body[:100]}"}
+
         elif ttype == "check_quality":
             paths = params.get("paths", [])
             genres = params.get("genres", "")
