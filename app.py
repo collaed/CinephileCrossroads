@@ -3497,6 +3497,7 @@ def render_library_nav(user, active="library"):
         ("org", "🗂 Organize", f"{BASE}/library/org/{user}"),
         ("confirm", "⚠ Confirm", f"{BASE}/confirm/{user}"), ("verify", "🔬 Verify", f"{BASE}/verify/{user}"), ("health", "🏥 Health", f"{BASE}/health/{user}"), ("incoming", "📥 Incoming", f"{BASE}/incoming/{user}"),
         ("suggestions", "💡 Suggestions", f"{BASE}/library/suggestions/{user}"),
+        ("backlog", "📋 Backlog", f"{BASE}/library/backlog/{user}"),
     ], active)
 
 def _merge_agent_data(library, user):
@@ -3522,6 +3523,104 @@ def reconcile_agent_data(user):
     library = _merge_agent_data(library, user)
     save_user_tmm(user, library)
     return sum(1 for k in library if not k.startswith("_"))
+
+def render_backlog(user):
+    """Human action items — things the system can't do alone."""
+    db = get_db()
+    library = load_user_tmm(user)
+    titles = load_titles()
+    html = render_library_nav(user, "backlog")
+    html += '<h2>📋 Backlog — Human Actions Needed</h2>'
+    html += '<p style="color:var(--muted)">Items requiring your attention. The system handles everything else automatically.</p>'
+
+    items = []
+
+    # 1. Radarr/Sonarr indexer setup
+    try:
+        import urllib.request
+        r = urllib.request.urlopen("http://beirao:7878/api/v3/indexer?apikey=a058ec8d36f04aafb197d2f49c15a327", timeout=3)
+        radarr_indexers = len(json.loads(r.read()))
+    except:
+        radarr_indexers = -1
+    try:
+        r = urllib.request.urlopen("http://beirao:8989/api/v3/indexer?apikey=5dd23f064c10436e856a68d6bf4e586a", timeout=3)
+        sonarr_indexers = len(json.loads(r.read()))
+    except:
+        sonarr_indexers = -1
+    if radarr_indexers == 0:
+        items.append(("🔴", "Configure Radarr indexers", "Radarr has no indexers — it can't search for movies without them.",
+            "http://beirao.local:7878/settings/indexers", "Open Radarr Settings"))
+    if sonarr_indexers == 0:
+        items.append(("🔴", "Configure Sonarr indexers", "Sonarr has no indexers — it can't search for TV shows without them.",
+            "http://beirao.local:8989/settings/indexers", "Open Sonarr Settings"))
+
+    # 2. OCR results needing human review
+    try:
+        ocr_reviews = db.execute("SELECT path, result, status FROM verification WHERE status IN ('review_needed', 'truncated') ORDER BY ts DESC").fetchall()
+    except:
+        ocr_reviews = []
+    if ocr_reviews:
+        items.append(("🟡", f"Review {len(ocr_reviews)} OCR identifications",
+            "Movies where OCR couldn't confidently match — may be truncated files or wrong matches.",
+            f"{BASE}/verify/{user}", "Open Verify Page"))
+
+    # 3. Merge dry-runs awaiting approval
+    merge_dryrun = db.execute("SELECT params, result FROM task_queue WHERE type='merge_audio' AND status='done' AND result LIKE '%dry_run%'").fetchall()
+    if merge_dryrun:
+        items.append(("🟡", f"Approve {len(merge_dryrun)} audio merge candidates",
+            "Files where a better audio track was found. Review and approve to merge.",
+            f"{BASE}/library/{user}", "Review Merges"))
+
+    # 4. Upgrade requests without indexers
+    upgrades = db.execute("SELECT imdb_id, value FROM agent_data WHERE field='upgrade_wanted' AND user=?", (user,)).fetchall()
+    if upgrades and (radarr_indexers == 0 or sonarr_indexers == 0):
+        items.append(("🟡", f"{len(upgrades)} upgrade requests waiting",
+            "You've flagged titles for upgrade but indexers aren't configured yet.",
+            f"{BASE}/library/suggestions/{user}", "View Suggestions"))
+
+    # 5. Title mismatches needing confirmation
+    try:
+        from app import find_mismatches
+        mismatches = find_mismatches(user)
+    except:
+        mismatches = []
+    if mismatches:
+        items.append(("🟡", f"Confirm {len(mismatches)} title mismatches",
+            "Filenames that don't match their IMDB title — may be wrong matches or foreign titles.",
+            f"{BASE}/confirm/{user}", "Open Confirm Page"))
+
+    # 6. Pending automation status
+    pending = dict(db.execute("SELECT type, count(*) FROM task_queue WHERE status='pending' GROUP BY type").fetchall())
+    total_pending = sum(pending.values())
+    if total_pending > 0:
+        items.append(("🔵", f"{total_pending} automated tasks running",
+            " · ".join(f"{c}× {t}" for t, c in sorted(pending.items(), key=lambda x: -x[1])),
+            f"{BASE}/library/{user}", "View Dashboard"))
+
+    # 7. Subs coverage
+    all_entries = [e for k, v in library.items() if not k.startswith("_") for e in (v if isinstance(v, list) else [v]) if isinstance(e, dict)]
+    total_files = len(all_entries)
+    with_subs = sum(1 for e in all_entries if e.get("subtitles"))
+    if with_subs < total_files * 0.5:
+        items.append(("🔵", f"Subtitle coverage: {with_subs*100//total_files}%",
+            f"{total_files - with_subs} files still need subtitles. Batches of 50 are queued automatically every 6h.",
+            None, None))
+
+    # Render
+    if not items:
+        html += '<div style="text-align:center;padding:40px"><div style="font-size:3em">✅</div><p>Nothing to do! The system is running smoothly.</p></div>'
+    else:
+        for priority, title, desc, link, link_text in items:
+            html += f'<div class="card" style="margin-bottom:12px;padding:16px;border-left:4px solid {"#e74c3c" if priority=="🔴" else "#f39c12" if priority=="🟡" else "#4fc3f7"}">'
+            html += f'<div style="display:flex;justify-content:space-between;align-items:center">'
+            html += f'<div><b>{priority} {title}</b><br><span style="color:var(--muted);font-size:.85em">{desc}</span></div>'
+            if link:
+                html += f'<a href="{link}" class="btn" style="background:var(--accent);color:#1a1a2e;padding:6px 14px;border-radius:6px;text-decoration:none;font-size:.85em;white-space:nowrap">{link_text}</a>'
+            html += '</div></div>'
+
+    # Recheck button
+    html += f'<div style="margin-top:20px;text-align:center"><a href="{BASE}/library/backlog/{user}" style="color:var(--accent);text-decoration:none">🔄 Recheck Status</a></div>'
+    return html
 
 def render_suggestions(user):
     """Quality suggestions: upgrade starved files, transcode bloated ones, reorganize TV."""
@@ -5601,6 +5700,10 @@ td{{padding:8px;border-bottom:1px solid #333}}a{{color:#4fc3f7}}</style></head>
         elif p.startswith("/verify/"):
             u = parts[-1] if len(parts) > 1 else self._user(parts)
             self._page(render_verification(u), "library", u)
+            return
+        elif p.startswith("/library/backlog/"):
+            u = parts[-1] if len(parts) > 1 else self._user(parts)
+            self._page(render_backlog(u), "library", u)
             return
         elif p.startswith("/library/suggestions/"):
             u = parts[-1] if len(parts) > 1 else self._user(parts)
