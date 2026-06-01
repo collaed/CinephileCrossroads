@@ -3598,6 +3598,38 @@ def render_suggestions(user):
     else:
         html += '<p style="color:var(--accent2)">✅ No bloated files found.</p>'
 
+    # === TV QUALITY INCONSISTENCY ===
+    episodes = library.get("_episodes", {})
+    shows_by_name = {}
+    for k, v in episodes.items():
+        if not isinstance(v, dict): continue
+        show = v.get("showtitle", k.split("|")[0])
+        shows_by_name.setdefault(show, []).append(v)
+    inconsistent_shows = []
+    for show, ep_list in shows_by_name.items():
+        heights = [e.get("video_height", 0) for e in ep_list if e.get("video_height")]
+        if len(heights) < 2: continue
+        max_h, min_h = max(heights), min(heights)
+        if max_h >= 720 and min_h < max_h * 0.7:
+            bad_eps = [e for e in ep_list if (e.get("video_height") or 0) < max_h * 0.7]
+            inconsistent_shows.append((show, len(ep_list), len(bad_eps), max_h, min_h, bad_eps))
+    inconsistent_shows.sort(key=lambda x: -x[2])
+
+    html += f'<h3 style="margin-top:30px">📉 TV Quality Inconsistency ({len(inconsistent_shows)} shows)</h3>'
+    html += '<p style="color:var(--muted);font-size:.85em">Shows where some episodes are significantly lower quality than the rest. Upgrade candidates for consistent viewing.</p>'
+    if inconsistent_shows:
+        html += '<table><thead><tr><th>Show</th><th>Episodes</th><th>Low Quality</th><th>Best</th><th>Worst</th><th>Upgrade</th></tr></thead><tbody>'
+        for show, total, bad_count, max_h, min_h, bad_eps in inconsistent_shows[:30]:
+            pct = bad_count * 100 // total
+            color = "#e74c3c" if pct > 50 else "#f39c12" if pct > 20 else "#f1c40f"
+            html += f'<tr><td><b>{show}</b></td><td>{total}</td>'
+            html += f'<td style="color:{color};font-weight:bold">{bad_count} ({pct}%)</td>'
+            html += f'<td>{max_h}p</td><td style="color:#e74c3c">{min_h}p</td>'
+            html += f'<td><a href="{BASE}/library/suggestions/{user}?action=flag_upgrade&show={urllib.parse.quote(show)}" style="color:var(--accent)">🔍 Find {max_h}p</a></td></tr>'
+        html += '</tbody></table>'
+    else:
+        html += '<p style="color:var(--accent2)">✅ All shows have consistent quality.</p>'
+
     # === TV IN WRONG FOLDER ===
     html += f'<h3 style="margin-top:30px">📺 TV Shows in Movies Folder ({len(tv_misplaced)})</h3>'
     html += '<p style="color:var(--muted);font-size:.85em">TV series/miniseries filed under Movies. Should be moved to TVShows for proper media server indexing.</p>'
