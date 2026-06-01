@@ -3496,6 +3496,7 @@ def render_library_nav(user, active="library"):
         ("scraper", "🔍 Scraper", f"{BASE}/scraper/{user}"),
         ("org", "🗂 Organize", f"{BASE}/library/org/{user}"),
         ("confirm", "⚠ Confirm", f"{BASE}/confirm/{user}"), ("verify", "🔬 Verify", f"{BASE}/verify/{user}"), ("health", "🏥 Health", f"{BASE}/health/{user}"), ("incoming", "📥 Incoming", f"{BASE}/incoming/{user}"),
+        ("suggestions", "💡 Suggestions", f"{BASE}/library/suggestions/{user}"),
     ], active)
 
 def _merge_agent_data(library, user):
@@ -3521,6 +3522,97 @@ def reconcile_agent_data(user):
     library = _merge_agent_data(library, user)
     save_user_tmm(user, library)
     return sum(1 for k in library if not k.startswith("_"))
+
+def render_suggestions(user):
+    """Quality suggestions: upgrade starved files, transcode bloated ones, reorganize TV."""
+    library = _merge_agent_data(load_user_tmm(user), user)
+    titles = load_titles()
+    html = render_library_nav(user, "suggestions")
+    html += '<h2>💡 Library Suggestions</h2>'
+
+    starved, bloated, tv_misplaced = [], [], []
+    for iid, val in library.items():
+        if iid.startswith("_"): continue
+        t = titles.get(iid, {})
+        try:
+            runtime = int(t.get("runtime", 0) or 0)
+        except (ValueError, TypeError):
+            runtime = 0
+        if not runtime or runtime < 30: continue
+        entries = val if isinstance(val, list) else [val] if isinstance(val, dict) else []
+        for e in entries:
+            if not isinstance(e, dict): continue
+            sz = e.get("file_size", 0)
+            if not sz: continue
+            bitrate = (sz * 8) / (runtime * 60) / 1_000_000
+            w = e.get("video_width", 0) or 0
+            path = e.get("path", "")
+            # Starved: < 1.5 Mbps and supposed to be HD
+            if bitrate < 1.5 and sz > 100_000_000:
+                starved.append((iid, t, e, bitrate, sz))
+            # Bloated: > 15 Mbps (remux/raw that could be re-encoded)
+            elif bitrate > 15 and sz > 5_000_000_000:
+                bloated.append((iid, t, e, bitrate, sz))
+            # TV in Movies folder
+            if t.get("type") in ("tvSeries", "tvMiniSeries") and "Movies" in path:
+                tv_misplaced.append((iid, t, e))
+
+    # Sort: starved by bitrate (worst first), bloated by size (biggest savings first)
+    starved.sort(key=lambda x: x[3])
+    bloated.sort(key=lambda x: -x[4])
+
+    # === STARVED FILES ===
+    html += f'<h3 style="margin-top:20px">⚠️ Upgrade Candidates — Starved Quality ({len(starved)})</h3>'
+    html += '<p style="color:var(--muted);font-size:.85em">Files with very low bitrate for their runtime. Likely old XviD/DivX rips that should be replaced with proper HD encodes.</p>'
+    if starved:
+        html += '<table><thead><tr><th>Title</th><th>Year</th><th>Size</th><th>Bitrate</th><th>Resolution</th><th>Action</th></tr></thead><tbody>'
+        for iid, t, e, bitrate, sz in starved[:50]:
+            sz_str = f"{sz/1073741824:.1f} GB" if sz > 1073741824 else f"{sz/1048576:.0f} MB"
+            w = e.get("video_width", 0) or 0
+            res = f"{w}p" if w else "?"
+            html += f'<tr><td><a href="{BASE}/title/{iid}">{t.get("title","?")}</a></td>'
+            html += f'<td>{t.get("year","")}</td><td>{sz_str}</td>'
+            html += f'<td style="color:#e74c3c;font-weight:bold">{bitrate:.1f} Mbps</td><td>{res}</td>'
+            html += f'<td><a href="{BASE}/library/suggestions/{user}?action=flag_upgrade&iid={iid}" style="color:var(--accent)">🔍 Find better</a></td></tr>'
+        html += '</tbody></table>'
+    else:
+        html += '<p style="color:var(--accent2)">✅ No starved files found.</p>'
+
+    # === BLOATED FILES ===
+    html += f'<h3 style="margin-top:30px">🐘 Transcode Candidates — Bloated ({len(bloated)})</h3>'
+    html += '<p style="color:var(--muted);font-size:.85em">High-bitrate files (remuxes, raw Blu-ray) that could be re-encoded to HEVC with minimal quality loss, saving significant disk space.</p>'
+    if bloated:
+        html += '<table><thead><tr><th>Title</th><th>Year</th><th>Size</th><th>Bitrate</th><th>Potential Savings</th><th>Action</th></tr></thead><tbody>'
+        for iid, t, e, bitrate, sz in bloated[:50]:
+            sz_str = f"{sz/1073741824:.1f} GB"
+            # Estimate: re-encode to ~8 Mbps target
+            target_sz = (8_000_000 * int(t.get("runtime", 90) or 90) * 60) / 8
+            savings = sz - target_sz
+            savings_str = f"{savings/1073741824:.1f} GB" if savings > 0 else "—"
+            html += f'<tr><td><a href="{BASE}/title/{iid}">{t.get("title","?")}</a></td>'
+            html += f'<td>{t.get("year","")}</td><td>{sz_str}</td>'
+            html += f'<td style="color:#f39c12;font-weight:bold">{bitrate:.1f} Mbps</td>'
+            html += f'<td style="color:var(--accent2)">{savings_str}</td>'
+            html += f'<td><a href="{BASE}/library/suggestions/{user}?action=transcode&iid={iid}" style="color:var(--accent)">🔄 Transcode</a></td></tr>'
+        html += '</tbody></table>'
+    else:
+        html += '<p style="color:var(--accent2)">✅ No bloated files found.</p>'
+
+    # === TV IN WRONG FOLDER ===
+    html += f'<h3 style="margin-top:30px">📺 TV Shows in Movies Folder ({len(tv_misplaced)})</h3>'
+    html += '<p style="color:var(--muted);font-size:.85em">TV series/miniseries filed under Movies. Should be moved to TVShows for proper media server indexing.</p>'
+    if tv_misplaced:
+        html += '<table><thead><tr><th>Title</th><th>Year</th><th>Type</th><th>Current Path</th></tr></thead><tbody>'
+        for iid, t, e in tv_misplaced[:30]:
+            path_short = e.get("path", "")[-60:]
+            html += f'<tr><td><a href="{BASE}/title/{iid}">{t.get("title","?")}</a></td>'
+            html += f'<td>{t.get("year","")}</td><td>{t.get("type","")}</td>'
+            html += f'<td style="font-size:.8em;color:var(--muted)">...{path_short}</td></tr>'
+        html += '</tbody></table>'
+    else:
+        html += '<p style="color:var(--accent2)">✅ All TV shows properly organized.</p>'
+
+    return html
 
 def render_library(user):
     """Library page with sub-navigation."""
@@ -5477,6 +5569,26 @@ td{{padding:8px;border-bottom:1px solid #333}}a{{color:#4fc3f7}}</style></head>
         elif p.startswith("/verify/"):
             u = parts[-1] if len(parts) > 1 else self._user(parts)
             self._page(render_verification(u), "library", u)
+            return
+        elif p.startswith("/library/suggestions/"):
+            u = parts[-1] if len(parts) > 1 else self._user(parts)
+            action = qs.get("action", [""])[0]
+            iid = qs.get("iid", [""])[0]
+            if action == "transcode" and iid:
+                library = load_user_tmm(u)
+                entry = library.get(iid)
+                entries = entry if isinstance(entry, list) else [entry] if isinstance(entry, dict) else []
+                for e in entries:
+                    if isinstance(e, dict) and e.get("path"):
+                        db_enqueue_task("transcode_dvd", {"path": e["path"], "crf": 22, "preset": "medium"}, PRIORITY_HUMAN)
+                        break
+            elif action == "flag_upgrade" and iid:
+                # Mark for upgrade search — future: trigger Radarr/search
+                db = get_db()
+                db.execute("INSERT OR REPLACE INTO agent_data (user,imdb_id,field,value,updated_at) VALUES (?,?,?,?,?)",
+                    (u, iid, "upgrade_wanted", "1", time.strftime("%Y-%m-%d %H:%M:%S")))
+                db.commit()
+            self._page(render_suggestions(u), "library", u)
             return
         elif p.startswith("/library/"):
             u = parts[-1] if len(parts) > 1 else self._user(parts)
