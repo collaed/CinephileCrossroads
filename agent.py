@@ -1443,6 +1443,7 @@ def run_task(ttype, params, config):
         
         elif ttype == "sync_subs":
             # Sync subtitle timing to video using alass
+            # Skips if subtitle is already well-synced (<500ms offset)
             path = params.get("path", "")
             sub_path = params.get("sub_path", "")
             mp = map_path(path, config)
@@ -1453,27 +1454,44 @@ def run_task(ttype, params, config):
                 if vfiles:
                     vfiles.sort(reverse=True)
                     mp = vfiles[0][1]
-            sub_mp = map_path(sub_path, config) if sub_path else None
-            # If no explicit sub_path, find .srt files next to video
-            if not sub_mp:
-                video_base = mp.rsplit(".", 1)[0]
-                srt_files = [f for f in os.listdir(os.path.dirname(mp)) if f.endswith(".srt") and f.startswith(os.path.basename(video_base))]
-                synced = []
-                for srt in srt_files:
-                    full = os.path.join(os.path.dirname(mp), srt)
-                    out = full.replace(".srt", ".synced.srt")
-                    r = subprocess.run(["alass", mp, full, out], capture_output=True, timeout=120, text=True)
-                    if r.returncode == 0 and os.path.exists(out):
-                        os.replace(out, full)
-                        synced.append(srt)
-                return {"synced": len(synced), "files": synced}
+            if not os.path.isfile(mp):
+                return {"error": f"video not found: {mp[:60]}"}
+            # Find srt files to sync
+            video_base = mp.rsplit(".", 1)[0]
+            if sub_path:
+                srt_files = [map_path(sub_path, config)]
             else:
-                out = sub_mp.replace(".srt", ".synced.srt")
-                r = subprocess.run(["alass", mp, sub_mp, out], capture_output=True, timeout=120, text=True)
-                if r.returncode == 0 and os.path.exists(out):
-                    os.replace(out, sub_mp)
-                    return {"synced": 1, "file": os.path.basename(sub_mp)}
-                return {"error": f"alass failed: {r.stderr[:100]}"}
+                srt_files = [os.path.join(os.path.dirname(mp), f)
+                             for f in os.listdir(os.path.dirname(mp))
+                             if f.endswith(".srt") and f.startswith(os.path.basename(video_base))]
+            synced = []
+            skipped = []
+            for srt in srt_files:
+                if not os.path.isfile(srt): continue
+                out = srt + ".tmp_synced"
+                r = subprocess.run(["alass", mp, srt, out], capture_output=True, timeout=120, text=True)
+                if r.returncode != 0 or not os.path.exists(out):
+                    continue
+                # Check if sync made a meaningful difference
+                def first_timestamp(path):
+                    import re
+                    with open(path, "r", encoding="utf-8", errors="replace") as f:
+                        for line in f:
+                            m = re.match(r"(\d{2}):(\d{2}):(\d{2}),(\d{3})", line)
+                            if m:
+                                return int(m.group(1))*3600000 + int(m.group(2))*60000 + int(m.group(3))*1000 + int(m.group(4))
+                    return 0
+                orig_ts = first_timestamp(srt)
+                new_ts = first_timestamp(out)
+                shift_ms = abs(new_ts - orig_ts)
+                if shift_ms < 500:
+                    os.remove(out)
+                    skipped.append(os.path.basename(srt))
+                else:
+                    os.replace(out, srt)
+                    synced.append({"file": os.path.basename(srt), "shift_ms": shift_ms})
+                    log(f"[sync] {os.path.basename(srt)} shifted {shift_ms}ms")
+            return {"synced": len(synced), "skipped": len(skipped), "details": synced, "already_ok": skipped}
 
         elif ttype == "check_quality":
             paths = params.get("paths", [])
