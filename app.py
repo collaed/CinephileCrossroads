@@ -6281,7 +6281,7 @@ def _apply_verification_result(task_result):
         db_enqueue_task("identify_movie", {"path": path}, 25)
 
 def _sched_reconcile():
-    """Flush agent_data (sizes, hashes) into library JSON every 10 min. Re-verify oldest 20 every hour."""
+    """Flush agent_data into library JSON every 10 min. Re-verify oldest 20 hourly. Regenerate tasks every 6h."""
     for user in list_users():
         n = reconcile_agent_data(user)
         if n: print(f"[scheduler] reconciled {n} titles for {user}")
@@ -6309,6 +6309,16 @@ def _sched_reconcile():
             if paths:
                 db_enqueue_task("size_files", {"paths": paths[:20], "imdb_ids": iids[:20]}, PRIORITY_SUBS)
                 print(f"[scheduler] re-verify: queued 20 oldest sizes")
+    # Every ~6 hours (36th call), regenerate full task queue if it's nearly empty
+    if _sched_reconcile._count % 36 == 0:
+        db = get_db()
+        pending = db.execute("SELECT count(*) FROM task_queue WHERE status='pending'").fetchone()[0]
+        if pending < 50:
+            for user in list_users():
+                n = generate_tasks_for_library(user)
+                if n: print(f"[scheduler] regenerated {n} tasks for {user}")
+        else:
+            print(f"[scheduler] skip regen: {pending} tasks still pending")
 
 def _scheduler():
     """Supervised scheduler — each task independent, staggered, crash-resilient."""
