@@ -1441,6 +1441,40 @@ def run_task(ttype, params, config):
                     downloaded.append({"lang": language, "status": f"error: {str(e)[:50]}"})
             return {"imdb_id": imdb_id, "path": path, "results": downloaded}
         
+        elif ttype == "sync_subs":
+            # Sync subtitle timing to video using alass
+            path = params.get("path", "")
+            sub_path = params.get("sub_path", "")
+            mp = map_path(path, config)
+            if os.path.isdir(mp):
+                vexts = (".mkv", ".mp4", ".avi", ".m4v")
+                vfiles = [(os.path.getsize(os.path.join(mp, f)), os.path.join(mp, f))
+                          for f in os.listdir(mp) if f.lower().endswith(vexts)]
+                if vfiles:
+                    vfiles.sort(reverse=True)
+                    mp = vfiles[0][1]
+            sub_mp = map_path(sub_path, config) if sub_path else None
+            # If no explicit sub_path, find .srt files next to video
+            if not sub_mp:
+                video_base = mp.rsplit(".", 1)[0]
+                srt_files = [f for f in os.listdir(os.path.dirname(mp)) if f.endswith(".srt") and f.startswith(os.path.basename(video_base))]
+                synced = []
+                for srt in srt_files:
+                    full = os.path.join(os.path.dirname(mp), srt)
+                    out = full.replace(".srt", ".synced.srt")
+                    r = subprocess.run(["alass", mp, full, out], capture_output=True, timeout=120, text=True)
+                    if r.returncode == 0 and os.path.exists(out):
+                        os.replace(out, full)
+                        synced.append(srt)
+                return {"synced": len(synced), "files": synced}
+            else:
+                out = sub_mp.replace(".srt", ".synced.srt")
+                r = subprocess.run(["alass", mp, sub_mp, out], capture_output=True, timeout=120, text=True)
+                if r.returncode == 0 and os.path.exists(out):
+                    os.replace(out, sub_mp)
+                    return {"synced": 1, "file": os.path.basename(sub_mp)}
+                return {"error": f"alass failed: {r.stderr[:100]}"}
+
         elif ttype == "check_quality":
             paths = params.get("paths", [])
             genres = params.get("genres", "")

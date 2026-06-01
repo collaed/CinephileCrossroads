@@ -300,7 +300,7 @@ def db_enqueue_task(task_type, params=None, priority=0):
 
 TASK_LANES = {
     "disk": ["validate_match", "hash_files", "size_files", "check_quality", "integrity_check", "scan_extra", "quality_score", "compare_files", "diag"],
-    "cpu": ["contact_sheet", "ssim_compare", "merge_audio", "strip_audio", "generate_thumb", "transcode_dvd"],
+    "cpu": ["contact_sheet", "ssim_compare", "merge_audio", "strip_audio", "generate_thumb", "transcode_dvd", "sync_subs"],
     "api": ["identify_movie", "download_subs"],
 }
 LANE_FOR_TYPE = {t: lane for lane, types in TASK_LANES.items() for t in types}
@@ -776,6 +776,13 @@ def _apply_task_result(task, result):
     ttype = task["type"]
     params = task.get("params", {})
     # Handle tasks that don't use the standard "data" format
+    if ttype == "download_subs":
+        # Queue sync_subs for any newly downloaded subtitles
+        path = params.get("path", "")
+        results_list = result.get("results", [])
+        if path and any(r.get("status") == "downloaded" for r in results_list):
+            db_enqueue_task("sync_subs", {"path": path}, PRIORITY_SUBS)
+        return
     if ttype == "identify_movie":
         db = get_db()
         path = result.get("path", "")
