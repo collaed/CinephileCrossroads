@@ -1473,24 +1473,37 @@ def run_task(ttype, params, config):
                 if r.returncode != 0 or not os.path.exists(out):
                     continue
                 # Check if sync made a meaningful difference
-                def first_timestamp(path):
+                # Compare timestamps at start, middle, end to detect drift/splits
+                def get_timestamps(path):
                     import re
+                    ts = []
                     with open(path, "r", encoding="utf-8", errors="replace") as f:
                         for line in f:
                             m = re.match(r"(\d{2}):(\d{2}):(\d{2}),(\d{3})", line)
                             if m:
-                                return int(m.group(1))*3600000 + int(m.group(2))*60000 + int(m.group(3))*1000 + int(m.group(4))
-                    return 0
-                orig_ts = first_timestamp(srt)
-                new_ts = first_timestamp(out)
-                shift_ms = abs(new_ts - orig_ts)
-                if shift_ms < 500:
+                                ts.append(int(m.group(1))*3600000 + int(m.group(2))*60000 + int(m.group(3))*1000 + int(m.group(4)))
+                    return ts
+                orig_ts = get_timestamps(srt)
+                new_ts = get_timestamps(out)
+                if not orig_ts or not new_ts or len(orig_ts) != len(new_ts):
+                    # Structure changed (splits added/removed) — use synced version
+                    os.replace(out, srt)
+                    synced.append({"file": os.path.basename(srt), "reason": "structure_changed"})
+                    log(f"[sync] {os.path.basename(srt)} — structure changed")
+                    continue
+                # Sample shifts at 10%, 50%, 90% through the file
+                samples = [int(len(orig_ts) * p) for p in (0.1, 0.5, 0.9)]
+                shifts = [abs(orig_ts[i] - new_ts[i]) for i in samples if i < len(orig_ts)]
+                max_shift = max(shifts) if shifts else 0
+                drift = abs(shifts[-1] - shifts[0]) if len(shifts) >= 2 else 0
+                if max_shift < 500 and drift < 200:
+                    # Already well-synced everywhere, no drift
                     os.remove(out)
                     skipped.append(os.path.basename(srt))
                 else:
                     os.replace(out, srt)
-                    synced.append({"file": os.path.basename(srt), "shift_ms": shift_ms})
-                    log(f"[sync] {os.path.basename(srt)} shifted {shift_ms}ms")
+                    synced.append({"file": os.path.basename(srt), "max_shift_ms": max_shift, "drift_ms": drift})
+                    log(f"[sync] {os.path.basename(srt)} shift={max_shift}ms drift={drift}ms")
             return {"synced": len(synced), "skipped": len(skipped), "details": synced, "already_ok": skipped}
 
         elif ttype == "check_quality":
