@@ -2057,6 +2057,15 @@ def _sched_reconcile():
         else:
             print(f"[scheduler] skip regen: {pending} tasks still pending")
 
+def _sched_trakt():
+    """Refresh Trakt watch history every 6 hours."""
+    for user in list_users():
+        try:
+            trakt_fetch_history(user)
+            print(f"[scheduler] trakt history refreshed for {user}")
+        except Exception as e:
+            print(f"[scheduler] trakt failed: {e}")
+
 def _scheduler():
     """Supervised scheduler — each task independent, staggered, crash-resilient."""
     tasks = [
@@ -2066,6 +2075,7 @@ def _scheduler():
         ("discovery", _sched_discovery, 600),
         ("verification", _sched_verification, 300),
         ("reconcile", _sched_reconcile, 600),
+        ("trakt", _sched_trakt, 21600),
     ]
     threads = []
     for name, fn, interval in tasks:

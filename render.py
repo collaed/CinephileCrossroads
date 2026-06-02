@@ -212,6 +212,30 @@ def render_getting_started():
     else:
         html += '<div class="card" style="text-align:center;padding:14px;border-left:4px solid var(--accent2)">✅ Everything is up to date.</div>'
 
+    # Recently watched but unrated — quick rate prompt
+    history = load_user_history(user)
+    if history:
+        seen_ids = set()
+        unrated_watched = []
+        for e in sorted(history, key=lambda x: x.get("watched_at", ""), reverse=True):
+            iid = e.get("id", "")
+            if not iid or iid in ratings or iid in seen_ids: continue
+            seen_ids.add(iid)
+            unrated_watched.append(e)
+            if len(unrated_watched) >= 5: break
+        if unrated_watched:
+            html += '<h3 style="margin-top:20px;font-size:1em">⭐ Recently watched — rate these?</h3>'
+            html += '<div style="display:flex;flex-wrap:wrap;gap:8px;margin:8px 0">'
+            for e in unrated_watched:
+                t = titles.get(e["id"], {})
+                poster = t.get("poster", "")
+                title_short = (e.get("title") or "?")[:25]
+                html += f'<a href="{BASE}/title/{e["id"]}" style="text-decoration:none;background:var(--card);border:1px solid var(--border);border-radius:8px;padding:8px 12px;color:var(--fg);font-size:.85em;max-width:150px;text-align:center">'
+                if poster:
+                    html += f'<img src="{poster}" style="height:60px;border-radius:4px;display:block;margin:0 auto 4px"><br>'
+                html += f'{title_short}</a>'
+            html += '</div>'
+
     # Compact automation progress
     html += '<h3 style="margin-top:25px;font-size:1em;color:var(--muted)">Automation Progress</h3>'
     html += '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:8px 0">'
