@@ -568,6 +568,10 @@ def analyze_show(show_name, seasons_data):
 def render_verification(user):
     """Verification results page — shows duration mismatches and identification results."""
     db = get_db()
+    # Load IMDB editions index
+    import os as _os
+    _editions_path = _os.path.join(DATA_DIR, "imdb_editions.json")
+    _imdb_editions = json.loads(open(_editions_path).read()) if _os.path.exists(_editions_path) else {}
     db.execute("""CREATE TABLE IF NOT EXISTS verification (
         path TEXT, step TEXT, imdb_id TEXT,
         status TEXT, result TEXT, version INTEGER DEFAULT 1, ts TEXT, PRIMARY KEY (path, step))""")
@@ -617,6 +621,9 @@ def render_verification(user):
             alt_rts = t.get("alt_runtimes", [])
             if not edition and alt_rts and any(abs(actual - art) < 3 for art in alt_rts):
                 edition = "confirmed alt version"
+            # Check IMDB editions index
+            if not edition and iid in _imdb_editions:
+                edition = _imdb_editions[iid][0]  # first matching attribute
             if not edition and 5 < diff < 40:
                 edition = "likely extended"
             label = f"{edition}" if edition else ("shorter" if diff < 0 else "longer")
