@@ -1419,6 +1419,10 @@ def run_task(ttype, params, config):
                         if results.get("data"):
                             # Pick best: prefer hash match, then highest rating
                             best = sorted(results["data"], key=lambda s: (s.get("MatchedBy","") == "moviehash", float(s.get("SubRating","0"))), reverse=True)[0]
+                            # Hash match = strong identity confirmation
+                            os_imdb = best.get("IDMovieImdb", "")
+                            os_name = best.get("MovieName", "")
+                            hash_confirmed = best.get("MatchedBy") == "moviehash" and os_imdb
                             # Download
                             import gzip
                             sub_url = best.get("SubDownloadLink", "")
@@ -1428,8 +1432,13 @@ def run_task(ttype, params, config):
                                 sub_data = gzip.decompress(resp.read()).decode("utf-8", errors="replace")
                                 with open(srt_path, "w", encoding="utf-8") as f:
                                     f.write(sub_data)
-                                downloaded.append({"lang": language, "status": "downloaded", "path": srt_path, "matched_by": best.get("MatchedBy","")})
-                                log(f"[subs] {os.path.basename(srt_path)} ({best.get('MatchedBy','')})")
+                                dl_info = {"lang": language, "status": "downloaded", "path": srt_path, "matched_by": best.get("MatchedBy","")}
+                                if hash_confirmed:
+                                    dl_info["os_imdb"] = "tt" + os_imdb if not os_imdb.startswith("tt") else os_imdb
+                                    dl_info["os_title"] = os_name
+                                    dl_info["identity_confirmed"] = True
+                                downloaded.append(dl_info)
+                                log(f"[subs] {os.path.basename(srt_path)} ({best.get('MatchedBy','')}{' ✓ID' if hash_confirmed else ''})")
                             else:
                                 downloaded.append({"lang": language, "status": "no_url"})
                         else:

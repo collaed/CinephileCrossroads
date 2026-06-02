@@ -541,6 +541,18 @@ def _apply_task_result(task, result):
         results_list = result.get("results", [])
         if path and any(r.get("status") == "downloaded" for r in results_list):
             db_enqueue_task("sync_subs", {"path": path}, PRIORITY_SUBS)
+        # Store identity confirmation from OpenSubtitles hash match
+        imdb_id = params.get("imdb_id", "")
+        for r in results_list:
+            if r.get("identity_confirmed") and r.get("os_imdb"):
+                os_iid = r["os_imdb"]
+                if os_iid == imdb_id:
+                    db_set_agent_data("ecb", imdb_id, "hash_confirmed", "1")
+                elif imdb_id:
+                    # OS says different movie than what we think — flag mismatch
+                    db_set_agent_data("ecb", imdb_id, "hash_mismatch", os_iid)
+                    print(f"[identity] ⚠ Hash says {os_iid} ({r.get('os_title','')}) but library has {imdb_id}")
+                break
         return
     if ttype == "identify_movie":
         db = get_db()
