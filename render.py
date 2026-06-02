@@ -608,9 +608,15 @@ def render_verification(user):
             diff = r.get("actual_min", 0) - r.get("expected_min", 0)
             sign = "+" if diff > 0 else ""
             color = "#e74c3c" if diff < 0 else "#f39c12"
-            label = "shorter" if diff < 0 else "longer"
-            html += f'<td style="color:{color};font-weight:bold">{sign}{diff:.0f} ({label})</td>'
-            html += f'<td style="font-size:.75em;color:var(--muted)">{path.split("/")[-2]}</td>'
+            # Detect edition from filename
+            fname_lower = path.lower()
+            edition_kws = {"director": "Director's Cut", "extended": "Extended", "unrated": "Unrated", "theatrical": "Theatrical", "imax": "IMAX", "ultimate": "Ultimate", "final.cut": "Final Cut", "redux": "Redux", "remastered": "Remastered", "special.edition": "Special Edition"}
+            edition = next((v for k, v in edition_kws.items() if k in fname_lower), None)
+            if not edition and 5 < diff < 40:
+                edition = "likely extended"
+            label = f"{edition}" if edition else ("shorter" if diff < 0 else "longer")
+            html += f'<td style="color:{color};font-weight:bold">{sign}{diff:.0f} <span style="font-weight:normal;font-size:.8em">({label})</span></td>'
+            html += f'<td style="font-size:.75em;color:var(--muted)">{path.split("/")[-2] if "/" in path else path[-30:]}</td>'
             html += f'<td><a href="{BASE}/verify/{user}?identify={path}" class="btn">🔍 OCR</a></td></tr>'
         html += '</tbody></table>'
     
