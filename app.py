@@ -1100,7 +1100,11 @@ def set_title(titles, imdb_id, data):
     titles[imdb_id].update(data)
 
 # ── User store ────────────────────────────────────────────────────────
+DEFAULT_USER = "ecb"
+
 def user_dir(user):
+    if not user or user != DEFAULT_USER:
+        user = DEFAULT_USER
     d = f"{DATA_DIR}/users/{user}"
     os.makedirs(d, exist_ok=True)
     return d
@@ -2929,6 +2933,74 @@ def _render_media_servers(user):
     sync_btn = '<a href="' + BASE + '/media/sync/' + user + '" style="display:inline-block;margin-top:8px;padding:6px 16px;background:#16213e;border:1px solid #4fc3f7;border-radius:6px;color:#4fc3f7;text-decoration:none">🔄 Sync all servers</a>' if config else ""
     return html + sync_btn
 
+def render_getting_started():
+    """Landing page: system health, stats, and navigation guide."""
+    user = DEFAULT_USER
+    titles = load_titles()
+    library = load_user_tmm(user)
+    ratings = load_user_ratings(user)
+    db = get_db()
+
+    # Health checks
+    all_entries = [e for k, v in library.items() if not k.startswith("_") for e in (v if isinstance(v, list) else [v]) if isinstance(e, dict)]
+    total_files = len(all_entries)
+    sized = sum(1 for e in all_entries if e.get("file_size"))
+    hashed = sum(1 for e in all_entries if e.get("file_hash"))
+    subs = sum(1 for e in all_entries if e.get("subtitles"))
+
+    pending = db.execute("SELECT count(*) FROM task_queue WHERE status='pending'").fetchone()[0]
+    agent = load_agent_status()
+    agent_seen = agent.get("last_seen", "never")
+
+    html = page_head("Cinephile Crossroads") + nav_bar("home", user)
+    html += '<div class="page" style="max-width:900px;margin:0 auto">'
+    html += '<h1 style="margin-bottom:5px">🎬 Cinephile Crossroads</h1>'
+    html += '<p style="color:var(--muted)">Self-hosted media library management, taste-based discovery, and automated curation.</p>'
+
+    # System health
+    html += '<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:20px 0">'
+    agent_ok = "🟢" if agent_seen != "never" and pending >= 0 else "🔴"
+    html += f'<div class="card" style="text-align:center"><div style="font-size:1.5em">{agent_ok}</div><small>Agent</small></div>'
+    html += f'<div class="card" style="text-align:center"><div style="font-size:1.5em">{len(titles):,}</div><small>Titles</small></div>'
+    html += f'<div class="card" style="text-align:center"><div style="font-size:1.5em">{total_files:,}</div><small>Files</small></div>'
+    html += f'<div class="card" style="text-align:center"><div style="font-size:1.5em">{len(ratings):,}</div><small>Ratings</small></div>'
+    html += f'<div class="card" style="text-align:center"><div style="font-size:1.5em">{pending}</div><small>Tasks queued</small></div>'
+    pct = sized * 100 // total_files if total_files else 0
+    html += f'<div class="card" style="text-align:center"><div style="font-size:1.5em">{pct}%</div><small>Processed</small></div>'
+    html += '</div>'
+
+    # Navigation guide
+    html += '<h2 style="margin-top:30px">📍 Where to Start</h2>'
+    html += '<table style="width:100%"><tbody>'
+    sections = [
+        ("📋", "Backlog", f"{BASE}/library/backlog/{user}", "What needs your attention right now — setup steps, reviews, approvals"),
+        ("💡", "Suggestions", f"{BASE}/library/suggestions/{user}", "Quality upgrades, bloated files to transcode, TV inconsistencies"),
+        ("⭐", "Ratings", f"{BASE}/u/{user}", "Your rated movies — search, filter, sort. Import from IMDB CSV"),
+        ("🎯", "Recommendations", f"{BASE}/recs/{user}", "Taste-matched picks based on your ratings — DNA, Director's Chair, Community"),
+        ("📚", "Library", f"{BASE}/library/{user}", "Full library dashboard — duplicates, progress, agent status"),
+        ("📖", "Browse", f"{BASE}/library/browse/{user}", "Paginated view of all files — searchable, sortable by size/year/rating"),
+        ("📺", "TV Shows", f"{BASE}/tvshows/{user}", "Episode tracking — gaps, quality, watched %"),
+        ("⚙", "Setup", f"{BASE}/setup/{user}", "API keys, media servers, Trakt, streaming services"),
+    ]
+    for icon, name, url, desc in sections:
+        html += f'<tr><td style="font-size:1.3em;width:30px">{icon}</td>'
+        html += f'<td><a href="{url}" style="color:var(--accent);font-weight:600">{name}</a><br>'
+        html += f'<span style="color:var(--muted);font-size:.85em">{desc}</span></td></tr>'
+    html += '</tbody></table>'
+
+    # Automation status
+    html += '<h2 style="margin-top:30px">🤖 Automation Status</h2>'
+    html += '<table style="width:100%"><tbody>'
+    html += f'<tr><td>Library sizing</td><td style="text-align:right"><b>{sized*100//total_files}%</b></td></tr>' if total_files else ''
+    html += f'<tr><td>File hashing</td><td style="text-align:right"><b>{hashed*100//total_files}%</b></td></tr>' if total_files else ''
+    html += f'<tr><td>Subtitles</td><td style="text-align:right"><b>{subs*100//total_files}%</b></td></tr>' if total_files else ''
+    html += f'<tr><td>Tasks pending</td><td style="text-align:right"><b>{pending}</b></td></tr>'
+    html += f'<tr><td>Agent last seen</td><td style="text-align:right"><b>{agent_seen[-19:] if agent_seen != "never" else "⚠️ offline"}</b></td></tr>'
+    html += '</tbody></table>'
+
+    html += '</div>'
+    return html
+
 def render_ratings(user):
     titles = load_titles(); ratings = load_user_ratings(user)
     if not ratings: return render_setup(user)
@@ -4307,11 +4379,8 @@ class H(BaseHTTPRequestHandler):
     GET routes: /, /u/<user>, /recs/<user>, /catalog, /setup/<user>, /enrich, /jobs
     POST routes: /upload/<user>, /tmm/<user>, /keys"""
     def _user(self, path_parts):
-        """Extract user from URL or default to first user."""
-        for i, p in enumerate(path_parts):
-            if p == "u" and i + 1 < len(path_parts): return path_parts[i + 1]
-        users = list_users()
-        return users[0] if users else "default"
+        """Extract user from URL or default to ecb."""
+        return DEFAULT_USER
 
     def handle_one_request(self):
         try:
@@ -5899,7 +5968,10 @@ button{{padding:10px 20px;background:#4fc3f7;border:none;border-radius:6px;curso
             self.wfile.write(rows.encode())
             return
         else:
-            self._html(render_ratings(user))
+            if len(parts) <= 1:
+                self._html(render_getting_started())
+            else:
+                self._html(render_ratings(user))
 
     def do_POST(self):
         try:
