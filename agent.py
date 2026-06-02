@@ -2002,12 +2002,35 @@ def run_task(ttype, params, config):
                 subprocess.run(["ffmpeg", "-y", "-ss", str(i * 5 + 2), "-i", mp,
                     "-vframes", "1", "-vf", "scale=1920:-1", f"{tmpdir}/h{i:03d}.png"],
                     capture_output=True, timeout=15)
-            # Phase 2: Last 10 minutes (end credits)
-            credits_start = max(0, duration - 600)
-            n_frames = 20  # 20 frames over 10 min
-            interval = 600 / n_frames
+            # Phase 2: Two-pass credit detection
+            # Pass 1: Find where credits actually start (5 probes in last 5 min)
+            probe_start = max(0, duration - 300)
+            credit_begin = probe_start  # default: last 5 min
+            for i in range(5):
+                t = probe_start + i * 60
+                probe_path = f"{tmpdir}/probe_{i}.png"
+                subprocess.run(["ffmpeg", "-y", "-ss", str(int(t)), "-i", mp,
+                    "-vframes", "1", "-vf", "scale=320:-1", probe_path],
+                    capture_output=True, timeout=10)
+                if os.path.exists(probe_path):
+                    # Check if frame looks like credits (dark bg, light text)
+                    r_px = subprocess.run(["ffmpeg", "-i", probe_path, "-vf", "format=gray", "-f", "rawvideo", "-"],
+                        capture_output=True, timeout=5)
+                    if len(r_px.stdout) > 100:
+                        pixels = list(r_px.stdout)
+                        dark = sum(1 for p in pixels if p < 50) / len(pixels)
+                        if dark > 0.6:  # >60% dark pixels = likely credits
+                            credit_begin = t
+                            break
+                    os.remove(probe_path)
+
+            # Pass 2: Dense snapshots from credit_begin (1 frame every 5 sec)
+            credit_duration = duration - credit_begin
+            n_frames = min(40, int(credit_duration / 5))  # every 5s, max 40
+            n_frames = max(n_frames, 10)  # at least 10
+            interval = credit_duration / n_frames if n_frames > 0 else 30
             for i in range(n_frames):
-                t = credits_start + i * interval
+                t = credit_begin + i * interval
                 subprocess.run(["ffmpeg", "-y", "-ss", str(int(t)), "-i", mp,
                     "-vframes", "1", "-vf", "scale=1920:-1,negate,eq=contrast=1.5:brightness=0.1", f"{tmpdir}/f{i:03d}.png"],
                     capture_output=True, timeout=15)
