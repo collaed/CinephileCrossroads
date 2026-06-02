@@ -1430,6 +1430,7 @@ td{{padding:8px;border-bottom:1px solid #333}}a{{color:#4fc3f7}}</style></head>
             u = parts[-1] if len(parts) > 1 else self._user(parts)
             action = qs.get("action", [""])[0]
             iid = qs.get("iid", [""])[0]
+            msg = ""
             if action == "transcode" and iid:
                 library = load_user_tmm(u)
                 entry = library.get(iid)
@@ -1437,9 +1438,9 @@ td{{padding:8px;border-bottom:1px solid #333}}a{{color:#4fc3f7}}</style></head>
                 for e in entries:
                     if isinstance(e, dict) and e.get("path"):
                         db_enqueue_task("transcode_dvd", {"path": e["path"], "crf": 22, "preset": "medium"}, PRIORITY_HUMAN)
+                        msg = "✅ Transcode queued"
                         break
             elif action == "flag_upgrade" and iid:
-                # Queue search_upgrade task for the agent (Radarr/Sonarr are local to beirao)
                 titles = load_titles()
                 t = titles.get(iid, {})
                 is_tv = t.get("type") in ("tvSeries", "tvMiniSeries")
@@ -1451,7 +1452,11 @@ td{{padding:8px;border-bottom:1px solid #333}}a{{color:#4fc3f7}}</style></head>
                 db.execute("INSERT OR REPLACE INTO agent_data (user,imdb_id,field,value,updated_at) VALUES (?,?,?,?,?)",
                     (u, iid, "upgrade_wanted", "1", time.strftime("%Y-%m-%d %H:%M:%S")))
                 db.commit()
-            self._page(render_suggestions(u), "library", u)
+                msg = f"✅ Searching for upgrade: {t.get('title', iid)}"
+            body = render_suggestions(u)
+            if msg:
+                body = body.replace('<h2>💡', f'<div style="background:#2d7;color:#1a1a2e;padding:10px 16px;border-radius:6px;margin-bottom:12px;font-weight:600">{msg}</div><h2>💡', 1)
+            self._page(body, "library", u)
             return
         elif p.startswith("/library/"):
             u = parts[-1] if len(parts) > 1 else self._user(parts)

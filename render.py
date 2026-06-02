@@ -190,80 +190,52 @@ def render_getting_started():
     html = page_head("Cinephile Crossroads") + nav_bar("home", user)
     html += '<div class="page" style="max-width:900px;margin:0 auto">'
     html += '<h1 style="margin-bottom:5px">🎬 Cinephile Crossroads</h1>'
-    html += '<p style="color:var(--muted)">Your self-hosted media library is being automatically curated. Here\'s what\'s happening.</p>'
+    html += '<p style="color:var(--muted)">Your self-hosted media library is being automatically curated.</p>'
 
-    # === LIBRARY AT A GLANCE ===
-    html += '<h2 style="margin-top:25px">📊 Library at a Glance</h2>'
-    html += '<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin:15px 0">'
-    html += f'<div class="card" style="text-align:center"><div style="font-size:1.8em">🎬</div><b>{movie_titles:,}</b><br><small>Movie titles</small></div>'
-    html += f'<div class="card" style="text-align:center"><div style="font-size:1.8em">📺</div><b>{tv_shows}</b><br><small>TV shows</small></div>'
-    html += f'<div class="card" style="text-align:center"><div style="font-size:1.8em">📁</div><b>{movie_files:,}</b><br><small>Movie files</small></div>'
-    html += f'<div class="card" style="text-align:center"><div style="font-size:1.8em">🎞</div><b>{tv_files:,}</b><br><small>TV episodes</small></div>'
-    html += f'<div class="card" style="text-align:center"><div style="font-size:1.8em">💾</div><b>{total_size/1099511627776:.1f} TB</b><br><small>Total size</small></div>'
-    html += f'<div class="card" style="text-align:center"><div style="font-size:1.8em">⭐</div><b>{len(ratings):,}</b><br><small>Ratings</small></div>'
+    # Quick summary — 3 key numbers
+    html += '<div class="grid" style="grid-template-columns:repeat(3,1fr);gap:12px;margin:20px 0">'
+    html += f'<div class="card" style="text-align:center"><div style="font-size:2em">{movie_titles:,}</div><small>Movies</small></div>'
+    html += f'<div class="card" style="text-align:center"><div style="font-size:2em">{tv_shows}</div><small>TV Shows</small></div>'
+    html += f'<div class="card" style="text-align:center"><div style="font-size:2em">{total_size/1099511627776:.1f} TB</div><small>Library</small></div>'
     html += '</div>'
 
-    # === WHAT'S HAPPENING AUTOMATICALLY ===
-    html += '<h2 style="margin-top:30px">🤖 What\'s Happening Automatically</h2>'
-    html += '<p style="color:var(--muted);font-size:.9em">Once your library is imported, the system works continuously in the background:</p>'
-    html += '<table style="width:100%"><tbody>'
-    auto_items = [
-        ("💾 File sizing", f"{sized*100//total_files}%" if total_files else "—", "Measures every file for duplicate detection and quality scoring"),
-        ("🔑 Hashing", f"{hashed*100//total_files}%" if total_files else "—", "OpenSubtitles hash for accurate subtitle matching"),
-        ("📝 Subtitles", f"{subs*100//total_files}%" if total_files else "—", "Downloads EN+FR subs, syncs timing with alass"),
-        ("🔍 OCR identification", "ongoing", "Reads movie credits to verify IMDB matches"),
-        ("🔄 DVD transcoding", "on detection", "Converts VIDEO_TS folders to HEVC MKV (hardware accelerated)"),
-        ("📡 Enrichment", "every 2h", "Pulls posters, keywords, cast, streaming availability from TMDB/OMDB"),
-        ("🔃 Radarr/Sonarr", "RSS every 15m", "Monitors indexers for requested upgrades and new episodes"),
-    ]
-    for name, status, desc in auto_items:
-        color = "var(--accent2)" if "%" in status and int(status.replace("%","")) > 80 else "var(--accent)" if status == "ongoing" else "var(--muted)"
-        html += f'<tr><td><b>{name}</b></td><td style="text-align:right;color:{color}"><b>{status}</b></td></tr>'
-        html += f'<tr><td colspan="2" style="color:var(--muted);font-size:.8em;padding:0 0 8px 10px">{desc}</td></tr>'
-    html += '</tbody></table>'
+    # Primary CTA — what to do next
+    backlog_count = sum(1 for _ in [1] if pending > 0)  # count action items
+    try:
+        ocr_count = db.execute("SELECT count(*) FROM verification WHERE status IN ('review_needed','truncated')").fetchone()[0]
+    except: ocr_count = 0
+    action_count = ocr_count + (3 if find_mismatches else 0)  # approximate
+    if action_count > 0:
+        html += f'<a href="{BASE}/library/backlog/{user}" style="display:block;background:var(--accent);color:#1a1a2e;text-align:center;padding:14px;border-radius:8px;text-decoration:none;font-weight:600;margin:10px 0">📋 {action_count} items need your attention → Backlog</a>'
+    elif pending > 0:
+        html += f'<div class="card" style="text-align:center;padding:14px;border-left:4px solid var(--accent)">⏳ {pending} tasks running automatically. Nothing for you to do right now.</div>'
+    else:
+        html += '<div class="card" style="text-align:center;padding:14px;border-left:4px solid var(--accent2)">✅ Everything is up to date.</div>'
 
-    # === WHAT YOU NEED TO DO ===
-    html += '<h2 style="margin-top:30px">👤 What You\'ll Need to Confirm</h2>'
-    html += '<div style="color:var(--muted);font-size:.9em;margin-bottom:10px">The system flags items for your review rather than making destructive changes:</div>'
-    html += '<table style="width:100%"><tbody>'
-    human_items = [
-        ("⚠️ Title mismatches", f"{BASE}/confirm/{user}", "Filenames that don't match IMDB — foreign titles, wrong matches"),
-        ("🔬 OCR verifications", f"{BASE}/verify/{user}", "Movies identified by credit scanning — confirm or reject"),
-        ("🐘 Transcode approvals", f"{BASE}/library/suggestions/{user}", "Bloated files that could be re-encoded to save space"),
-        ("🔀 Audio merges", f"{BASE}/library/{user}", "Dry-run results: better audio track found, approve to merge"),
-        ("📥 Upgrades", f"{BASE}/library/suggestions/{user}", "Lower-quality files where a better version is available"),
-    ]
-    for name, url, desc in human_items:
-        html += f'<tr><td><a href="{url}" style="color:var(--accent)"><b>{name}</b></a></td></tr>'
-        html += f'<tr><td style="color:var(--muted);font-size:.8em;padding:0 0 8px 10px">{desc}</td></tr>'
-    html += '</tbody></table>'
-
-    # === SYSTEM STATUS ===
-    html += '<h2 style="margin-top:30px">🖥 System Status</h2>'
-    html += '<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;margin:15px 0">'
-    agent_icon = "🟢" if agent_online else "🔴"
-    html += f'<div class="card"><b>{agent_icon} Agent</b><br><small>Last seen: {agent_seen[-19:] if agent_online else "offline"}</small></div>'
-    html += f'<div class="card"><b>⏳ {pending} tasks</b> pending<br><small>{done_total} completed total</small></div>'
+    # Compact automation progress
+    html += '<h3 style="margin-top:25px;font-size:1em;color:var(--muted)">Automation Progress</h3>'
+    html += '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:8px 0">'
+    for label, pct in [("Sized", sized*100//total_files if total_files else 0), ("Hashed", hashed*100//total_files if total_files else 0), ("Subtitles", subs*100//total_files if total_files else 0)]:
+        color = "var(--accent2)" if pct > 80 else "var(--accent)" if pct > 40 else "var(--warn)"
+        html += f'<div style="font-size:.85em">{label} <b style="color:{color}">{pct}%</b></div>'
     html += '</div>'
+    html += f'<div style="font-size:.8em;color:var(--muted);margin-top:4px">Agent {"🟢 online" if agent_online else "🔴 offline"} · {pending} tasks pending · {done_total} completed</div>'
 
-    # === NAVIGATION GUIDE ===
-    html += '<h2 style="margin-top:30px">📍 Page Guide</h2>'
-    html += '<table style="width:100%"><tbody>'
-    sections = [
-        ("📋", "Backlog", f"{BASE}/library/backlog/{user}", "Start here — shows what needs your attention right now"),
-        ("💡", "Suggestions", f"{BASE}/library/suggestions/{user}", "Quality upgrades, bloated files, TV inconsistencies"),
-        ("⭐", "Ratings", f"{BASE}/u/{user}", "Your rated movies — search, filter, sort"),
-        ("🎯", "Discover", f"{BASE}/recs/{user}", "Taste-matched recommendations from your ratings"),
-        ("📚", "Library", f"{BASE}/library/{user}", "Dashboard with progress bars, duplicates, agent status"),
-        ("📖", "Browse", f"{BASE}/library/browse/{user}", "All files — searchable, sortable by size/year/quality"),
-        ("📺", "TV Shows", f"{BASE}/tvshows/{user}", "Episode gaps, quality consistency, watched %"),
-        ("⚙", "Setup", f"{BASE}/setup/{user}", "API keys, Trakt, media servers, streaming services"),
+    # Quick links (compact)
+    html += '<h3 style="margin-top:25px;font-size:1em;color:var(--muted)">Quick Links</h3>'
+    html += '<div style="display:flex;flex-wrap:wrap;gap:8px;margin:8px 0">'
+    links = [
+        ("📋 Backlog", f"{BASE}/library/backlog/{user}"),
+        ("💡 Suggestions", f"{BASE}/library/suggestions/{user}"),
+        ("⭐ Ratings", f"{BASE}/u/{user}"),
+        ("🎯 Discover", f"{BASE}/recs/{user}"),
+        ("📚 Library", f"{BASE}/library/{user}"),
+        ("📺 TV Shows", f"{BASE}/tvshows/{user}"),
+        ("⚙ Setup", f"{BASE}/setup/{user}"),
     ]
-    for icon, name, url, desc in sections:
-        html += f'<tr><td style="font-size:1.2em;width:28px">{icon}</td>'
-        html += f'<td><a href="{url}" style="color:var(--accent);font-weight:600">{name}</a> — '
-        html += f'<span style="color:var(--muted);font-size:.85em">{desc}</span></td></tr>'
-    html += '</tbody></table>'
+    for label, url in links:
+        html += f'<a href="{url}" style="padding:6px 12px;background:var(--card);border:1px solid var(--border);border-radius:6px;color:var(--fg);text-decoration:none;font-size:.85em">{label}</a>'
+    html += '</div>'
 
     html += '</div>'
     return html
@@ -981,21 +953,33 @@ def render_suggestions(user):
     # Sort: starved by bitrate (worst first), bloated by size (biggest savings first)
     starved.sort(key=lambda x: x[3])
     bloated.sort(key=lambda x: -x[4])
+    # Deduplicate: one row per IMDB ID (keep worst/biggest)
+    seen_s, deduped_s = set(), []
+    for item in starved:
+        if item[0] not in seen_s: seen_s.add(item[0]); deduped_s.append(item)
+    starved = deduped_s
+    seen_b, deduped_b = set(), []
+    for item in bloated:
+        if item[0] not in seen_b: seen_b.add(item[0]); deduped_b.append(item)
+    bloated = deduped_b
 
     # === STARVED FILES ===
     html += f'<h3 style="margin-top:20px">⚠️ Upgrade Candidates — Starved Quality ({len(starved)})</h3>'
-    html += '<p style="color:var(--muted);font-size:.85em">Files with very low bitrate for their runtime. Likely old XviD/DivX rips that should be replaced with proper HD encodes.</p>'
+    html += '<p style="color:var(--muted);font-size:.85em">Low bitrate — likely old XviD/DivX rips needing HD replacement.</p>'
     if starved:
-        html += '<table><thead><tr><th>Title</th><th>Year</th><th>Size</th><th>Bitrate</th><th>Resolution</th><th>Action</th></tr></thead><tbody>'
-        for iid, t, e, bitrate, sz in starved[:50]:
+        limit_s = len(starved) if "all" in str(locals().get("qs", "")) else 20
+        html += '<table><thead><tr><th>Title</th><th>Year</th><th>Size</th><th>Bitrate</th><th>Res</th><th></th></tr></thead><tbody>'
+        for iid, t, e, bitrate, sz in starved[:limit_s]:
             sz_str = f"{sz/1073741824:.1f} GB" if sz > 1073741824 else f"{sz/1048576:.0f} MB"
-            w = e.get("video_width", 0) or 0
-            res = f"{w}p" if w else "?"
+            h = e.get("video_height", 0) or 0
+            res = f"{h}p" if h else "?"
             html += f'<tr><td><a href="{BASE}/title/{iid}">{t.get("title","?")}</a></td>'
             html += f'<td>{t.get("year","")}</td><td>{sz_str}</td>'
-            html += f'<td style="color:#e74c3c;font-weight:bold">{bitrate:.1f} Mbps</td><td>{res}</td>'
-            html += f'<td><a href="{BASE}/library/suggestions/{user}?action=flag_upgrade&iid={iid}" style="color:var(--accent)">🔍 Find better</a></td></tr>'
+            html += f'<td style="color:#e74c3c;font-weight:bold">{bitrate:.1f}</td><td>{res}</td>'
+            html += f'<td><a href="{BASE}/library/suggestions/{user}?action=flag_upgrade&iid={iid}" style="color:var(--accent)">🔍</a></td></tr>'
         html += '</tbody></table>'
+        if len(starved) > 20 and limit_s == 20:
+            html += f'<p><a href="{BASE}/library/suggestions/{user}?show=all" style="color:var(--accent);font-size:.85em">Show all {len(starved)} →</a></p>'
     else:
         html += '<p style="color:var(--accent2)">✅ No starved files found.</p>'
 
