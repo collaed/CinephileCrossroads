@@ -465,9 +465,10 @@ def render_setup(user):
     html += '<input name="webhook_url" value="' + _load_key("webhook_url") + '" placeholder="https://hooks.slack.com/... or Signal API"></div>'
     html += '</div>'
     html += '<h4 style="margin-top:20px;margin-bottom:10px">Incoming Folder</h4>'
-    html += '<div><label style="display:block;margin-bottom:4px">Download folder path</label>'
-    html += '<input name="incoming_path" value="' + _load_key("incoming_path") + '" placeholder="nfs://192.168.0.235/volume1/Movies/.downloads">'
-    html += '<small style="color:var(--muted);display:block;margin-top:4px">Agent scans every 2 hours for new video files.</small></div>'
+    html += '<div><label style="display:block;margin-bottom:4px">Staging/download folders (one per line)</label>'
+    staging = _load_key("staging_paths") or _load_key("incoming_path") or ""
+    html += '<textarea name="staging_paths" rows="3" style="width:100%;background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:8px;font-family:monospace;font-size:.85em" placeholder="/mnt/zeus/Movies/.downloads&#10;/mnt/buffer/completed">' + staging + '</textarea>'
+    html += '<small style="color:var(--muted);display:block;margin-top:4px">Agent scans these folders for new files and upgrade candidates. One path per line.</small></div>'
     html += '<button type="submit">Save</button></form><hr>'
 
     # Trakt
@@ -608,7 +609,11 @@ def render_verification(user):
             year = t.get("year", "")
             html += f'<tr><td><a href="{BASE}/title/{iid}">{title}</a> ({year})</td>'
             html += f'<td>{r.get("actual_min",0):.0f} min</td><td>{r.get("expected_min",0)} min</td>'
-            html += f'<td style="color:#e74c3c;font-weight:bold">+{r.get("diff_min",0):.0f}</td>'
+            diff = r.get("actual_min", 0) - r.get("expected_min", 0)
+            sign = "+" if diff > 0 else ""
+            color = "#e74c3c" if diff < 0 else "#f39c12"
+            label = "shorter" if diff < 0 else "longer"
+            html += f'<td style="color:{color};font-weight:bold">{sign}{diff:.0f} ({label})</td>'
             html += f'<td style="font-size:.75em;color:var(--muted)">{path.split("/")[-2]}</td>'
             html += f'<td><a href="{BASE}/verify/{user}?identify={path}" class="btn">🔍 OCR</a></td></tr>'
         html += '</tbody></table>'
@@ -622,7 +627,9 @@ def render_verification(user):
             t = titles.get(iid, {})
             html += f'<tr><td><a href="{BASE}/title/{iid}">{t.get("title","?")}</a> ({t.get("year","")})</td>'
             html += f'<td>{r.get("actual_min",0):.0f}</td><td>{r.get("expected_min",0)}</td>'
-            html += f'<td style="color:#f39c12">{r.get("diff_min",0):.0f}</td>'
+            diff_v = r.get("actual_min", 0) - r.get("expected_min", 0)
+            sign_v = "+" if diff_v > 0 else ""
+            html += f'<td style="color:#f39c12">{sign_v}{diff_v:.0f}</td>'
             html += f'<td style="font-size:.8em;color:var(--muted)">Likely extended/director\'s cut</td></tr>'
         html += '</tbody></table>'
     
@@ -1043,6 +1050,24 @@ def render_suggestions(user):
         html += '</tbody></table>'
     else:
         html += '<p style="color:var(--accent2)">✅ All shows have consistent quality.</p>'
+
+    # === STAGING UPGRADES ===
+    from logic import scan_staging_upgrades
+    staging_upgrades = scan_staging_upgrades(user)
+    html += f'<h3 style="margin-top:30px">📥 Upgrade Candidates from Staging ({len(staging_upgrades)})</h3>'
+    html += '<p style="color:var(--muted);font-size:.85em">Better-quality files found in your staging/download folders that can replace existing library copies.</p>'
+    if staging_upgrades:
+        html += '<table><thead><tr><th>Title</th><th>Staged Quality</th><th>Current</th><th>Action</th></tr></thead><tbody>'
+        for u in staging_upgrades[:30]:
+            sq = u["staged_quality"]
+            eq = u["existing_quality"]
+            html += f'<tr><td><b>{u["title"]}</b><br><span style="font-size:.75em;color:var(--muted)">{u["staged_file"][:50]}</span></td>'
+            html += f'<td style="color:var(--accent2)">{sq.get("resolution",0)}p (score {sq.get("score",0)})</td>'
+            html += f'<td style="color:var(--warn)">{eq.get("resolution",0)}p</td>'
+            html += f'<td><a href="{BASE}/library/suggestions/{user}?action=replace&path={urllib.parse.quote(u["staged_path"])}&target={urllib.parse.quote(u["existing_path"])}" style="color:var(--accent)">✅ Replace</a></td></tr>'
+        html += '</tbody></table>'
+    else:
+        html += '<p style="color:var(--accent2)">✅ No upgrades waiting in staging folders.</p>'
 
     # === TV IN WRONG FOLDER ===
     html += f'<h3 style="margin-top:30px">📺 TV Shows in Movies Folder ({len(tv_misplaced)})</h3>'

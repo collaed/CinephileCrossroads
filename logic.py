@@ -344,6 +344,131 @@ def generate_tasks_for_library(user):
     print(f"Generated {len(new_tasks)} tasks for {user}: {summary}")
     return len(new_tasks)
 
+
+def scan_staging_upgrades(user):
+    """Scan staging folders for files that upgrade existing library entries. Returns list of upgrade suggestions."""
+    import re
+    staging_raw = _load_key("staging_paths") or _load_key("incoming_path") or ""
+    staging_paths = [p.strip() for p in staging_raw.replace(",", "\n").split("\n") if p.strip()]
+    if not staging_paths:
+        return []
+
+    library = load_user_tmm(user)
+    episodes = library.get("_episodes", {})
+    titles = load_titles()
+    upgrades = []
+
+    # Parse show/movie info from filename
+    def parse_filename(fname):
+        # TV: Show.Name.S01E02.stuff.mkv
+        m = re.match(r"(.+?)[.\s_-]+S(\d{1,2})E(\d{1,2})", fname, re.I)
+        if m:
+            show = m.group(1).replace(".", " ").replace("_", " ").strip()
+            return {"type": "episode", "show": show, "season": int(m.group(2)), "episode": int(m.group(3)), "filename": fname}
+        # Movie: Title.(Year).stuff.mkv
+        m2 = re.match(r"(.+?)[.\s_-]+\(?(\d{4})\)?", fname)
+        if m2:
+            title = m2.group(1).replace(".", " ").replace("_", " ").strip()
+            return {"type": "movie", "title": title, "year": int(m2.group(2)), "filename": fname}
+        return None
+
+    def quality_from_filename(fname):
+        """Extract quality signals from filename."""
+        f = fname.upper()
+        score = 0
+        res = 0
+        if "2160P" in f or "4K" in f: res = 2160
+        elif "1080P" in f: res = 1080
+        elif "720P" in f: res = 720
+        if "REMUX" in f: score += 50
+        if "BLURAY" in f or "BLU-RAY" in f: score += 30
+        if "WEB-DL" in f or "WEBDL" in f: score += 20
+        if "ATVP" in f or "AMZN" in f or "NF" in f: score += 15
+        if "DTS-HD" in f or "TRUEHD" in f or "ATMOS" in f: score += 20
+        if "EAC3" in f or "DDP" in f or "AC3" in f: score += 10
+        if "5.1" in f or "7.1" in f: score += 10
+        if "HEVC" in f or "X265" in f or "H265" in f: score += 5
+        return {"resolution": res, "score": score + res}
+
+    # Scan staging folders
+    staged_files = []
+    for sp in staging_paths:
+        # Agent will have reported files via exec_code, but we can also check the incoming DB
+        db = get_db()
+        rows = db.execute("SELECT path, filename, size FROM incoming WHERE user=? AND status='new'", (user,)).fetchall()
+        for r in rows:
+            staged_files.append({"path": r[0], "filename": r[1], "size": r[2]})
+
+    # Also check agent's last scan_extra report for non-TMM titles
+    # For now, use whatever the agent reported as incoming
+    if not staged_files:
+        # Fallback: queue an exec_code scan of staging paths
+        return []
+
+    # Match staged files against library
+    for sf in staged_files:
+        parsed = parse_filename(sf["filename"])
+        if not parsed:
+            continue
+        if parsed["type"] == "episode":
+            # Find matching episode in library
+            for ep_key, ep_data in episodes.items():
+                if not isinstance(ep_data, dict):
+                    continue
+                if (ep_data.get("showtitle", "").lower() == parsed["show"].lower()
+                    and ep_data.get("season") == parsed["season"]
+                    and ep_data.get("episode") == parsed["episode"]):
+                    # Compare quality
+                    staged_q = quality_from_filename(sf["filename"])
+                    existing_h = ep_data.get("video_height", 0) or 0
+                    existing_ch = 2  # default stereo
+                    audio = ep_data.get("audio", [])
+                    if isinstance(audio, list) and audio:
+                        existing_ch = max(t.get("channels", 2) for t in audio if isinstance(t, dict))
+                    existing_score = existing_h + (existing_ch * 5)
+                    if staged_q["score"] > existing_score:
+                        upgrades.append({
+                            "type": "episode",
+                            "title": f"{ep_data.get('showtitle')} S{parsed['season']:02d}E{parsed['episode']:02d}",
+                            "staged_path": sf["path"],
+                            "staged_file": sf["filename"],
+                            "staged_quality": staged_q,
+                            "existing_path": ep_data.get("path", ""),
+                            "existing_quality": {"resolution": existing_h, "channels": existing_ch},
+                            "improvement": staged_q["score"] - existing_score,
+                        })
+                    break
+        elif parsed["type"] == "movie":
+            # Find matching movie in library by title+year
+            for iid, t in titles.items():
+                if (t.get("title", "").lower() == parsed["title"].lower()
+                    and str(t.get("year", "")) == str(parsed["year"])
+                    and iid in library):
+                    staged_q = quality_from_filename(sf["filename"])
+                    entries = library[iid] if isinstance(library[iid], list) else [library[iid]]
+                    for e in entries:
+                        if not isinstance(e, dict):
+                            continue
+                        existing_h = e.get("video_width", 0) or 0
+                        if staged_q["resolution"] > existing_h:
+                            upgrades.append({
+                                "type": "movie",
+                                "title": f"{t.get('title')} ({t.get('year')})",
+                                "imdb_id": iid,
+                                "staged_path": sf["path"],
+                                "staged_file": sf["filename"],
+                                "staged_quality": staged_q,
+                                "existing_path": e.get("path", ""),
+                                "existing_quality": {"resolution": existing_h},
+                                "improvement": staged_q["score"] - existing_h,
+                            })
+                        break
+                    break
+
+    upgrades.sort(key=lambda x: -x["improvement"])
+    return upgrades
+
+
 def enqueue_human_task(task_type, params=None):
     """Enqueue a user-triggered task at highest priority."""
     return enqueue_task(task_type, params, priority=PRIORITY_HUMAN)

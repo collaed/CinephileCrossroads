@@ -1877,7 +1877,7 @@ button{{padding:10px 20px;background:#4fc3f7;border:none;border-radius:6px;curso
         elif self.path.startswith("/keys"):
             params = urllib.parse.parse_qs(body.decode())
             existing = json.load(open(KEYS_FILE)) if os.path.exists(KEYS_FILE) else {}
-            for k in ("tmdb", "omdb", "tvdb", "opensubs", "opensubs_user", "opensubs_pass", "agent_token", "incoming_path", "sub_language", "audio_language", "llm_url", "llm_token", "webhook_url"):
+            for k in ("tmdb", "omdb", "tvdb", "opensubs", "opensubs_user", "opensubs_pass", "agent_token", "incoming_path", "staging_paths", "sub_language", "audio_language", "llm_url", "llm_token", "webhook_url"):
                 v = params.get(k, [""])[0]
                 if v: existing[k] = v.strip()
             keys = existing
