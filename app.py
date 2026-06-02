@@ -3601,7 +3601,7 @@ def render_backlog(user):
     db = get_db()
     library = load_user_tmm(user)
     titles = load_titles()
-    html = render_library_nav(user, "backlog")
+    html = page_head("Backlog") + nav_bar("library", user) + render_library_nav(user, "backlog")
     html += '<h2>📋 Backlog — Human Actions Needed</h2>'
     html += '<p style="color:var(--muted)">Items requiring your attention. The system handles everything else automatically.</p>'
 
@@ -3698,7 +3698,7 @@ def render_suggestions(user):
     """Quality suggestions: upgrade starved files, transcode bloated ones, reorganize TV."""
     library = _merge_agent_data(load_user_tmm(user), user)
     titles = load_titles()
-    html = render_library_nav(user, "suggestions")
+    html = page_head("Suggestions") + nav_bar("library", user) + render_library_nav(user, "suggestions")
     html += '<h2>💡 Library Suggestions</h2>'
 
     starved, bloated, tv_misplaced = [], [], []
