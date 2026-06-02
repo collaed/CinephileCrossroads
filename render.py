@@ -807,12 +807,9 @@ def render_setup_nav(user, active="setup"):
 
 def render_library_nav(user, active="library"):
     return sub_nav([
-        ("library", "📚 Library", f"{BASE}/library/{user}"),
+        ("library", "📚 Overview", f"{BASE}/library/{user}"),
         ("browse", "📖 Browse", f"{BASE}/library/browse/{user}"),
         ("tvshows", "📺 TV Shows", f"{BASE}/tvshows/{user}"),
-        ("scraper", "🔍 Scraper", f"{BASE}/scraper/{user}"),
-        ("org", "🗂 Organize", f"{BASE}/library/org/{user}"),
-        ("confirm", "⚠ Confirm", f"{BASE}/confirm/{user}"), ("verify", "🔬 Verify", f"{BASE}/verify/{user}"), ("health", "🏥 Health", f"{BASE}/health/{user}"), ("incoming", "📥 Incoming", f"{BASE}/incoming/{user}"),
         ("suggestions", "💡 Suggestions", f"{BASE}/library/suggestions/{user}"),
         ("backlog", "📋 Backlog", f"{BASE}/library/backlog/{user}"),
     ], active)
@@ -826,6 +823,28 @@ def render_backlog(user):
     html = page_head("Backlog") + nav_bar("library", user) + render_library_nav(user, "backlog")
     html += '<h2>📋 Backlog — Human Actions Needed</h2>'
     html += '<p style="color:var(--muted)">Items requiring your attention. The system handles everything else automatically.</p>'
+
+    # Radarr/Sonarr status widget
+    import urllib.request as _ur
+    arr_html = '<div class="grid" style="grid-template-columns:1fr 1fr;gap:10px;margin:15px 0">'
+    try:
+        rd = json.loads(_ur.urlopen("http://beirao:7878/api/v3/queue?apikey=a058ec8d36f04aafb197d2f49c15a327", timeout=3).read())
+        rm = json.loads(_ur.urlopen("http://beirao:7878/api/v3/movie?apikey=a058ec8d36f04aafb197d2f49c15a327", timeout=3).read())
+        rd_q = rd.get("totalRecords", 0)
+        rd_monitored = sum(1 for m in rm if m.get("monitored") and not m.get("hasFile"))
+        arr_html += f'<div class="card"><b>🎬 Radarr</b><br><span style="font-size:.85em">{rd_q} downloading · {rd_monitored} wanted</span></div>'
+    except:
+        arr_html += '<div class="card"><b>🎬 Radarr</b><br><span style="font-size:.85em;color:var(--muted)">unreachable</span></div>'
+    try:
+        sd = json.loads(_ur.urlopen("http://beirao:8989/api/v3/queue?apikey=5dd23f064c10436e856a68d6bf4e586a", timeout=3).read())
+        sw = json.loads(_ur.urlopen("http://beirao:8989/api/v3/wanted/missing?apikey=5dd23f064c10436e856a68d6bf4e586a&pageSize=1", timeout=3).read())
+        sd_q = sd.get("totalRecords", 0)
+        sd_wanted = sw.get("totalRecords", 0)
+        arr_html += f'<div class="card"><b>📺 Sonarr</b><br><span style="font-size:.85em">{sd_q} downloading · {sd_wanted} missing eps</span></div>'
+    except:
+        arr_html += '<div class="card"><b>📺 Sonarr</b><br><span style="font-size:.85em;color:var(--muted)">unreachable</span></div>'
+    arr_html += '</div>'
+    html += arr_html
 
     items = []
 
