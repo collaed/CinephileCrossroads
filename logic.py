@@ -311,6 +311,21 @@ def generate_tasks_for_library(user):
     for item in needs_ocr[:5]:
         _add("identify_movie", {"path": item["path"], "imdb_id": item["imdb_id"]}, PRIORITY_SUBS)
 
+    # CPU LANE: visual verification via TMDB stills (low priority, 5 per run)
+    try:
+        db = get_db()
+        unverified = db.execute("""SELECT path, imdb_id FROM verification
+            WHERE status IN ('mismatch','possible_variant') AND step='duration'
+            ORDER BY ts LIMIT 20""").fetchall()
+        stills_queued = 0
+        for path, iid in unverified:
+            t = titles.get(iid, {})
+            stills = t.get("stills", [])
+            if stills and stills_queued < 5:
+                _add("verify_stills", {"path": path, "stills": stills[:3], "imdb_id": iid}, PRIORITY_SUBS)
+                stills_queued += 1
+    except: pass
+
     # Scan incoming folder if configured
     incoming = _load_key("incoming_path")
     if incoming:
@@ -897,6 +912,25 @@ def tmdb_enrich(imdb_id):
     if alt:
         alt_list = alt.get("titles") or alt.get("results") or []
         result["alt_titles"] = [a["title"] for a in alt_list if a.get("title")][:15]
+    # Release dates with alternate runtimes (Director's Cut, Extended, etc)
+    if not is_tv:
+        rd = api_get(f"https://api.themoviedb.org/3/movie/{tmdb_id}/release_dates?api_key={TMDB_KEY}")
+        if rd:
+            runtimes = set()
+            for country in rd.get("results", []):
+                for rel in country.get("release_dates", []):
+                    note = rel.get("note", "").lower()
+                    rt_min = rel.get("runtime", 0)
+                    if rt_min and rt_min > 0:
+                        runtimes.add(rt_min)
+            if len(runtimes) > 1:
+                result["alt_runtimes"] = sorted(runtimes)
+    # Stills/backdrops for visual verification
+    images = api_get(f"https://api.themoviedb.org/3/{kind}/{tmdb_id}/images?api_key={TMDB_KEY}")
+    if images:
+        stills = images.get("stills") or images.get("backdrops") or []
+        if stills:
+            result["stills"] = [f"https://image.tmdb.org/t/p/w300{s['file_path']}" for s in stills[:5]]
     return result
 
 def omdb_enrich(imdb_id):

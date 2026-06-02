@@ -612,6 +612,11 @@ def render_verification(user):
             fname_lower = path.lower()
             edition_kws = {"director": "Director's Cut", "extended": "Extended", "unrated": "Unrated", "theatrical": "Theatrical", "imax": "IMAX", "ultimate": "Ultimate", "final.cut": "Final Cut", "redux": "Redux", "remastered": "Remastered", "special.edition": "Special Edition"}
             edition = next((v for k, v in edition_kws.items() if k in fname_lower), None)
+            # Check if actual runtime matches a known alternate runtime from TMDB
+            actual = r.get("actual_min", 0)
+            alt_rts = t.get("alt_runtimes", [])
+            if not edition and alt_rts and any(abs(actual - art) < 3 for art in alt_rts):
+                edition = "confirmed alt version"
             if not edition and 5 < diff < 40:
                 edition = "likely extended"
             label = f"{edition}" if edition else ("shorter" if diff < 0 else "longer")

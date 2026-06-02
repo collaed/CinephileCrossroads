@@ -99,7 +99,7 @@ def db_enqueue_task(task_type, params=None, priority=0):
 
 TASK_LANES = {
     "disk": ["validate_match", "hash_files", "size_files", "check_quality", "integrity_check", "scan_extra", "quality_score", "compare_files", "diag"],
-    "cpu": ["contact_sheet", "ssim_compare", "merge_audio", "strip_audio", "generate_thumb", "transcode_dvd", "sync_subs"],
+    "cpu": ["contact_sheet", "ssim_compare", "merge_audio", "strip_audio", "generate_thumb", "transcode_dvd", "sync_subs", "verify_stills"],
     "api": ["identify_movie", "download_subs", "search_upgrade"],
 }
 LANE_FOR_TYPE = {t: lane for lane, types in TASK_LANES.items() for t in types}

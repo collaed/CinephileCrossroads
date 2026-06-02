@@ -1544,6 +1544,66 @@ def run_task(ttype, params, config):
                     return {"status": "already_exists", "title": title}
                 return {"error": f"HTTP {e.code}: {body[:100]}"}
 
+        elif ttype == "verify_stills":
+            # Extract a frame from the video and compare against TMDB stills via perceptual hash
+            # params: path, stills (list of TMDB still URLs), imdb_id
+            path = params.get("path", "")
+            stills = params.get("stills", [])
+            imdb_id = params.get("imdb_id", "")
+            mp = map_path(path, config)
+            if os.path.isdir(mp):
+                vexts = (".mkv", ".mp4", ".avi", ".m4v")
+                vfiles = [(os.path.getsize(os.path.join(mp, f)), os.path.join(mp, f))
+                          for f in os.listdir(mp) if f.lower().endswith(vexts)]
+                if vfiles:
+                    vfiles.sort(reverse=True)
+                    mp = vfiles[0][1]
+            if not os.path.isfile(mp):
+                return {"error": "file not found"}
+            if not stills:
+                return {"error": "no stills to compare"}
+            # Extract frame at 30% of duration
+            r = subprocess.run(["ffprobe", "-v", "quiet", "-show_entries", "format=duration", "-of", "csv=p=0", mp],
+                capture_output=True, timeout=15, text=True)
+            duration = float(r.stdout.strip()) if r.stdout.strip() else 0
+            seek = int(duration * 0.3) if duration > 60 else 30
+            import tempfile, hashlib
+            tmp = tempfile.mktemp(suffix=".jpg")
+            subprocess.run(["ffmpeg", "-y", "-ss", str(seek), "-i", mp, "-vframes", "1", "-vf", "scale=160:-1", "-q:v", "5", tmp],
+                capture_output=True, timeout=15)
+            if not os.path.exists(tmp):
+                return {"error": "frame extraction failed"}
+            # Simple perceptual hash: resize to 8x8, grayscale, compare average
+            def phash_file(filepath):
+                r = subprocess.run(["ffmpeg", "-y", "-i", filepath, "-vf", "scale=8:8,format=gray", "-f", "rawvideo", "-"],
+                    capture_output=True, timeout=10)
+                if len(r.stdout) < 64: return 0
+                pixels = list(r.stdout[:64])
+                avg = sum(pixels) / 64
+                return int("".join("1" if p > avg else "0" for p in pixels), 2)
+            local_hash = phash_file(tmp)
+            os.remove(tmp)
+            # Compare against TMDB stills
+            best_match = 0
+            best_still = ""
+            for still_url in stills[:3]:
+                try:
+                    tmp_still = tempfile.mktemp(suffix=".jpg")
+                    urllib.request.urlretrieve(still_url, tmp_still)
+                    still_hash = phash_file(tmp_still)
+                    os.remove(tmp_still)
+                    # Hamming distance
+                    xor = local_hash ^ still_hash
+                    distance = bin(xor).count("1")
+                    similarity = max(0, 100 - distance * 100 // 64)
+                    if similarity > best_match:
+                        best_match = similarity
+                        best_still = still_url
+                except:
+                    continue
+            return {"imdb_id": imdb_id, "similarity": best_match, "best_still": best_still,
+                    "confirmed": best_match > 60, "path": path}
+
         elif ttype == "check_quality":
             paths = params.get("paths", [])
             genres = params.get("genres", "")
