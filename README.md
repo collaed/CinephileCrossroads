@@ -65,6 +65,8 @@ A self-hosted, zero-dependency movie & TV ratings dashboard with taste-based rec
 | **OMDB** | Rotten Tomatoes 🍅, Metacritic scores | API key |
 | **TVDB** | TV show metadata | API key |
 | **Trakt** | Bidirectional rating sync, watch history, episode scrobbles | OAuth |
+| **Simkl** | Bidirectional rating sync, watch history, watchlists | OAuth |
+| **AniList** | Bidirectional anime rating sync (GraphQL, MAL→IMDB mapping) | OAuth |
 | **TasteDive** | "If you liked X" similar suggestions | None |
 | **OpenSubtitles** | Subtitle search with hash matching | API key |
 | **Plex** | Local library sync | URL + token |
@@ -120,6 +122,12 @@ services:
       - TRAKT_ID=your_trakt_client_id
       - TRAKT_SECRET=your_trakt_client_secret
       - TRAKT_REDIRECT=https://your-domain.com/cinecross/trakt/callback
+      - SIMKL_ID=your_simkl_client_id
+      - SIMKL_SECRET=your_simkl_client_secret
+      - SIMKL_REDIRECT=https://your-domain.com/cinecross/simkl/callback
+      - ANILIST_ID=your_anilist_client_id
+      - ANILIST_SECRET=your_anilist_client_secret
+      - ANILIST_REDIRECT=https://your-domain.com/cinecross/anilist/callback
       - WATCH_COUNTRY=US
 ```
 
