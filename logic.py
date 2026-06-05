@@ -1866,6 +1866,83 @@ def trakt_sync_push(user, ratings, titles):
     if movies: api_post("https://api.trakt.tv/sync/ratings", {"movies": movies}, h)
     if shows: api_post("https://api.trakt.tv/sync/ratings", {"shows": shows}, h)
 
+# ── Simkl ─────────────────────────────────────────────────────────────
+def simkl_headers(user):
+    token = load_user_simkl_token(user)
+    if not token: return None
+    return {"Content-Type": "application/json", "Authorization": f"Bearer {token['access_token']}"}
+
+def simkl_auth_url():
+    return f"https://simkl.com/oauth/authorize?response_type=code&client_id={SIMKL_ID}&redirect_uri={urllib.parse.quote(SIMKL_REDIRECT)}"
+
+def simkl_exchange_code(code):
+    return api_post("https://api.simkl.com/oauth/token", {"code": code, "client_id": SIMKL_ID,
+        "client_secret": SIMKL_SECRET, "redirect_uri": SIMKL_REDIRECT, "grant_type": "authorization_code"})
+
+def simkl_fetch_ratings(user):
+    """Pull all movie and show ratings from Simkl."""
+    h = simkl_headers(user)
+    if not h: return {}
+    ratings = {}
+    for kind in ("movies", "shows", "anime"):
+        data = api_get(f"https://api.simkl.com/sync/ratings/{kind}/?client_id={SIMKL_ID}", h)
+        if not data: continue
+        for item in data:
+            obj = item.get("movie") or item.get("show") or item.get("anime") or {}
+            iid = obj.get("ids", {}).get("imdb", "")
+            if iid: ratings[iid] = {"rating": item.get("rating", 0), "date": (item.get("rated_at") or "")[:10]}
+    return ratings
+
+def simkl_fetch_history(user):
+    """Pull watch history from Simkl — returns [{id, title, watched_at, type}]."""
+    h = simkl_headers(user)
+    if not h: return []
+    history = []
+    for kind in ("movies", "shows", "anime"):
+        data = api_get(f"https://api.simkl.com/sync/all-items/{kind}/completed?client_id={SIMKL_ID}", h)
+        if not data or kind not in data: continue
+        for item in data[kind]:
+            obj = item
+            iid = obj.get("ids", {}).get("imdb", "")
+            if iid:
+                history.append({"id": iid, "title": obj.get("title", ""),
+                    "watched_at": (obj.get("last_watched_at") or "")[:10],
+                    "type": "movie" if kind == "movies" else "show"})
+    return history
+
+def simkl_sync_push(user, ratings, titles):
+    """Push user ratings to Simkl (bidirectional sync — push half)."""
+    h = simkl_headers(user)
+    if not h: return
+    movies, shows = [], []
+    for iid, r in ratings.items():
+        t = titles.get(iid, {})
+        entry = {"ids": {"imdb": iid}, "rating": r["rating"]}
+        if t.get("type") in ("movie", "Movie"): movies.append(entry)
+        else: shows.append(entry)
+    if movies: api_post(f"https://api.simkl.com/sync/ratings?client_id={SIMKL_ID}", {"movies": movies}, h)
+    if shows: api_post(f"https://api.simkl.com/sync/ratings?client_id={SIMKL_ID}", {"shows": shows}, h)
+
+def _bg_simkl_sync(jid, user):
+    titles = load_titles(); ratings = load_user_ratings(user)
+    job_progress(jid, 0, 3, "Pushing to Simkl...")
+    simkl_sync_push(user, ratings, titles)
+    job_progress(jid, 1, 3, "Pulling from Simkl...")
+    sr = simkl_fetch_ratings(user)
+    for iid, r in sr.items():
+        if iid not in ratings: ratings[iid] = r
+        if iid not in titles: titles[iid] = {"title": "", "_enriched": False}
+    save_user_ratings(user, ratings); save_titles(titles)
+    job_progress(jid, 2, 3, "Fetching history...")
+    history = simkl_fetch_history(user)
+    if history:
+        existing = load_user_history(user)
+        seen = {h["id"] for h in existing}
+        for h in history:
+            if h["id"] not in seen: existing.append(h)
+        save_user_history(user, existing)
+    job_progress(jid, 3, 3, f"Done: {len(sr)} ratings, {len(history)} history items")
+
 # ── Recommendation engine ─────────────────────────────────────────────
 def build_taste_profile(user_ratings, titles, user=None):
     """Build weighted taste profile from highly-rated titles (6+).

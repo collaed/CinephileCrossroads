@@ -7,7 +7,7 @@ from socketserver import ThreadingMixIn
 from data import *
 from data import _exec_results, _load_key, _merge_agent_data
 from logic import *
-from logic import _bg_auto_subs, _bg_catalog, _bg_enrich, _bg_history, _bg_trakt_sync
+from logic import _bg_auto_subs, _bg_catalog, _bg_enrich, _bg_history, _bg_trakt_sync, _bg_simkl_sync
 from logic import _discover_highly_rated, _is_tv, _rate_status, _canonical_path
 from render import *
 
@@ -183,6 +183,23 @@ class H(BaseHTTPRequestHandler):
         elif p.startswith("/trakt/sync/"):
             u = parts[-1]
             if not active_job()[1]: start_job("trakt_sync", _bg_trakt_sync, u)
+            self._redirect(f"{BASE}/")
+        elif p.startswith("/simkl/auth/"):
+            u = parts[-1]
+            os.makedirs(DATA_DIR, exist_ok=True)
+            json.dump({"user": u}, open(f"{DATA_DIR}/_simkl_state.json", "w"))
+            self._redirect(simkl_auth_url())
+        elif p == "/simkl/callback":
+            code = qs.get("code", [None])[0]
+            state = json.load(open(f"{DATA_DIR}/_simkl_state.json")) if os.path.exists(f"{DATA_DIR}/_simkl_state.json") else {}
+            u = state.get("user", user)
+            if code:
+                token = simkl_exchange_code(code)
+                if token and "access_token" in token: save_user_simkl_token(u, token)
+            self._redirect(f"{BASE}/")
+        elif p.startswith("/simkl/sync/"):
+            u = parts[-1]
+            if not active_job()[1]: start_job("simkl_sync", _bg_simkl_sync, u)
             self._redirect(f"{BASE}/")
         elif p.startswith("/subs/"):
             imdb_id = parts[-1]
@@ -2066,6 +2083,22 @@ def _sched_trakt():
         except Exception as e:
             print(f"[scheduler] trakt failed: {e}")
 
+def _sched_simkl():
+    """Refresh Simkl watch history every 6 hours."""
+    for user in list_users():
+        if not load_user_simkl_token(user): continue
+        try:
+            history = simkl_fetch_history(user)
+            if history:
+                existing = load_user_history(user)
+                seen = {h["id"] for h in existing}
+                for h in history:
+                    if h["id"] not in seen: existing.append(h)
+                save_user_history(user, existing)
+            print(f"[scheduler] simkl history refreshed for {user}")
+        except Exception as e:
+            print(f"[scheduler] simkl failed: {e}")
+
 def _scheduler():
     """Supervised scheduler — each task independent, staggered, crash-resilient."""
     tasks = [
@@ -2076,6 +2109,7 @@ def _scheduler():
         ("verification", _sched_verification, 300),
         ("reconcile", _sched_reconcile, 600),
         ("trakt", _sched_trakt, 21600),
+        ("simkl", _sched_simkl, 21600),
     ]
     threads = []
     for name, fn, interval in tasks:
@@ -2159,7 +2193,7 @@ if __name__ == "__main__":
     titles = load_titles()
     load_imdb_cache()
     print(f"CineCross — {len(titles)} titles, users: {users}")
-    print(f"  TMDB:{'✓' if TMDB_KEY else '✗'} OMDB:{'✓' if OMDB_KEY else '✗'} TVDB:{'✓' if TVDB_KEY else '✗'} Trakt:{'✓' if TRAKT_ID else '✗'} Region:{WATCH_COUNTRY}")
+    print(f"  TMDB:{'✓' if TMDB_KEY else '✗'} OMDB:{'✓' if OMDB_KEY else '✗'} TVDB:{'✓' if TVDB_KEY else '✗'} Trakt:{'✓' if TRAKT_ID else '✗'} Simkl:{'✓' if SIMKL_ID else '✗'} Region:{WATCH_COUNTRY}")
     threading.Thread(target=_scheduler, daemon=True).start()
     class ThreadedServer(ThreadingMixIn, HTTPServer):
         daemon_threads = True
