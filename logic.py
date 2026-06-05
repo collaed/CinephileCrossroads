@@ -1943,6 +1943,114 @@ def _bg_simkl_sync(jid, user):
         save_user_history(user, existing)
     job_progress(jid, 3, 3, f"Done: {len(sr)} ratings, {len(history)} history items")
 
+# ── AniList ────────────────────────────────────────────────────────────
+def anilist_auth_url():
+    return f"https://anilist.co/api/v2/oauth/authorize?client_id={ANILIST_ID}&redirect_uri={urllib.parse.quote(ANILIST_REDIRECT)}&response_type=code"
+
+def anilist_exchange_code(code):
+    return api_post("https://anilist.co/api/v2/oauth/token", {"grant_type": "authorization_code",
+        "client_id": ANILIST_ID, "client_secret": ANILIST_SECRET,
+        "redirect_uri": ANILIST_REDIRECT, "code": code})
+
+def _anilist_gql(query, variables, token=None):
+    """Execute an AniList GraphQL query."""
+    headers = {"Content-Type": "application/json", "Accept": "application/json"}
+    if token: headers["Authorization"] = f"Bearer {token}"
+    req = urllib.request.Request("https://graphql.anilist.co",
+        data=json.dumps({"query": query, "variables": variables}).encode(), headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=15) as r: return json.loads(r.read())
+    except Exception as e: print(f"AniList GQL error: {e}"); return None
+
+def _anilist_get_user_id(token):
+    """Get the authenticated user's AniList ID."""
+    r = _anilist_gql("query { Viewer { id } }", {}, token)
+    return r["data"]["Viewer"]["id"] if r and r.get("data") else None
+
+def _mal_to_imdb(mal_id):
+    """Map MAL ID → IMDB ID via TMDB's find endpoint."""
+    if not TMDB_KEY or not mal_id: return None
+    data = api_get(f"https://api.themoviedb.org/3/find/{mal_id}?api_key={TMDB_KEY}&external_source=mal_id")
+    if not data: return None
+    for kind in ("tv_results", "movie_results"):
+        for item in (data.get(kind) or []):
+            tmdb_id = item.get("id")
+            media_type = "tv" if "tv" in kind else "movie"
+            ext = api_get(f"https://api.themoviedb.org/3/{media_type}/{tmdb_id}/external_ids?api_key={TMDB_KEY}")
+            if ext and ext.get("imdb_id"): return ext["imdb_id"]
+    return None
+
+def anilist_fetch_ratings(user):
+    """Pull anime ratings from AniList → {imdb_id: {rating, date}}."""
+    token_data = load_user_anilist_token(user)
+    if not token_data: return {}
+    token = token_data["access_token"]
+    uid = _anilist_get_user_id(token)
+    if not uid: return {}
+    query = """query ($userId: Int!) {
+      MediaListCollection(userId: $userId, type: ANIME) {
+        lists { entries { score(format: POINT_10) updatedAt media { id idMal title { romaji english } } } }
+      }
+    }"""
+    r = _anilist_gql(query, {"userId": uid}, token)
+    if not r or not r.get("data"): return {}
+    ratings = {}
+    titles_db = load_titles()
+    # Build reverse map: MAL ID → IMDB from existing titles
+    mal_map = {}
+    for iid, t in titles_db.items():
+        if t.get("mal_id"): mal_map[t["mal_id"]] = iid
+    for lst in r["data"]["MediaListCollection"]["lists"]:
+        for entry in lst["entries"]:
+            score = entry.get("score", 0)
+            if not score: continue
+            mal_id = entry["media"].get("idMal")
+            if not mal_id: continue
+            # Try cached mapping first, then TMDB lookup
+            imdb_id = mal_map.get(mal_id)
+            if not imdb_id:
+                imdb_id = _mal_to_imdb(mal_id)
+                time.sleep(0.3)
+            if imdb_id:
+                ratings[imdb_id] = {"rating": int(score), "date": time.strftime("%Y-%m-%d", time.gmtime(entry.get("updatedAt", 0)))}
+                # Cache the MAL mapping
+                if imdb_id in titles_db: titles_db[imdb_id]["mal_id"] = mal_id
+    save_titles(titles_db)
+    return ratings
+
+def anilist_sync_push(user, ratings, titles):
+    """Push anime ratings to AniList."""
+    token_data = load_user_anilist_token(user)
+    if not token_data: return
+    token = token_data["access_token"]
+    mutation = """mutation ($mediaId: Int, $score: Float, $status: MediaListStatus) {
+      SaveMediaListEntry(mediaId: $mediaId, score: $score, status: $status) { id }
+    }"""
+    for iid, r in ratings.items():
+        t = titles.get(iid, {})
+        if not t.get("mal_id"): continue
+        # Look up AniList media ID from MAL ID
+        lookup = _anilist_gql("query ($malId: Int) { Media(idMal: $malId, type: ANIME) { id } }",
+            {"malId": t["mal_id"]}, token)
+        if not lookup or not lookup.get("data") or not lookup["data"].get("Media"): continue
+        al_id = lookup["data"]["Media"]["id"]
+        _anilist_gql(mutation, {"mediaId": al_id, "score": float(r["rating"]), "status": "COMPLETED"}, token)
+        time.sleep(2.1)  # Stay under 30 req/min
+
+def _bg_anilist_sync(jid, user):
+    titles = load_titles(); ratings = load_user_ratings(user)
+    job_progress(jid, 0, 3, "Pulling from AniList...")
+    ar = anilist_fetch_ratings(user)
+    for iid, r in ar.items():
+        if iid not in ratings: ratings[iid] = r
+        if iid not in titles: titles[iid] = {"title": "", "_enriched": False}
+    save_user_ratings(user, ratings); save_titles(titles)
+    job_progress(jid, 1, 3, "Pushing anime to AniList...")
+    # Only push titles that have mal_id (anime)
+    anime_ratings = {iid: r for iid, r in ratings.items() if titles.get(iid, {}).get("mal_id")}
+    anilist_sync_push(user, anime_ratings, titles)
+    job_progress(jid, 3, 3, f"Done: pulled {len(ar)}, pushed {len(anime_ratings)} anime ratings")
+
 # ── Recommendation engine ─────────────────────────────────────────────
 def build_taste_profile(user_ratings, titles, user=None):
     """Build weighted taste profile from highly-rated titles (6+).

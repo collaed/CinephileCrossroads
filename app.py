@@ -7,7 +7,7 @@ from socketserver import ThreadingMixIn
 from data import *
 from data import _exec_results, _load_key, _merge_agent_data
 from logic import *
-from logic import _bg_auto_subs, _bg_catalog, _bg_enrich, _bg_history, _bg_trakt_sync, _bg_simkl_sync
+from logic import _bg_auto_subs, _bg_catalog, _bg_enrich, _bg_history, _bg_trakt_sync, _bg_simkl_sync, _bg_anilist_sync
 from logic import _discover_highly_rated, _is_tv, _rate_status, _canonical_path
 from render import *
 
@@ -200,6 +200,23 @@ class H(BaseHTTPRequestHandler):
         elif p.startswith("/simkl/sync/"):
             u = parts[-1]
             if not active_job()[1]: start_job("simkl_sync", _bg_simkl_sync, u)
+            self._redirect(f"{BASE}/")
+        elif p.startswith("/anilist/auth/"):
+            u = parts[-1]
+            os.makedirs(DATA_DIR, exist_ok=True)
+            json.dump({"user": u}, open(f"{DATA_DIR}/_anilist_state.json", "w"))
+            self._redirect(anilist_auth_url())
+        elif p == "/anilist/callback":
+            code = qs.get("code", [None])[0]
+            state = json.load(open(f"{DATA_DIR}/_anilist_state.json")) if os.path.exists(f"{DATA_DIR}/_anilist_state.json") else {}
+            u = state.get("user", user)
+            if code:
+                token = anilist_exchange_code(code)
+                if token and "access_token" in token: save_user_anilist_token(u, token)
+            self._redirect(f"{BASE}/")
+        elif p.startswith("/anilist/sync/"):
+            u = parts[-1]
+            if not active_job()[1]: start_job("anilist_sync", _bg_anilist_sync, u)
             self._redirect(f"{BASE}/")
         elif p.startswith("/subs/"):
             imdb_id = parts[-1]
@@ -2099,6 +2116,23 @@ def _sched_simkl():
         except Exception as e:
             print(f"[scheduler] simkl failed: {e}")
 
+def _sched_anilist():
+    """Refresh AniList anime ratings every 6 hours."""
+    for user in list_users():
+        if not load_user_anilist_token(user): continue
+        try:
+            ar = anilist_fetch_ratings(user)
+            if ar:
+                ratings = load_user_ratings(user)
+                titles = load_titles()
+                for iid, r in ar.items():
+                    if iid not in ratings: ratings[iid] = r
+                    if iid not in titles: titles[iid] = {"title": "", "_enriched": False}
+                save_user_ratings(user, ratings); save_titles(titles)
+            print(f"[scheduler] anilist refreshed {len(ar)} ratings for {user}")
+        except Exception as e:
+            print(f"[scheduler] anilist failed: {e}")
+
 def _scheduler():
     """Supervised scheduler — each task independent, staggered, crash-resilient."""
     tasks = [
@@ -2110,6 +2144,7 @@ def _scheduler():
         ("reconcile", _sched_reconcile, 600),
         ("trakt", _sched_trakt, 21600),
         ("simkl", _sched_simkl, 21600),
+        ("anilist", _sched_anilist, 21600),
     ]
     threads = []
     for name, fn, interval in tasks:
@@ -2193,7 +2228,7 @@ if __name__ == "__main__":
     titles = load_titles()
     load_imdb_cache()
     print(f"CineCross — {len(titles)} titles, users: {users}")
-    print(f"  TMDB:{'✓' if TMDB_KEY else '✗'} OMDB:{'✓' if OMDB_KEY else '✗'} TVDB:{'✓' if TVDB_KEY else '✗'} Trakt:{'✓' if TRAKT_ID else '✗'} Simkl:{'✓' if SIMKL_ID else '✗'} Region:{WATCH_COUNTRY}")
+    print(f"  TMDB:{'✓' if TMDB_KEY else '✗'} OMDB:{'✓' if OMDB_KEY else '✗'} TVDB:{'✓' if TVDB_KEY else '✗'} Trakt:{'✓' if TRAKT_ID else '✗'} Simkl:{'✓' if SIMKL_ID else '✗'} AniList:{'✓' if ANILIST_ID else '✗'} Region:{WATCH_COUNTRY}")
     threading.Thread(target=_scheduler, daemon=True).start()
     class ThreadedServer(ThreadingMixIn, HTTPServer):
         daemon_threads = True

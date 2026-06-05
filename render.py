@@ -401,11 +401,13 @@ def render_recs(user):
 def render_setup(user):
     has_trakt = load_user_trakt_token(user) is not None
     has_simkl = load_user_simkl_token(user) is not None
+    has_anilist = load_user_anilist_token(user) is not None
     user_bar = render_user_bar(user, "setup")
     media_servers = _render_media_servers(user)
     provider_config = _render_provider_config(user)
     trakt_section = '<span style="color:#2d7">✓ Connected</span> <a href="' + BASE + '/trakt/auth/' + user + '">(reconnect)</a>' if has_trakt else ('<a href="' + BASE + '/trakt/auth/' + user + '"><button>Connect Trakt</button></a>' if TRAKT_ID else '')
     simkl_section = '<span style="color:#2d7">✓ Connected</span> <a href="' + BASE + '/simkl/auth/' + user + '">(reconnect)</a>' if has_simkl else ('<a href="' + BASE + '/simkl/auth/' + user + '"><button>Connect Simkl</button></a>' if SIMKL_ID else '')
+    anilist_section = '<span style="color:#2d7">✓ Connected</span> <a href="' + BASE + '/anilist/auth/' + user + '">(reconnect)</a>' if has_anilist else ('<a href="' + BASE + '/anilist/auth/' + user + '"><button>Connect AniList</button></a>' if ANILIST_ID else '')
     
     # Build page with concatenation (avoids f-string issues with JS braces)
     html = page_head(f"Setup - {user}")
@@ -474,6 +476,9 @@ def render_setup(user):
     
     # Simkl
     html += '<h3>Simkl</h3>' + simkl_section + '<hr>'
+    
+    # AniList
+    html += '<h3>AniList</h3>' + anilist_section + '<hr>'
     
     # Media Servers + LAN Scanner
     html += '<h3>Media Servers</h3>' + media_servers + '<hr>'
@@ -849,6 +854,7 @@ def render_setup_nav(user, active="setup"):
         ("setup", "⚙ Config", f"{BASE}/setup/{user}"),
         ("trakt", "↕ Trakt", f"{BASE}/trakt/sync/{user}"),
         ("simkl", "↕ Simkl", f"{BASE}/simkl/sync/{user}"),
+        ("anilist", "↕ AniList", f"{BASE}/anilist/sync/{user}"),
         ("export", "⬇ Export", f"{BASE}/export/{user}"),
         ("import", "📥 Import", f"{BASE}/import/streaming/{user}"), ("rss", "📡 RSS", f"{BASE}/rss/{user}"), ("wl-rss", "📋 Watchlist RSS", f"{BASE}/watchlist-rss/{user}"), ("efficiency", "📊 Efficiency", f"{BASE}/efficiency"),
     ], active)

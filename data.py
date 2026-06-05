@@ -13,6 +13,9 @@ TRAKT_REDIRECT = os.environ.get("TRAKT_REDIRECT", "https://your-domain.com/trakt
 SIMKL_ID = os.environ.get("SIMKL_ID", "")
 SIMKL_SECRET = os.environ.get("SIMKL_SECRET", "")
 SIMKL_REDIRECT = os.environ.get("SIMKL_REDIRECT", "https://your-domain.com/simkl/callback")
+ANILIST_ID = os.environ.get("ANILIST_ID", "")
+ANILIST_SECRET = os.environ.get("ANILIST_SECRET", "")
+ANILIST_REDIRECT = os.environ.get("ANILIST_REDIRECT", "https://your-domain.com/anilist/callback")
 WATCH_COUNTRY = os.environ.get("WATCH_COUNTRY", "LU")  # ISO 3166-1 for streaming availability
 DEFAULT_PROVIDERS = {"Netflix", "Amazon Prime Video", "Disney Plus", "Max"}  # Defaults for new users  # User's subscriptions
 DATA_DIR = "/data"
@@ -338,6 +341,14 @@ def load_user_simkl_token(user):
 
 def save_user_simkl_token(user, token):
     json.dump(token, open(f"{user_dir(user)}/simkl_token.json", "w"))
+
+def load_user_anilist_token(user):
+    f = f"{user_dir(user)}/anilist_token.json"
+    if os.path.exists(f): return json.load(open(f))
+    return None
+
+def save_user_anilist_token(user, token):
+    json.dump(token, open(f"{user_dir(user)}/anilist_token.json", "w"))
 
 def load_agent_data(user):
     path = os.path.join(DATA_DIR, "users", user, "agent_data.json")
