@@ -2022,6 +2022,58 @@ def _sched_alt_titles():
     remaining = len(need) - 5
     if remaining % 1000 < 5: print(f"[scheduler] alt titles: {remaining} remaining")
 
+def _sched_local_enrich():
+    """Fast local enrichment — fills data from IMDB dataset without API calls.
+    Runs every 30s, processes 200 titles per tick, no throttling."""
+    titles = load_titles()
+    cache = load_imdb_cache()
+    if not cache: return
+    # Find titles missing basic local data
+    todo = []
+    for iid, t in titles.items():
+        if not t.get("runtime") or not t.get("year") or not t.get("type") or not t.get("genres"):
+            if iid in cache: todo.append(iid)
+        if len(todo) >= 200: break
+    if not todo: return
+    changed = 0
+    for iid in todo:
+        ds = cache.get(iid, {})
+        t = titles[iid]
+        for k in ("title", "year", "type", "genres", "runtime", "imdb_rating", "votes"):
+            if ds.get(k) and not t.get(k):
+                t[k] = ds[k]; changed += 1
+    if changed:
+        save_titles(titles)
+        print(f"[scheduler] local_enrich: filled {changed} fields across {len(todo)} titles")
+
+def _sched_confidence():
+    """Background confidence scoring — computes scores for library entries.
+    Runs every 60s, processes 50 entries per tick."""
+    for user in list_users():
+        library = load_user_tmm(user)
+        titles = load_titles()
+        todo = [(iid, v) for iid, v in library.items()
+                if not iid.startswith("_") and isinstance(v, (dict, list))
+                and not (v if isinstance(v, dict) else v[0] if v else {}).get("_confidence_ts")]
+        if not todo: continue
+        changed = False
+        for iid, val in todo[:50]:
+            entry = val if isinstance(val, dict) else val[0] if val else {}
+            t = titles.get(iid, {})
+            if not t: continue
+            conf = compute_confidence(iid, entry, t)
+            entry["_confidence"] = conf["score"]
+            entry["_confidence_ts"] = time.strftime("%Y-%m-%dT%H:%M")
+            if conf.get("conflicts"): entry["_confidence_conflicts"] = conf["conflicts"]
+            # Auto-confirm high confidence entries
+            if conf["score"] >= 85 and not entry.get("confirmed"):
+                entry["confirmed"] = True
+            changed = True
+        if changed:
+            save_user_tmm(user, library)
+            scored = sum(1 for iid, v in todo[:50] if titles.get(iid))
+            print(f"[scheduler] confidence: scored {scored} entries for {user}")
+
 def _sched_catalog():
     import datetime
     now = datetime.datetime.now()
@@ -2167,6 +2219,8 @@ def _scheduler():
     tasks = [
         ("enrichment", _sched_enrichment, 7200),
         ("alt_titles", _sched_alt_titles, 3),
+        ("local_enrich", _sched_local_enrich, 30),
+        ("confidence", _sched_confidence, 60),
         ("catalog", _sched_catalog, 600),
         ("discovery", _sched_discovery, 600),
         ("verification", _sched_verification, 300),
