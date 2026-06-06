@@ -308,7 +308,7 @@ def generate_tasks_for_library(user):
              "os_user": _load_key("opensubs_user"), "os_pass": _load_key("opensubs_pass")}, PRIORITY_SUBS)
 
     # API LANE: OCR identification for title mismatches (capped at 5, expensive)
-    for item in needs_ocr[:5]:
+    for item in needs_ocr[:25]:
         _add("identify_movie", {"path": item["path"], "imdb_id": item["imdb_id"]}, PRIORITY_SUBS)
 
     # CPU LANE: visual verification via TMDB stills (low priority, 5 per run)
@@ -1794,6 +1794,108 @@ def seed_from_imdb_dataset(jid=None):
         updated += 1
     save_titles(titles)
     print(f"Seeded {updated} titles from IMDB dataset")
+
+
+# ── Split-Part Episode Detection ──────────────────────────────────────
+def detect_split_episodes(episodes):
+    """Detect multi-file episodes (split parts) in the TV library.
+    Returns dict: {show: [{season, episode, parts: [path,...], already_named: bool}]}"""
+    from collections import defaultdict
+    import re
+
+    # Group episodes by show+season+episode
+    ep_groups = defaultdict(list)
+    for path, ep in episodes.items():
+        if not isinstance(ep, dict): continue
+        key = (ep.get("showtitle", ""), ep.get("season", 0), ep.get("episode", 0))
+        ep_groups[key].append({"path": path, **ep})
+
+    results = defaultdict(list)
+
+    # Pattern 1: files already named with part/cd suffixes
+    part_re = re.compile(r'[._\- ](part|pt|cd)(\d+)\.\w+$', re.IGNORECASE)
+
+    for (show, season, episode), entries in ep_groups.items():
+        if not show: continue
+        # Multiple files for same episode number
+        if len(entries) > 1:
+            paths = [e["path"] for e in entries if e.get("path")]
+            already = any(part_re.search(p) for p in paths)
+            results[show].append({
+                "season": season, "episode": episode,
+                "parts": paths, "already_named": already
+            })
+
+    # Pattern 2: consecutive episode pairs that are likely one logical episode
+    # (e.g. S04E01+E02 = one 90min episode split into 2x45min)
+    show_seasons = defaultdict(lambda: defaultdict(list))
+    for (show, season, episode), entries in ep_groups.items():
+        if show and season > 0:
+            show_seasons[show][season].extend(entries)
+
+    for show, seasons in show_seasons.items():
+        for season_num, eps in seasons.items():
+            ep_nums = sorted(set(e.get("episode", 0) for e in eps))
+            if len(ep_nums) < 2: continue
+            # Look for pairs of consecutive episodes with similar file sizes
+            # (split episodes are typically ~same duration/size)
+            by_num = defaultdict(list)
+            for e in eps:
+                by_num[e.get("episode", 0)].append(e)
+
+            i = 0
+            while i < len(ep_nums) - 1:
+                e1, e2 = ep_nums[i], ep_nums[i + 1]
+                if e2 - e1 == 1:  # consecutive
+                    files1 = by_num[e1]
+                    files2 = by_num[e2]
+                    # Check if both have exactly 1 file and similar sizes
+                    if len(files1) == 1 and len(files2) == 1:
+                        s1 = files1[0].get("file_size", 0) or 0
+                        s2 = files2[0].get("file_size", 0) or 0
+                        if s1 > 0 and s2 > 0:
+                            ratio = min(s1, s2) / max(s1, s2) if max(s1, s2) > 0 else 0
+                            # If sizes within 30% of each other, likely a split
+                            if ratio > 0.7:
+                                p1 = files1[0].get("path", "")
+                                p2 = files2[0].get("path", "")
+                                already = part_re.search(p1) or part_re.search(p2)
+                                # Only flag if not already in results from pattern 1
+                                existing = [r for r in results[show] if r["season"] == season_num and r["episode"] == e1]
+                                if not existing:
+                                    results[show].append({
+                                        "season": season_num, "episode": e1,
+                                        "parts": [p1, p2], "already_named": bool(already),
+                                        "consecutive_pair": True
+                                    })
+                                i += 2
+                                continue
+                i += 1
+
+    return dict(results)
+
+
+def rename_split_parts(paths, base_episode_name=None):
+    """Rename files to Kodi-compatible .part1/.part2 format.
+    paths: list of file paths (ordered by part number).
+    Returns list of (old_path, new_path) tuples."""
+    import re
+    renames = []
+    for i, path in enumerate(sorted(paths), 1):
+        ext_match = re.search(r'\.\w+$', path)
+        ext = ext_match.group() if ext_match else ".mkv"
+        # Strip existing part/cd suffixes and episode numbering
+        base = re.sub(r'[._\- ]?(part|pt|cd)\d+', '', path[:path.rfind('.')], flags=re.IGNORECASE)
+        # If base_episode_name provided, use it
+        if base_episode_name:
+            directory = path.rsplit("/", 1)[0] if "/" in path else ""
+            new_name = f"{base_episode_name}.part{i}{ext}"
+            new_path = f"{directory}/{new_name}" if directory else new_name
+        else:
+            new_path = f"{base}.part{i}{ext}"
+        if new_path != path:
+            renames.append((path, new_path))
+    return renames
 
 
 # ── Trakt ─────────────────────────────────────────────────────────────

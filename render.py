@@ -719,6 +719,10 @@ def render_tvshows(user):
         ep_groups[gkey].append(ep)
     dupes = {k: v for k, v in ep_groups.items() if len(v) > 1}
 
+    # Detect split-part episodes
+    split_episodes = detect_split_episodes(episodes)
+    total_splits = sum(len(v) for v in split_episodes.values())
+
     # Build show list
     show_rows = ""
     for show_name in sorted(shows.keys()):
@@ -756,6 +760,14 @@ def render_tvshows(user):
             badges += '<span style="color:#d72" title="' + str(gap_count) + ' missing episodes">⚠' + str(gap_count) + ' gaps</span> '
         if analysis["quality_issues"]:
             badges += '<span style="color:#f90" title="Mixed quality in season">🔀 mixed</span> '
+        if show_name in split_episodes:
+            splits = split_episodes[show_name]
+            named = sum(1 for s in splits if s.get("already_named"))
+            unnamed = len(splits) - named
+            if unnamed:
+                badges += '<span style="color:#a7f" title="' + str(len(splits)) + ' split episodes, ' + str(unnamed) + ' need renaming">🔗' + str(unnamed) + ' split</span> '
+            else:
+                badges += '<span style="color:#2d7" title="' + str(len(splits)) + ' split episodes (Kodi-ready)">🔗✓</span> '
         if analysis["next_episode"]:
             ne = analysis["next_episode"]
             badges += '<span style="color:#4fc3f7" title="Next: S' + str(ne["season"]).zfill(2) + 'E' + str(ne["episode"]).zfill(2) + '">▶ S' + str(ne["season"]).zfill(2) + 'E' + str(ne["episode"]).zfill(2) + '</span>'
@@ -787,6 +799,7 @@ def render_tvshows(user):
     html += '<div class="card"><div style="font-size:2.5em">' + str(watched) + '</div>watched</div>'
     html += '<div class="card"><div style="font-size:2.5em;color:#d72">' + str(no_subs) + '</div>no subs</div>'
     html += '<div class="card"><div style="font-size:2.5em;color:#f90">' + str(len(dupes)) + '</div>duplicate eps</div>'
+    html += '<div class="card"><div style="font-size:2.5em;color:#a7f">' + str(total_splits) + '</div>split parts</div>'
     html += '</div>'
 
     # Quality breakdown

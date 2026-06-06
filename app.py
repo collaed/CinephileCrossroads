@@ -1709,6 +1709,22 @@ button{{padding:10px 20px;background:#4fc3f7;border:none;border-radius:6px;curso
                 print(f"[batch-delete] Queued {len(paths)} deletions for {user}")
             self._redirect(f"{BASE}/library/{user}")
             return
+        # Split-part rename
+        if "/api/split-rename" in self.path:
+            try:
+                data = json.loads(body.decode()) if body else {}
+                paths = data.get("paths", [])
+                base_name = data.get("base_name")
+                renames = rename_split_parts(paths, base_name)
+                done = []
+                for old, new in renames:
+                    # Queue rename task for the agent
+                    db_enqueue_task("exec_code", {"code": f"import os; os.rename({old!r}, {new!r})"}, -1)
+                    done.append({"old": old, "new": new})
+                self._json({"status": "ok", "renames": done})
+            except Exception as e:
+                self._json({"status": "error", "message": str(e)})
+            return
         # Library push - handle early
         if self.path.startswith("/api/library/"):
             user = parts[-1]
