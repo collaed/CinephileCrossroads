@@ -1175,6 +1175,77 @@ def find_mismatches(user, threshold=0.2):
     mismatches.sort(key=lambda x: x["match"])
     return mismatches
 
+def compute_confidence(iid, entry, title_info):
+    """Compute 0-100 confidence score that a library entry is correctly identified.
+    Returns {score: int, signals: [{name, value, points}], conflicts: [str]}."""
+    signals = []
+    conflicts = []
+    path = entry.get("path", "")
+
+    # Signal 1: Filename→title match (max 25 pts)
+    path_title = _extract_title_from_path(path) if path else ""
+    db_title = title_info.get("title", "")
+    if path_title and db_title:
+        score = _fuzzy_match(_normalize(db_title), path_title)
+        # Also check alt titles
+        for alt in [title_info.get("originalTitle", ""), title_info.get("original_title", "")] + (title_info.get("alt_titles") or []):
+            if alt:
+                s = _fuzzy_match(_normalize(alt), path_title)
+                if _normalize(alt) in path_title or path_title in _normalize(alt): s = max(s, 0.9)
+                score = max(score, s)
+        pts = int(score * 25)
+        signals.append({"name": "title_match", "value": f"{int(score*100)}%", "points": pts})
+        if score < 0.2: conflicts.append("filename doesn't match any known title")
+
+    # Signal 2: Runtime match (max 20 pts)
+    lib_runtime = entry.get("runtime", 0) or 0
+    db_runtime = title_info.get("runtime", 0) or 0
+    if lib_runtime > 0 and db_runtime > 0:
+        diff = abs(lib_runtime - db_runtime)
+        if diff <= 2: pts = 20
+        elif diff <= 5: pts = 15
+        elif diff <= 10: pts = 10
+        elif diff <= 15: pts = 5
+        else: pts = 0; conflicts.append(f"runtime mismatch: file={lib_runtime}m vs db={db_runtime}m")
+        signals.append({"name": "runtime", "value": f"{lib_runtime}m vs {db_runtime}m", "points": pts})
+
+    # Signal 3: Year in filename matches (max 15 pts)
+    import re
+    year_match = re.search(r'[\(._\- ]((?:19|20)\d{2})[\)._\- ]', path)
+    db_year = title_info.get("year", 0) or 0
+    if year_match and db_year:
+        file_year = int(year_match.group(1))
+        if file_year == db_year: pts = 15
+        elif abs(file_year - db_year) == 1: pts = 10
+        else: pts = 0; conflicts.append(f"year mismatch: file={file_year} vs db={db_year}")
+        signals.append({"name": "year", "value": f"{file_year} vs {db_year}", "points": pts})
+
+    # Signal 4: NFO/subtitle hash identity confirmation (max 30 pts)
+    if entry.get("identity_confirmed"):
+        signals.append({"name": "identity_confirmed", "value": "subtitle hash", "points": 30})
+    elif entry.get("confirmed"):
+        signals.append({"name": "user_confirmed", "value": "manual", "points": 30})
+
+    # Signal 5: File size reasonable for resolution (max 10 pts)
+    file_size = entry.get("file_size", 0) or 0
+    height = entry.get("video_height", 0) or 0
+    if file_size > 0 and lib_runtime > 0 and height > 0:
+        gb = file_size / 1073741824
+        # Expected size ranges (GB per hour)
+        expected = {2160: (4, 80), 1080: (2, 40), 720: (1, 20), 480: (0.3, 8)}
+        bracket = min(expected.keys(), key=lambda h: abs(h - height))
+        lo, hi = expected[bracket]
+        hours = lib_runtime / 60
+        if lo * hours <= gb <= hi * hours: pts = 10
+        elif gb < lo * hours * 0.5 or gb > hi * hours * 2: pts = 0; conflicts.append("unusual file size for resolution/runtime")
+        else: pts = 5
+        signals.append({"name": "file_size", "value": f"{gb:.1f}GB for {height}p/{lib_runtime}m", "points": pts})
+
+    total = sum(s["points"] for s in signals)
+    max_possible = 100
+    return {"score": min(total, max_possible), "signals": signals, "conflicts": conflicts}
+
+
 def llm_batch_check_translations(mismatches, max_check=20):
     """Use LLM to check if 0% mismatches are actually translations."""
     if not _load_key("llm_url"): return mismatches

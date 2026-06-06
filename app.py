@@ -1202,6 +1202,13 @@ button{{padding:12px 30px;background:#4fc3f7;border:none;border-radius:8px;curso
                 mismatches = llm_batch_check_translations(mismatches)
                 mismatches = [m for m in mismatches if m["match"] < 0.2]
                 mismatches.sort(key=lambda x: x["match"])
+            # Compute confidence scores
+            library = load_user_tmm(u); titles_db = load_titles()
+            for m in mismatches:
+                entry = library.get(m["iid"], {})
+                if isinstance(entry, list): entry = entry[0] if entry else {}
+                t = titles_db.get(m["iid"], {})
+                m["confidence"] = compute_confidence(m["iid"], entry, t)
             # LLM single check if requested
             llm_check = qs.get("llm", [""])[0]
             llm_result = ""
@@ -1226,6 +1233,12 @@ button{{padding:12px 30px;background:#4fc3f7;border:none;border-radius:8px;curso
                 rows += '<tr><td><a href="' + BASE + '/title/' + m["iid"] + '">' + esc(m["db_title"]) + '</a> (' + str(m.get('year','')) + ')' + via_badge + '</td>'
                 rows += '<td style="font-size:.85em;color:var(--muted);max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(m["path"]) + '">' + esc(short_path) + '</td>'
                 rows += '<td style="color:' + match_color + '">' + str(pct) + '%</td>'
+                conf = m.get("confidence", {})
+                conf_score = conf.get("score", 0)
+                conf_color = "#2d7" if conf_score >= 70 else "#f90" if conf_score >= 40 else "#d72"
+                conf_tip = "; ".join(s["name"] + "=" + str(s["points"]) for s in conf.get("signals", []))
+                if conf.get("conflicts"): conf_tip += " ⚠ " + "; ".join(conf["conflicts"])
+                rows += '<td style="color:' + conf_color + '" title="' + esc(conf_tip) + '">' + str(conf_score) + '</td>'
                 llm_btn = ' <a href="' + BASE + '/confirm/' + u + '?llm=' + m["iid"] + '" class="btn" style="background:#346" title="Ask AI">🤖</a>' if _load_key("llm_url") else ""
                 rows += '<td><a href="' + BASE + '/confirm-ok/' + u + '/' + m["iid"] + '" class="btn" style="background:#2a5">✅</a> <a href="' + BASE + '/scraper-match/' + u + '/' + m["iid"] + '?q=' + urllib.parse.quote(m["db_title"]) + '" class="btn">🔍</a>' + llm_btn + '</td></tr>'
             html = page_head(f"To Be Confirmed - {u}")
@@ -1236,7 +1249,7 @@ button{{padding:12px 30px;background:#4fc3f7;border:none;border-radius:8px;curso
             if _load_key("llm_url"):
                 html += '<a href="' + BASE + '/confirm/' + u + '?ai=1" class="btn" style="margin-bottom:12px;display:inline-block">🤖 AI Check Translations (top 20)</a> '
             html += llm_result
-            html += '<table><thead><tr><th onclick="sortTable(0)">IMDB Title</th><th>Filename</th><th onclick="sortTable(2)">Match</th><th></th></tr></thead>'
+            html += '<table><thead><tr><th onclick="sortTable(0)">IMDB Title</th><th>Filename</th><th onclick="sortTable(2)">Match</th><th onclick="sortTable(3)">Confidence</th><th></th></tr></thead>'
             html += '<tbody>' + rows + '</tbody></table>'
             html += '<script>function sortTable(n){const tb=document.querySelector("tbody"),rows=[...tb.rows],dir=tb.dataset.sort==n?-1:1;tb.dataset.sort=dir==1?n:"";rows.sort((a,b)=>{let x=a.cells[n].textContent,y=b.cells[n].textContent;return(typeof x==="number"&&typeof y==="number"?(x-y):(String(x)).localeCompare(String(y),undefined,{numeric:true}))*dir});rows.forEach(r=>tb.appendChild(r))}</script>'
             html += '</div>' + page_foot()
