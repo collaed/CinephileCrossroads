@@ -2060,7 +2060,12 @@ def _sched_confidence():
         for iid, val in todo[:50]:
             entry = val if isinstance(val, dict) else val[0] if val else {}
             t = titles.get(iid, {})
-            if not t: continue
+            if not t.get("title"):
+                # No title info yet — mark with timestamp so we don't retry every tick
+                entry["_confidence_ts"] = time.strftime("%Y-%m-%dT%H:%M")
+                entry["_confidence"] = -1  # sentinel: needs re-scoring when title arrives
+                changed = True
+                continue
             conf = compute_confidence(iid, entry, t)
             entry["_confidence"] = conf["score"]
             entry["_confidence_ts"] = time.strftime("%Y-%m-%dT%H:%M")
@@ -2071,7 +2076,7 @@ def _sched_confidence():
             changed = True
         if changed:
             save_user_tmm(user, library)
-            scored = sum(1 for iid, v in todo[:50] if titles.get(iid))
+            scored = sum(1 for iid, v in todo[:50] if titles.get(iid, {}).get("title"))
             print(f"[scheduler] confidence: scored {scored} entries for {user}")
 
 def _sched_catalog():
