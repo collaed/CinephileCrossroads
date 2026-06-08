@@ -232,7 +232,10 @@ def generate_tasks_for_library(user):
     for m in mismatches:
         info = library.get(m["iid"])
         if isinstance(info, dict) and info.get("path") and not info.get("ocr_checked"):
-            needs_ocr.append({"path": info["path"], "imdb_id": m["iid"]})
+            needs_ocr.append({"path": info["path"], "imdb_id": m["iid"],
+                              "_confidence": info.get("_confidence", 0) or 0})
+    # Prioritize lowest confidence entries (most uncertain = highest info gain from OCR)
+    needs_ocr.sort(key=lambda x: x["_confidence"])
 
     # ── Transcoding candidates: DVD_TS folders or high-bitrate files ──
     transcode_candidates = []
@@ -1014,7 +1017,7 @@ def _normalize(s):
     # Then collapse transliterations so both forms match (ae→a, oe→o, ue→u)
     for src, dst in [("ae","a"),("oe","o"),("ue","u")]:
         s = s.replace(src, dst)
-    for src, dst in [("/"," "),("&","and"),("-"," ")]:
+    for src, dst in [("/"," "),("&","and"),("-"," "),("@",""),("*","")]:
         s = s.replace(src, dst)
     for tag in ["1080p","720p","480p","2160p","4k","uhd","hdr","bluray","blu-ray","webrip",
                 "brrip","dvdrip","hdtv","aac","ac3","dts","x264","x265","hevc","h264",
@@ -1027,6 +1030,8 @@ def _normalize(s):
     s = _re.sub(r"\b(19|20)\d{2}\b", "", s)
     s = _re.sub(r"\b\d{1,3}\b", "", s)
     s = _re.sub(r"\s+", " ", s).strip()
+    # Collapse dot-separated acronyms: "c m y l m z" → "cmylmz"
+    s = _re.sub(r"\b([a-z]) (?=[a-z] [a-z]|[a-z]$)", r"\1", s)
     return s
 
 import re as _re_mod
@@ -1112,6 +1117,13 @@ def find_mismatches(user, threshold=0.2):
     titles = load_titles()
     mismatches = []
     pull_queue = []
+    # Load IMDB AKAs dataset (compact JSON extracted from title.akas.tsv)
+    _akas = {}
+    try:
+        import json as _json
+        with open(os.path.join(DATA_DIR, "imdb_datasets", "akas.json")) as _f:
+            _akas = _json.load(_f)
+    except: pass
     for iid, info in library.items():
         if iid.startswith("_") or not isinstance(info, dict): continue
         path = info.get("path", "")
@@ -1142,6 +1154,15 @@ def find_mismatches(user, threshold=0.2):
             if alt_norm in path_title or path_title in alt_norm:
                 s = max(s, 0.85)
             if s > score: score, best_via = s, "alt:" + alt[:20]
+        # Check IMDB AKAs dataset
+        for alt in _akas.get(iid, []):
+            if not alt: continue
+            alt_norm = _normalize(alt)
+            if not alt_norm: continue
+            s = _fuzzy_match(alt_norm, path_title)
+            if alt_norm in path_title or path_title in alt_norm:
+                s = max(s, 0.85)
+            if s > score: score, best_via = s, "aka:" + alt[:20]
         if score < threshold and not t.get("alt_titles") and t.get("tmdb_id"):
             pull_queue.append(iid)
         if score < threshold:
@@ -1172,6 +1193,27 @@ def find_mismatches(user, threshold=0.2):
                             s = max(s, 0.85)
                         if s > m["match"]: m["match"], m["via"] = s, "alt:" + alt[:20]
         mismatches = [m for m in mismatches if m["match"] < threshold]
+    # LLM fallback: ask Intello if path title is a translation of the DB title
+    # TMDB search fallback: search path_title+year, confirm if IMDB ID matches
+    tmdb_key = _load_key("tmdb")
+    if mismatches and tmdb_key:
+        import urllib.request, json as _j2
+        to_check = [m for m in mismatches if m["match"] == 0.0 and m["path_title"] and m["year"]][:5]
+        for m in to_check:
+            try:
+                q = m["path_title"].replace(" ", "+")
+                url = f"https://api.themoviedb.org/3/search/movie?api_key={tmdb_key}&query={q}&year={m['year']}"
+                resp = urllib.request.urlopen(url, timeout=10)
+                results = _j2.loads(resp.read()).get("results", [])
+                for r in results[:3]:
+                    ext_url = f"https://api.themoviedb.org/3/movie/{r['id']}/external_ids?api_key={tmdb_key}"
+                    ext = _j2.loads(urllib.request.urlopen(ext_url, timeout=10).read())
+                    if ext.get("imdb_id") == m["iid"]:
+                        m["match"] = 0.9
+                        m["via"] = "tmdb_search"
+                        break
+            except: pass
+        mismatches = [m for m in mismatches if m["match"] < threshold]
     mismatches.sort(key=lambda x: x["match"])
     return mismatches
 
@@ -1198,8 +1240,10 @@ def compute_confidence(iid, entry, title_info):
         if score < 0.2: conflicts.append("filename doesn't match any known title")
 
     # Signal 2: Runtime match (max 20 pts)
-    lib_runtime = entry.get("runtime", 0) or 0
-    db_runtime = title_info.get("runtime", 0) or 0
+    try: lib_runtime = int(entry.get("runtime", 0) or 0)
+    except (ValueError, TypeError): lib_runtime = 0
+    try: db_runtime = int(title_info.get("runtime", 0) or 0)
+    except (ValueError, TypeError): db_runtime = 0
     if lib_runtime > 0 and db_runtime > 0:
         diff = abs(lib_runtime - db_runtime)
         if diff <= 2: pts = 20
@@ -1212,7 +1256,8 @@ def compute_confidence(iid, entry, title_info):
     # Signal 3: Year in filename matches (max 15 pts)
     import re
     year_match = re.search(r'[\(._\- ]((?:19|20)\d{2})[\)._\- ]', path)
-    db_year = title_info.get("year", 0) or 0
+    try: db_year = int(title_info.get("year", 0) or 0)
+    except (ValueError, TypeError): db_year = 0
     if year_match and db_year:
         file_year = int(year_match.group(1))
         if file_year == db_year: pts = 15
@@ -1227,8 +1272,10 @@ def compute_confidence(iid, entry, title_info):
         signals.append({"name": "user_confirmed", "value": "manual", "points": 30})
 
     # Signal 5: File size reasonable for resolution (max 10 pts)
-    file_size = entry.get("file_size", 0) or 0
-    height = entry.get("video_height", 0) or 0
+    try: file_size = int(entry.get("file_size", 0) or 0)
+    except (ValueError, TypeError): file_size = 0
+    try: height = int(entry.get("video_height", 0) or 0)
+    except (ValueError, TypeError): height = 0
     if file_size > 0 and lib_runtime > 0 and height > 0:
         gb = file_size / 1073741824
         # Expected size ranges (GB per hour)
