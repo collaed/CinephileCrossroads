@@ -22,6 +22,7 @@ def route(pattern):
 
 # ── HTTP Server ───────────────────────────────────────────────────────
 class H(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
     """HTTP request handler. Routes are relative to BASE (stripped by reverse proxy).
     GET routes: /, /u/<user>, /recs/<user>, /catalog, /setup/<user>, /enrich, /jobs
     POST routes: /upload/<user>, /tmm/<user>, /keys"""
@@ -1960,14 +1961,17 @@ button{{padding:10px 20px;background:#4fc3f7;border:none;border-radius:6px;curso
     def _page(self, body, section="ratings", user=""):
         self._html(wrap_page(body, section, user))
     def _html(self, body):
-        self.send_response(200); self.send_header("Content-Type", "text/html"); self.end_headers()
-        self.wfile.write(body.encode())
+        data = body.encode()
+        self.send_response(200); self.send_header("Content-Type", "text/html"); self.send_header("Content-Length", str(len(data))); self.end_headers()
+        self.wfile.write(data)
     def _json(self, data):
+        body = json.dumps(data).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Content-Length", str(len(body)))
         self.end_headers()
-        self.wfile.write(json.dumps(data).encode())
+        self.wfile.write(body)
     def do_OPTIONS(self):
         self.send_response(204)
         self.send_header("Access-Control-Allow-Origin", "*")
@@ -2167,6 +2171,7 @@ def _sched_reconcile():
                 db_enqueue_task("size_files", {"paths": paths[:20], "imdb_ids": iids[:20]}, PRIORITY_SUBS)
                 print(f"[scheduler] re-verify: queued 20 oldest sizes")
     # Every ~6 hours (36th call), regenerate full task queue if it's nearly empty
+    # Every ~6 hours (36th call), regenerate full task queue if it's nearly empty
     if _sched_reconcile._count % 36 == 0:
         db = get_db()
         pending = db.execute("SELECT count(*) FROM task_queue WHERE status='pending'").fetchone()[0]
@@ -2176,6 +2181,14 @@ def _sched_reconcile():
                 if n: print(f"[scheduler] regenerated {n} tasks for {user}")
         else:
             print(f"[scheduler] skip regen: {pending} tasks still pending")
+    # Also regenerate immediately when queue is empty (check every 10 min)
+    elif _sched_reconcile._count % 1 == 0:
+        db = get_db()
+        pending = db.execute("SELECT count(*) FROM task_queue WHERE status='pending'").fetchone()[0]
+        if pending == 0:
+            for user in list_users():
+                n = generate_tasks_for_library(user)
+                if n: print(f"[scheduler] queue empty, regenerated {n} tasks for {user}")
 
 def _sched_trakt():
     """Refresh Trakt watch history every 6 hours."""

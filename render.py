@@ -1173,7 +1173,7 @@ def render_library(user):
         for entry in entries:
             if not isinstance(entry, dict): continue
             path = entry.get("path", "")
-            if not path or info.get("confirmed"): continue
+            if not path or entry.get("confirmed"): continue
             t = (entry.get("title") or titles.get(iid, {}).get("title") or "").strip()
             y = str(entry.get("year") or titles.get(iid, {}).get("year") or "")
             key = (t.lower() + "|" + y) if t else iid
